@@ -28,8 +28,25 @@ export class GrepTool implements Tool {
 
     const searchPath = typeof args.path === "string" ? args.path : ".";
     const absPath = this.workspace.resolve(searchPath);
+    await this.workspace.assertRealPathWithin(absPath);
     const result = await this.executor.run({
-      command: `rg --line-number --hidden --glob '!node_modules' --glob '!dist' --glob '!.git' ${shellQuote(args.pattern)} ${shellQuote(absPath)}`,
+      command: "rg",
+      args: [
+        "--line-number",
+        "--hidden",
+        "--glob",
+        "!**/node_modules/**",
+        "--glob",
+        "!**/dist/**",
+        "--glob",
+        "!**/.git/**",
+        "--glob",
+        "!**/.env",
+        "--glob",
+        "!**/.env.*",
+        args.pattern,
+        absPath,
+      ],
       cwd: this.workspace.root,
       timeoutMs: 20_000,
     });
@@ -49,8 +66,4 @@ export class GrepTool implements Tool {
       },
     };
   }
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }

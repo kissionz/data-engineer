@@ -1,16 +1,16 @@
 import { spawn } from "node:child_process";
-import type { CommandExecutor, CommandResult } from "./commandExecutor.js";
+import type {
+  CommandExecutor,
+  CommandOptions,
+  CommandResult,
+} from "./commandExecutor.js";
 
 export class LocalCommandExecutor implements CommandExecutor {
-  async run(options: {
-    command: string;
-    cwd: string;
-    timeoutMs: number;
-  }): Promise<CommandResult> {
+  async run(options: CommandOptions): Promise<CommandResult> {
     return new Promise((resolve) => {
-      const child = spawn(options.command, {
+      const child = spawn(options.command, options.args ?? [], {
         cwd: options.cwd,
-        shell: true,
+        shell: options.shell ?? false,
         detached: process.platform !== "win32",
         env: safeEnv(),
       });

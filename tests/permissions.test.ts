@@ -19,6 +19,22 @@ describe("PermissionGate", () => {
     ).toMatchObject({ decision: "allow" });
   });
 
+  it("allows low-risk discovery and task-state tools", () => {
+    const gate = new PermissionGate(defaultPolicy());
+
+    for (const name of [
+      "Glob",
+      "GitStatus",
+      "GitDiff",
+      "TodoRead",
+      "TodoWrite",
+    ]) {
+      expect(gate.check({ id: name, name, args: {} })).toMatchObject({
+        decision: "allow",
+      });
+    }
+  });
+
   it("allows creating new files through the create-only Write tool", () => {
     const gate = new PermissionGate(defaultPolicy());
 

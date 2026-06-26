@@ -39,6 +39,7 @@ export class BashTool implements Tool {
       command: args.command,
       cwd,
       timeoutMs,
+      shell: true,
     });
 
     let output = "";

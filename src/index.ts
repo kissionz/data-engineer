@@ -20,9 +20,12 @@ import { LocalCommandExecutor } from "./runtime/localExecutor.js";
 import { Workspace } from "./runtime/workspace.js";
 import { BashTool } from "./tools/bash.js";
 import { EditTool } from "./tools/edit.js";
+import { GitDiffTool, GitStatusTool } from "./tools/git.js";
+import { GlobTool } from "./tools/glob.js";
 import { GrepTool } from "./tools/grep.js";
 import { ReadTool } from "./tools/read.js";
 import { ToolRegistry } from "./tools/registry.js";
+import { TodoReadTool, TodoStore, TodoWriteTool } from "./tools/todo.js";
 import { WriteTool } from "./tools/write.js";
 import { ConsoleReporter } from "./ui/consoleReporter.js";
 
@@ -56,6 +59,9 @@ async function main(): Promise<void> {
   const workspace = new Workspace(workspaceRoot);
   const executor = new LocalCommandExecutor();
   const tools = new ToolRegistry();
+  const todoStore = new TodoStore(
+    path.join(workspaceRoot, ".harness", "todos", "latest.json"),
+  );
   const modelName = opts.model ?? process.env.OPENAI_MODEL ?? "gpt-4.1";
   const baseUrl = opts.baseUrl ?? process.env.OPENAI_BASE_URL;
   const maxTurns = parsePositiveInteger(opts.maxTurns, "--max-turns");
@@ -63,9 +69,14 @@ async function main(): Promise<void> {
 
   tools.register(new ReadTool(workspace));
   tools.register(new GrepTool(workspace, executor));
+  tools.register(new GlobTool(workspace, executor));
   tools.register(new WriteTool(workspace));
   tools.register(new EditTool(workspace));
   tools.register(new BashTool(workspace, executor));
+  tools.register(new GitStatusTool(workspace, executor));
+  tools.register(new GitDiffTool(workspace, executor));
+  tools.register(new TodoReadTool(todoStore));
+  tools.register(new TodoWriteTool(todoStore));
 
   const agent = new AgentLoop(
     createModel(opts.provider, modelName, baseUrl),

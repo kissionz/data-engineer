@@ -6,10 +6,14 @@ export interface CommandResult {
   timedOut: boolean;
 }
 
+export interface CommandOptions {
+  command: string;
+  args?: string[];
+  cwd: string;
+  timeoutMs: number;
+  shell?: boolean;
+}
+
 export interface CommandExecutor {
-  run(options: {
-    command: string;
-    cwd: string;
-    timeoutMs: number;
-  }): Promise<CommandResult>;
+  run(options: CommandOptions): Promise<CommandResult>;
 }

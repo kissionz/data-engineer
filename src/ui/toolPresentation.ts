@@ -11,6 +11,29 @@ export function summarizeToolCall(call: ToolCall): string {
     return `Grep "${pattern}" in ${searchPath}`;
   }
 
+  if (call.name === "Glob") {
+    const pattern = compact(String(call.args.pattern ?? "**/*"), 60);
+    const searchPath = compact(String(call.args.path ?? "."));
+    return `Glob "${pattern}" in ${searchPath}`;
+  }
+
+  if (call.name === "GitStatus") {
+    return "Git status";
+  }
+
+  if (call.name === "GitDiff") {
+    return call.args.staged === true ? "Git diff (staged)" : "Git diff";
+  }
+
+  if (call.name === "TodoRead") {
+    return "Todo read";
+  }
+
+  if (call.name === "TodoWrite") {
+    const count = Array.isArray(call.args.todos) ? call.args.todos.length : 0;
+    return `Todo update (${count} items)`;
+  }
+
   if (call.name === "Bash") {
     return `Bash ${compact(String(call.args.command ?? "command"), 100)}`;
   }
