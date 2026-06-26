@@ -12,6 +12,7 @@ This P0 implementation includes:
 - Permission gate with allow / ask / deny decisions
 - Real OpenAI Responses API model client by default
 - Streaming model output with concise tool status lines
+- Append-only context compaction and tool lifecycle hooks
 - Mock model only for explicit local loop testing
 
 ## Usage
@@ -93,3 +94,5 @@ Session approvals are kept only in memory until the current CLI process exits. `
 Model text is streamed to the terminal as it arrives. Tool calls show only a compact action summary and execution status; complete arguments and results remain in the session log for model continuity and diagnostics.
 
 Complex-task todos are persisted under `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
+
+Long sessions retain the full append-only event log. Once enough new events accumulate, a bounded factual summary is appended and used with recent events for model context. `BeforeToolUse` and `AfterToolUse` hooks provide deterministic interception and observation; the default write hook blocks sensitive paths and oversized single-file writes.

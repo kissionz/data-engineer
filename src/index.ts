@@ -5,6 +5,9 @@ import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { AgentLoop } from "./agent/loop.js";
 import { ContextBuilder } from "./agent/context.js";
+import { SessionCompactor } from "./agent/compaction.js";
+import { HookManager } from "./hooks/manager.js";
+import { protectSensitiveWrites } from "./hooks/defaults.js";
 import type { ModelClient } from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
 import { MockModel } from "./model/mock.js";
@@ -62,6 +65,11 @@ async function main(): Promise<void> {
   const todoStore = new TodoStore(
     path.join(workspaceRoot, ".harness", "todos", "latest.json"),
   );
+  const sessionStore = new SessionStore(
+    path.join(workspaceRoot, ".harness", "sessions", "latest.jsonl"),
+  );
+  const hooks = new HookManager();
+  hooks.register("BeforeToolUse", protectSensitiveWrites);
   const modelName = opts.model ?? process.env.OPENAI_MODEL ?? "gpt-4.1";
   const baseUrl = opts.baseUrl ?? process.env.OPENAI_BASE_URL;
   const maxTurns = parsePositiveInteger(opts.maxTurns, "--max-turns");
@@ -83,7 +91,7 @@ async function main(): Promise<void> {
     tools,
     new PermissionGate(defaultPolicy()),
     new ContextBuilder(workspaceRoot),
-    new SessionStore(path.join(workspaceRoot, ".harness", "sessions", "latest.jsonl")),
+    sessionStore,
     maxTurns,
     interactivePrompt
       ? restoreInputAfterApproval(askUserApproval, () =>
@@ -91,6 +99,8 @@ async function main(): Promise<void> {
         )
       : askUserApproval,
     new ConsoleReporter(),
+    new SessionCompactor(sessionStore),
+    hooks,
   );
 
   if (opts.task || !interactivePrompt) {

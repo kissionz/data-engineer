@@ -1,10 +1,12 @@
 import type { ModelClient } from "../model/base.js";
+import type { HookManager } from "../hooks/manager.js";
 import type { ApprovalDecision, ApprovalFunction } from "../permissions/approval.js";
 import { askUserApproval } from "../permissions/approval.js";
 import type { PermissionGate } from "../permissions/gate.js";
 import type { ToolExecutionResult } from "../tools/base.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { ContextBuilder } from "./context.js";
+import type { SessionCompactor } from "./compaction.js";
 import type { AgentReporter } from "./reporter.js";
 import { silentReporter } from "./reporter.js";
 import type { SessionStore } from "./session.js";
@@ -21,9 +23,12 @@ export class AgentLoop {
     private readonly maxTurns = 50,
     private readonly approve: ApprovalFunction = askUserApproval,
     private readonly reporter: AgentReporter = silentReporter,
+    private readonly compactor?: SessionCompactor,
+    private readonly hooks?: HookManager,
   ) {}
 
   async run(userTask: string): Promise<string> {
+    await this.compactor?.compactIfNeeded();
     await this.session.append({
       type: "user_message",
       text: userTask,
@@ -73,10 +78,34 @@ export class AgentLoop {
       });
 
       for (const call of toolCalls) {
+        let hookBlock;
+
+        try {
+          hookBlock = await this.hooks?.emit("BeforeToolUse", {
+            toolCall: call,
+          });
+        } catch (error: unknown) {
+          hookBlock = {
+            decision: "block" as const,
+            reason: `BeforeToolUse hook failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          };
+        }
         const check = this.permissions.check(call);
         let result: ToolExecutionResult;
 
-        if (check.decision === "deny") {
+        if (hookBlock?.decision === "block") {
+          this.reporter.onToolStatus(call, "denied");
+          result = {
+            ok: false,
+            content: `Blocked by hook: ${hookBlock.reason ?? "No reason provided."}`,
+            data: {
+              reason: "hook_blocked",
+              hookData: hookBlock.data,
+            },
+          };
+        } else if (check.decision === "deny") {
           this.reporter.onToolStatus(call, "denied");
           result = {
             ok: false,
@@ -95,7 +124,7 @@ export class AgentLoop {
           result = await this.executeTool(call.name, call.args);
         }
 
-        if (check.decision !== "deny") {
+        if (!hookBlock && check.decision !== "deny") {
           this.reporter.onToolStatus(
             call,
             result.data?.reason === "user_rejected"
@@ -104,6 +133,25 @@ export class AgentLoop {
                 ? "succeeded"
                 : "failed",
           );
+        }
+
+        try {
+          await this.hooks?.emit("AfterToolUse", {
+            toolCall: call,
+            result,
+          });
+        } catch (error: unknown) {
+          result = {
+            ...result,
+            content: `${result.content}\n\nAfterToolUse hook failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            data: {
+              ...result.data,
+              afterHookError:
+                error instanceof Error ? error.message : String(error),
+            },
+          };
         }
 
         await this.session.append({

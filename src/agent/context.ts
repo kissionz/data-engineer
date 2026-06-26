@@ -39,7 +39,26 @@ export class ContextBuilder {
       });
     }
 
-    for (const event of events.slice(-this.maxRecentEvents)) {
+    const latestSummaryIndex = findLatestSummaryIndex(events);
+
+    if (latestSummaryIndex >= 0) {
+      const summary = events[latestSummaryIndex];
+
+      if (summary?.type === "summary") {
+        messages.push({
+          role: "system",
+          content: `Previous session summary:\n\n${summary.text}`,
+        });
+      }
+    }
+
+    const eventsAfterSummary = events.slice(latestSummaryIndex + 1);
+    const recentEvents = alignRecentEvents(
+      eventsAfterSummary,
+      this.maxRecentEvents,
+    );
+
+    for (const event of recentEvents) {
       if (event.type === "user_message") {
         messages.push({ role: "user", content: event.text });
       } else if (event.type === "assistant_final") {
@@ -64,11 +83,6 @@ export class ContextBuilder {
             data: event.data,
           },
         });
-      } else if (event.type === "summary") {
-        messages.push({
-          role: "system",
-          content: `Previous session summary:\n\n${event.text}`,
-        });
       }
     }
 
@@ -86,4 +100,27 @@ export class ContextBuilder {
 
     return null;
   }
+}
+
+function alignRecentEvents(
+  events: SessionEvent[],
+  maxRecentEvents: number,
+): SessionEvent[] {
+  const recent = events.slice(-maxRecentEvents);
+
+  while (recent[0]?.type === "tool_result") {
+    recent.shift();
+  }
+
+  return recent;
+}
+
+function findLatestSummaryIndex(events: SessionEvent[]): number {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    if (events[index]?.type === "summary") {
+      return index;
+    }
+  }
+
+  return -1;
 }

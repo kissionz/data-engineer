@@ -12,6 +12,7 @@ import type {
   ToolCall,
 } from "../src/agent/types.js";
 import type { ModelClient } from "../src/model/base.js";
+import { HookManager } from "../src/hooks/manager.js";
 import { PermissionGate } from "../src/permissions/gate.js";
 import { defaultPolicy } from "../src/permissions/policy.js";
 import { Workspace } from "../src/runtime/workspace.js";
@@ -81,6 +82,28 @@ class BashTwiceModel implements ModelClient {
   }
 }
 
+class WriteThenDoneModel implements ModelClient {
+  private step = 0;
+
+  async complete(): Promise<AgentResponse> {
+    this.step += 1;
+
+    if (this.step === 1) {
+      return {
+        toolCalls: [
+          {
+            id: "call-write",
+            name: "Write",
+            args: { file_path: "blocked.txt", content: "content" },
+          },
+        ],
+      };
+    }
+
+    return { finalText: "done" };
+  }
+}
+
 class FakeBashTool implements Tool {
   name = "Bash";
   description = "Fake bash tool for loop tests.";
@@ -97,6 +120,18 @@ class FakeBashTool implements Tool {
       ok: true,
       content: `ran ${String(args.command)}`,
     };
+  }
+}
+
+class CountingWriteTool implements Tool {
+  name = "Write";
+  description = "Fake write tool for hook tests.";
+  inputSchema = { type: "object", properties: {} };
+  executions = 0;
+
+  async execute(): Promise<ToolExecutionResult> {
+    this.executions += 1;
+    return { ok: true, content: "wrote" };
   }
 }
 
@@ -168,5 +203,35 @@ describe("AgentLoop", () => {
 
     await expect(loop.run("run npm checks")).resolves.toBe("done");
     expect(approvalCount).toBe(1);
+  });
+
+  it("blocks tool execution when a BeforeToolUse hook rejects it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const writeTool = new CountingWriteTool();
+    const tools = new ToolRegistry();
+    tools.register(writeTool);
+    const hooks = new HookManager();
+    hooks.register("BeforeToolUse", () => ({
+      decision: "block",
+      reason: "test block",
+    }));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+
+    const loop = new AgentLoop(
+      new WriteThenDoneModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+      10,
+      undefined,
+      undefined,
+      undefined,
+      hooks,
+    );
+
+    await expect(loop.run("write a file")).resolves.toBe("done");
+    expect(writeTool.executions).toBe(0);
+    expect(await readFile(sessionPath, "utf8")).toContain('"reason":"hook_blocked"');
   });
 });
