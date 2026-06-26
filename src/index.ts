@@ -26,6 +26,7 @@ interface CliOptions {
   provider: string;
   model?: string;
   baseUrl?: string;
+  maxTurns: string;
 }
 
 async function main(): Promise<void> {
@@ -39,6 +40,7 @@ async function main(): Promise<void> {
     .option("--provider <provider>", "Model provider: openai or mock", "openai")
     .option("--model <model>", "Model name")
     .option("--base-url <baseUrl>", "OpenAI-compatible API base URL")
+    .option("--max-turns <turns>", "Maximum agent turns per user message", "50")
     .parse();
 
   const opts = program.opts<CliOptions>();
@@ -50,6 +52,7 @@ async function main(): Promise<void> {
   const tools = new ToolRegistry();
   const modelName = opts.model ?? process.env.OPENAI_MODEL ?? "gpt-4.1";
   const baseUrl = opts.baseUrl ?? process.env.OPENAI_BASE_URL;
+  const maxTurns = parsePositiveInteger(opts.maxTurns, "--max-turns");
 
   tools.register(new ReadTool(workspace));
   tools.register(new GrepTool(workspace, executor));
@@ -62,18 +65,45 @@ async function main(): Promise<void> {
     new PermissionGate(defaultPolicy()),
     new ContextBuilder(workspaceRoot),
     new SessionStore(path.join(workspaceRoot, ".harness", "sessions", "latest.jsonl")),
+    maxTurns,
   );
 
-  const task =
-    opts.task ??
-    (await input({
-      message: "Task",
-    }));
+  if (opts.task) {
+    await runTask(agent, opts.task);
+    return;
+  }
 
+  await runInteractiveSession(agent);
+}
+
+async function runTask(agent: AgentLoop, task: string): Promise<void> {
   const result = await agent.run(task);
 
   console.log("\nFinal:\n");
   console.log(result);
+}
+
+async function runInteractiveSession(agent: AgentLoop): Promise<void> {
+  console.log("Interactive harness session started. Type /exit or /quit to stop.");
+
+  while (true) {
+    const task = await input({
+      message: "You",
+    });
+
+    const trimmed = task.trim();
+
+    if (!trimmed) {
+      continue;
+    }
+
+    if (trimmed === "/exit" || trimmed === "/quit") {
+      console.log("Bye.");
+      return;
+    }
+
+    await runTask(agent, trimmed);
+  }
 }
 
 function createModel(
@@ -110,6 +140,16 @@ function createModel(
     model,
     baseUrl,
   });
+}
+
+function parsePositiveInteger(value: string, optionName: string): number {
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    throw new Error(`${optionName} must be a positive integer.`);
+  }
+
+  return parsed;
 }
 
 try {

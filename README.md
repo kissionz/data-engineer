@@ -23,6 +23,12 @@ npm run build
 npm start -- --task "Inspect this project and summarize what it does"
 ```
 
+Without `--task`, the CLI starts an interactive session and keeps accepting user messages until `/exit` or `/quit`:
+
+```bash
+npm start
+```
+
 ## Environment Setup
 
 Create a workspace-local `.env` file:
@@ -63,6 +69,12 @@ For harness loop development without an API call, opt into the mock provider exp
 
 ```bash
 npm run dev -- --provider mock --task "Inspect README.md"
+```
+
+For longer tasks, adjust the per-message agent loop budget:
+
+```bash
+npm run dev -- --max-turns 100
 ```
 
 ## Safety Model
