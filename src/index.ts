@@ -25,6 +25,7 @@ interface CliOptions {
   cwd: string;
   provider: string;
   model?: string;
+  baseUrl?: string;
 }
 
 async function main(): Promise<void> {
@@ -37,6 +38,7 @@ async function main(): Promise<void> {
     .option("--cwd <cwd>", "Workspace directory", process.cwd())
     .option("--provider <provider>", "Model provider: openai or mock", "openai")
     .option("--model <model>", "Model name")
+    .option("--base-url <baseUrl>", "OpenAI-compatible API base URL")
     .parse();
 
   const opts = program.opts<CliOptions>();
@@ -47,6 +49,7 @@ async function main(): Promise<void> {
   const executor = new LocalCommandExecutor();
   const tools = new ToolRegistry();
   const modelName = opts.model ?? process.env.OPENAI_MODEL ?? "gpt-4.1";
+  const baseUrl = opts.baseUrl ?? process.env.OPENAI_BASE_URL;
 
   tools.register(new ReadTool(workspace));
   tools.register(new GrepTool(workspace, executor));
@@ -54,7 +57,7 @@ async function main(): Promise<void> {
   tools.register(new BashTool(workspace, executor));
 
   const agent = new AgentLoop(
-    createModel(opts.provider, modelName),
+    createModel(opts.provider, modelName, baseUrl),
     tools,
     new PermissionGate(defaultPolicy()),
     new ContextBuilder(workspaceRoot),
@@ -73,7 +76,11 @@ async function main(): Promise<void> {
   console.log(result);
 }
 
-function createModel(provider: string, model: string): ModelClient {
+function createModel(
+  provider: string,
+  model: string,
+  baseUrl: string | undefined,
+): ModelClient {
   if (provider === "mock") {
     return new MockModel();
   }
@@ -101,6 +108,7 @@ function createModel(provider: string, model: string): ModelClient {
   return new OpenAIModel({
     apiKey: process.env.OPENAI_API_KEY,
     model,
+    baseUrl,
   });
 }
 

@@ -56,7 +56,7 @@ export class OpenAIModel implements ModelClient {
       throw new Error("OPENAI_API_KEY is required for the OpenAI model.");
     }
 
-    this.baseUrl = options.baseUrl ?? "https://api.openai.com/v1";
+    this.baseUrl = normalizeBaseUrl(options.baseUrl ?? "https://api.openai.com/v1");
     this.fetchImpl = options.fetchImpl ?? fetch;
   }
 
@@ -214,4 +214,8 @@ function parseArguments(value: unknown): Record<string, unknown> {
   }
 
   throw new Error("OpenAI function call arguments must decode to an object.");
+}
+
+function normalizeBaseUrl(value: string): string {
+  return value.replace(/\/+$/, "");
 }

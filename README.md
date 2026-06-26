@@ -36,6 +36,7 @@ Then edit `.env`:
 ```bash
 OPENAI_API_KEY=sk-your-real-key
 OPENAI_MODEL=gpt-4.1
+OPENAI_BASE_URL=https://api.openai.com/v1
 ```
 
 `OPENAI_API_KEY` is required for the default provider. Shell environment variables take precedence over values in `.env`, so CI or a terminal export can override the file.
@@ -44,11 +45,18 @@ The CLI reads:
 
 - `OPENAI_API_KEY`: required for the default OpenAI provider
 - `OPENAI_MODEL`: optional model override, defaults to `gpt-4.1`
+- `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL, defaults to `https://api.openai.com/v1`
 
 You can also pass the model explicitly:
 
 ```bash
 npm run dev -- --model gpt-4.1 --task "Find the main agent loop"
+```
+
+For an OpenAI-compatible gateway or proxy:
+
+```bash
+npm run dev -- --base-url https://your-gateway.example/v1 --task "Inspect README.md"
 ```
 
 For harness loop development without an API call, opt into the mock provider explicitly:

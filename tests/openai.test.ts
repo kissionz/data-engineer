@@ -129,4 +129,29 @@ describe("OpenAIModel", () => {
     });
     expect(result.finalText).toBe("done");
   });
+
+  it("uses a custom base URL and trims trailing slashes", async () => {
+    let requestUrl = "";
+    const fetchImpl: typeof fetch = async (input) => {
+      requestUrl = String(input);
+
+      return new Response(JSON.stringify({ output_text: "done" }), {
+        status: 200,
+      });
+    };
+
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      baseUrl: "https://gateway.example/v1/",
+      fetchImpl,
+    });
+
+    await model.complete({
+      messages: [{ role: "user", content: "hello" }],
+      tools: [],
+    });
+
+    expect(requestUrl).toBe("https://gateway.example/v1/responses");
+  });
 });
