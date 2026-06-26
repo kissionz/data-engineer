@@ -33,7 +33,7 @@ export class ContextBuilder {
     if (manifest) {
       messages.push({
         role: "system",
-        content: `Project instructions from CLAUDE.md:\n\n${manifest}`,
+        content: `Project instructions:\n\n${manifest}`,
       });
     }
 
@@ -74,10 +74,14 @@ export class ContextBuilder {
   }
 
   private async loadManifest(): Promise<string | null> {
-    try {
-      return await readFile(path.join(this.workspaceRoot, "CLAUDE.md"), "utf8");
-    } catch {
-      return null;
+    for (const fileName of ["AGENTS.md", "HARNESS.md"]) {
+      try {
+        return await readFile(path.join(this.workspaceRoot, fileName), "utf8");
+      } catch {
+        // Try the next supported project instruction file.
+      }
     }
+
+    return null;
   }
 }

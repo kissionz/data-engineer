@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 
-import { input } from "@inquirer/prompts";
 import { Command } from "commander";
 import path from "node:path";
+import { createInterface } from "node:readline/promises";
 import { AgentLoop } from "./agent/loop.js";
 import { ContextBuilder } from "./agent/context.js";
 import type { ModelClient } from "./model/base.js";
@@ -34,7 +34,7 @@ async function main(): Promise<void> {
 
   program
     .name("harness")
-    .description("Claude Code-like TypeScript agent harness")
+    .description("TypeScript local coding agent harness")
     .option("-t, --task <task>", "Task to run")
     .option("--cwd <cwd>", "Workspace directory", process.cwd())
     .option("--provider <provider>", "Model provider: openai or mock", "openai")
@@ -85,24 +85,32 @@ async function runTask(agent: AgentLoop, task: string): Promise<void> {
 
 async function runInteractiveSession(agent: AgentLoop): Promise<void> {
   console.log("Interactive harness session started. Type /exit or /quit to stop.");
+  const prompt = new InteractivePrompt();
 
-  while (true) {
-    const task = await input({
-      message: "You",
-    });
+  try {
+    while (true) {
+      const task = await prompt.question("You ");
 
-    const trimmed = task.trim();
+      if (prompt.shouldExitFromAnswer(task)) {
+        console.log("Bye.");
+        return;
+      }
 
-    if (!trimmed) {
-      continue;
+      const trimmed = task.trim();
+
+      if (!trimmed) {
+        continue;
+      }
+
+      if (trimmed === "/exit" || trimmed === "/quit") {
+        console.log("Bye.");
+        return;
+      }
+
+      await runTask(agent, trimmed);
     }
-
-    if (trimmed === "/exit" || trimmed === "/quit") {
-      console.log("Bye.");
-      return;
-    }
-
-    await runTask(agent, trimmed);
+  } finally {
+    prompt.close();
   }
 }
 
@@ -150,6 +158,57 @@ function parsePositiveInteger(value: string, optionName: string): number {
   }
 
   return parsed;
+}
+
+class InteractivePrompt {
+  private readonly rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: true,
+  });
+
+  private terminationPending = false;
+
+  constructor() {
+    this.rl.on("SIGINT", () => {
+      if (this.terminationPending) {
+        this.close();
+        process.exit(130);
+      }
+
+      this.terminationPending = true;
+      this.rl.write(
+        "\nTerminate session? Type y to exit, n to continue. Press Ctrl+C again to exit immediately.\n",
+      );
+    });
+  }
+
+  async question(prompt: string): Promise<string> {
+    return this.rl.question(`${prompt}> `);
+  }
+
+  shouldExitFromAnswer(answer: string): boolean {
+    if (!this.terminationPending) {
+      return false;
+    }
+
+    const normalized = answer.trim().toLowerCase();
+
+    if (["y", "yes"].includes(normalized)) {
+      return true;
+    }
+
+    if (normalized === "") {
+      return false;
+    }
+
+    this.terminationPending = false;
+    return false;
+  }
+
+  close(): void {
+    this.rl.close();
+  }
 }
 
 try {

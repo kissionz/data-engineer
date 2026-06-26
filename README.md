@@ -1,6 +1,6 @@
 # harness-ts
 
-A TypeScript / Node.js agent harness runtime inspired by Claude Code-style tool loops.
+A TypeScript / Node.js local coding agent harness runtime.
 
 This P0 implementation includes:
 
