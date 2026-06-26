@@ -9,6 +9,10 @@ import type { ModelClient } from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
 import { MockModel } from "./model/mock.js";
 import { OpenAIModel } from "./model/openai.js";
+import {
+  askUserApproval,
+  restoreInputAfterApproval,
+} from "./permissions/approval.js";
 import { defaultPolicy } from "./permissions/policy.js";
 import { PermissionGate } from "./permissions/gate.js";
 import { loadEnvFile } from "./runtime/env.js";
@@ -53,6 +57,7 @@ async function main(): Promise<void> {
   const modelName = opts.model ?? process.env.OPENAI_MODEL ?? "gpt-4.1";
   const baseUrl = opts.baseUrl ?? process.env.OPENAI_BASE_URL;
   const maxTurns = parsePositiveInteger(opts.maxTurns, "--max-turns");
+  const interactivePrompt = opts.task ? undefined : new InteractivePrompt();
 
   tools.register(new ReadTool(workspace));
   tools.register(new GrepTool(workspace, executor));
@@ -66,14 +71,23 @@ async function main(): Promise<void> {
     new ContextBuilder(workspaceRoot),
     new SessionStore(path.join(workspaceRoot, ".harness", "sessions", "latest.jsonl")),
     maxTurns,
+    interactivePrompt
+      ? restoreInputAfterApproval(askUserApproval, () =>
+          interactivePrompt.resumeInput(),
+        )
+      : askUserApproval,
   );
 
-  if (opts.task) {
+  if (opts.task || !interactivePrompt) {
+    if (!opts.task) {
+      throw new Error("Task is required when interactive input is unavailable.");
+    }
+
     await runTask(agent, opts.task);
     return;
   }
 
-  await runInteractiveSession(agent);
+  await runInteractiveSession(agent, interactivePrompt);
 }
 
 async function runTask(agent: AgentLoop, task: string): Promise<void> {
@@ -83,9 +97,11 @@ async function runTask(agent: AgentLoop, task: string): Promise<void> {
   console.log(result);
 }
 
-async function runInteractiveSession(agent: AgentLoop): Promise<void> {
+async function runInteractiveSession(
+  agent: AgentLoop,
+  prompt: InteractivePrompt,
+): Promise<void> {
   console.log("Interactive harness session started. Type /exit or /quit to stop.");
-  const prompt = new InteractivePrompt();
 
   try {
     while (true) {
@@ -185,6 +201,10 @@ class InteractivePrompt {
 
   async question(prompt: string): Promise<string> {
     return this.rl.question(`${prompt}> `);
+  }
+
+  resumeInput(): void {
+    this.rl.resume();
   }
 
   shouldExitFromAnswer(answer: string): boolean {

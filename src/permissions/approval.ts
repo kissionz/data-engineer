@@ -38,6 +38,19 @@ export const askUserApproval: ApprovalFunction = async (call, reason) => {
   });
 };
 
+export function restoreInputAfterApproval(
+  approve: ApprovalFunction,
+  resumeInput: () => void,
+): ApprovalFunction {
+  return async (call, reason) => {
+    try {
+      return await approve(call, reason);
+    } finally {
+      resumeInput();
+    }
+  };
+}
+
 function sessionScopeDescription(call: ToolCall): string {
   if (call.name === "Bash") {
     const command = String(call.args.command ?? "");
