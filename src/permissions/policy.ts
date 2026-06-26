@@ -10,7 +10,7 @@ export interface PermissionPolicy {
 
 export function defaultPolicy(): PermissionPolicy {
   return {
-    allowedTools: new Set(["Read"]),
+    allowedTools: new Set(["Read", "Grep"]),
     deniedTools: new Set(),
     allowReadonly: true,
     askForBash: true,

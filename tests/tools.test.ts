@@ -6,6 +6,7 @@ import type { CommandExecutor } from "../src/runtime/commandExecutor.js";
 import { Workspace } from "../src/runtime/workspace.js";
 import { BashTool } from "../src/tools/bash.js";
 import { EditTool } from "../src/tools/edit.js";
+import { GrepTool } from "../src/tools/grep.js";
 import { ReadTool } from "../src/tools/read.js";
 
 describe("P0 tools", () => {
@@ -75,5 +76,31 @@ describe("P0 tools", () => {
     expect(result.ok).toBe(true);
     expect(result.content).toContain("ok");
     expect(calls[0]?.cwd).toBe(root);
+  });
+
+  it("runs grep through ripgrep with workspace constrained path", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const calls: Array<{ command: string; cwd: string; timeoutMs: number }> = [];
+    const executor: CommandExecutor = {
+      async run(options) {
+        calls.push(options);
+        return {
+          ok: true,
+          exitCode: 0,
+          stdout: "sample.txt:1:AgentLoop",
+          stderr: "",
+          timedOut: false,
+        };
+      },
+    };
+
+    const result = await new GrepTool(new Workspace(root), executor).execute({
+      pattern: "AgentLoop",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("AgentLoop");
+    expect(calls[0]?.cwd).toBe(root);
+    expect(calls[0]?.command).toContain("rg --line-number");
   });
 });

@@ -32,7 +32,7 @@ export class PermissionGate {
       return { decision: "allow", reason: "Tool explicitly allowed." };
     }
 
-    if (this.policy.allowReadonly && ["Read"].includes(call.name)) {
+    if (this.policy.allowReadonly && ["Read", "Grep"].includes(call.name)) {
       return { decision: "allow", reason: "Readonly tool." };
     }
 
@@ -50,14 +50,15 @@ export class PermissionGate {
   private pathDenied(call: ToolCall): boolean {
     const maybePath = call.args.file_path ?? call.args.path ?? call.args.cwd ?? "";
     const normalized = normalizePolicyPath(String(maybePath));
+    const segments = normalized.split("/").filter(Boolean);
 
-    return this.policy.deniedPathPrefixes.some((prefix) => {
-      const normalizedPrefix = normalizePolicyPath(prefix);
-      return (
-        normalized === normalizedPrefix ||
-        normalized.startsWith(`${normalizedPrefix}/`)
-      );
-    });
+    return segments.some(
+      (segment) =>
+        segment === ".git" ||
+        segment === "node_modules" ||
+        segment === ".env" ||
+        segment.startsWith(".env."),
+    );
   }
 
   private dangerousCommand(call: ToolCall): boolean {

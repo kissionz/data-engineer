@@ -7,17 +7,56 @@ This P0 implementation includes:
 - Agent loop with model tool-call continuation
 - Append-only session event log
 - Workspace path boundary checks
-- Read, Edit, and Bash tools
+- Read, Grep, Edit, and Bash tools
 - Tool registry
 - Permission gate with allow / ask / deny decisions
-- Mock model for local loop testing
+- Real OpenAI Responses API model client by default
+- Mock model only for explicit local loop testing
 
 ## Usage
 
 ```bash
-pnpm install
-pnpm build
-pnpm dev -- --task "Inspect README.md"
+npm install
+cp .env.example .env
+# edit .env and set OPENAI_API_KEY
+npm run build
+npm start -- --task "Inspect this project and summarize what it does"
 ```
 
-The default CLI uses `MockModel` so the P0 loop can run without a real model API key.
+## Environment Setup
+
+Create a workspace-local `.env` file:
+
+```bash
+cp .env.example .env
+```
+
+Then edit `.env`:
+
+```bash
+OPENAI_API_KEY=sk-your-real-key
+OPENAI_MODEL=gpt-4.1
+```
+
+`OPENAI_API_KEY` is required for the default provider. Shell environment variables take precedence over values in `.env`, so CI or a terminal export can override the file.
+
+The CLI reads:
+
+- `OPENAI_API_KEY`: required for the default OpenAI provider
+- `OPENAI_MODEL`: optional model override, defaults to `gpt-4.1`
+
+You can also pass the model explicitly:
+
+```bash
+npm run dev -- --model gpt-4.1 --task "Find the main agent loop"
+```
+
+For harness loop development without an API call, opt into the mock provider explicitly:
+
+```bash
+npm run dev -- --provider mock --task "Inspect README.md"
+```
+
+## Safety Model
+
+Readonly tools such as `Read` and `Grep` are allowed by default. File edits and shell commands require approval. Dangerous shell fragments and sensitive paths such as `.git`, `.env`, and `node_modules` are denied by policy before tool execution.
