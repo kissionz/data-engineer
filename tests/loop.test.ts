@@ -4,8 +4,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentLoop } from "../src/agent/loop.js";
 import { ContextBuilder } from "../src/agent/context.js";
+import type { AgentReporter, ToolStatus } from "../src/agent/reporter.js";
 import { SessionStore } from "../src/agent/session.js";
-import type { AgentMessage, AgentResponse } from "../src/agent/types.js";
+import type {
+  AgentMessage,
+  AgentResponse,
+  ToolCall,
+} from "../src/agent/types.js";
 import type { ModelClient } from "../src/model/base.js";
 import { PermissionGate } from "../src/permissions/gate.js";
 import { defaultPolicy } from "../src/permissions/policy.js";
@@ -95,6 +100,21 @@ class FakeBashTool implements Tool {
   }
 }
 
+class RecordingReporter implements AgentReporter {
+  text = "";
+  statuses: ToolStatus[] = [];
+
+  onTextDelta(delta: string): void {
+    this.text += delta;
+  }
+
+  onTextEnd(): void {}
+
+  onToolStatus(_call: ToolCall, status: ToolStatus): void {
+    this.statuses.push(status);
+  }
+}
+
 describe("AgentLoop", () => {
   it("continues after a tool result and persists session events", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
@@ -104,12 +124,16 @@ describe("AgentLoop", () => {
     tools.register(new ReadTool(new Workspace(root)));
 
     const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const reporter = new RecordingReporter();
     const loop = new AgentLoop(
       new ScriptedModel(),
       tools,
       new PermissionGate(defaultPolicy()),
       new ContextBuilder(root),
       new SessionStore(sessionPath),
+      50,
+      undefined,
+      reporter,
     );
 
     await expect(loop.run("inspect")).resolves.toBe("done");
@@ -119,6 +143,8 @@ describe("AgentLoop", () => {
     expect(sessionText).toContain('"type":"assistant_tool_calls"');
     expect(sessionText).toContain('"type":"tool_result"');
     expect(sessionText).toContain('"type":"assistant_final"');
+    expect(reporter.text).toBe("done");
+    expect(reporter.statuses).toEqual(["running", "succeeded"]);
   });
 
   it("reuses session approval for the same bash command family", async () => {

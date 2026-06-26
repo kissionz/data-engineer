@@ -1,5 +1,9 @@
 import { select } from "@inquirer/prompts";
 import type { ToolCall } from "../agent/types.js";
+import {
+  summarizeApproval,
+  summarizeToolCall,
+} from "../ui/toolPresentation.js";
 
 export type ApprovalDecision = "reject" | "allow_once" | "allow_session";
 
@@ -10,10 +14,13 @@ export type ApprovalFunction = (
 
 export const askUserApproval: ApprovalFunction = async (call, reason) => {
   console.log("\nTool approval required");
-  console.log(`Tool: ${call.name}`);
+  console.log(`Action: ${summarizeToolCall(call)}`);
+  const detail = summarizeApproval(call);
+
+  if (detail) {
+    console.log(`Change: ${detail}`);
+  }
   console.log(`Reason: ${reason}`);
-  console.log("Args:");
-  console.log(JSON.stringify(call.args, null, 2));
 
   return select({
     message: "Approve this tool call?",

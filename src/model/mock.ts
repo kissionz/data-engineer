@@ -9,6 +9,7 @@ export class MockModel implements ModelClient {
   async complete(_options: {
     messages: AgentMessage[];
     tools: Array<Record<string, unknown>>;
+    onTextDelta?: (delta: string) => void;
   }): Promise<AgentResponse> {
     this.step += 1;
 
@@ -24,8 +25,7 @@ export class MockModel implements ModelClient {
       };
     }
 
-    return {
-      finalText: "Done.",
-    };
+    _options.onTextDelta?.("Done.");
+    return { finalText: "Done." };
   }
 }

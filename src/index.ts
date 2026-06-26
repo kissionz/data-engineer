@@ -24,6 +24,7 @@ import { GrepTool } from "./tools/grep.js";
 import { ReadTool } from "./tools/read.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { WriteTool } from "./tools/write.js";
+import { ConsoleReporter } from "./ui/consoleReporter.js";
 
 interface CliOptions {
   task?: string;
@@ -78,6 +79,7 @@ async function main(): Promise<void> {
           interactivePrompt.resumeInput(),
         )
       : askUserApproval,
+    new ConsoleReporter(),
   );
 
   if (opts.task || !interactivePrompt) {
@@ -93,10 +95,7 @@ async function main(): Promise<void> {
 }
 
 async function runTask(agent: AgentLoop, task: string): Promise<void> {
-  const result = await agent.run(task);
-
-  console.log("\nFinal:\n");
-  console.log(result);
+  await agent.run(task);
 }
 
 async function runInteractiveSession(

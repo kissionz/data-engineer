@@ -4,5 +4,6 @@ export interface ModelClient {
   complete(options: {
     messages: AgentMessage[];
     tools: Array<Record<string, unknown>>;
+    onTextDelta?: (delta: string) => void;
   }): Promise<AgentResponse>;
 }

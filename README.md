@@ -11,6 +11,7 @@ This P0 implementation includes:
 - Tool registry
 - Permission gate with allow / ask / deny decisions
 - Real OpenAI Responses API model client by default
+- Streaming model output with concise tool status lines
 - Mock model only for explicit local loop testing
 
 ## Usage
@@ -88,3 +89,5 @@ When approval is required, you can choose:
 - Reject
 
 Session approvals are kept only in memory until the current CLI process exits. `Edit` approvals apply to later edit tool calls in the same session. `Bash` approvals are grouped by command family, such as `npm` or `git`, so approving `npm test` for the session also allows later `npm run build` without another prompt. Dangerous commands and denied paths are still blocked before approval.
+
+Model text is streamed to the terminal as it arrives. Tool calls show only a compact action summary and execution status; complete arguments and results remain in the session log for model continuity and diagnostics.

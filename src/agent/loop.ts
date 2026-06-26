@@ -5,6 +5,8 @@ import type { PermissionGate } from "../permissions/gate.js";
 import type { ToolExecutionResult } from "../tools/base.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { ContextBuilder } from "./context.js";
+import type { AgentReporter } from "./reporter.js";
+import { silentReporter } from "./reporter.js";
 import type { SessionStore } from "./session.js";
 
 export class AgentLoop {
@@ -18,6 +20,7 @@ export class AgentLoop {
     private readonly session: SessionStore,
     private readonly maxTurns = 50,
     private readonly approve: ApprovalFunction = askUserApproval,
+    private readonly reporter: AgentReporter = silentReporter,
   ) {}
 
   async run(userTask: string): Promise<string> {
@@ -30,12 +33,26 @@ export class AgentLoop {
       const events = await this.session.load();
       const messages = await this.context.build(events);
 
-      const response = await this.model.complete({
-        messages,
-        tools: this.tools.schemas(),
-      });
+      let receivedText = false;
+      const response = await this.model
+        .complete({
+          messages,
+          tools: this.tools.schemas(),
+          onTextDelta: (delta) => {
+            receivedText = true;
+            this.reporter.onTextDelta(delta);
+          },
+        })
+        .finally(() => this.reporter.onTextEnd());
 
-      if (response.finalText) {
+      const toolCalls = response.toolCalls ?? [];
+
+      if (toolCalls.length === 0 && response.finalText) {
+        if (!receivedText) {
+          this.reporter.onTextDelta(response.finalText);
+          this.reporter.onTextEnd();
+        }
+
         await this.session.append({
           type: "assistant_final",
           text: response.finalText,
@@ -43,8 +60,6 @@ export class AgentLoop {
 
         return response.finalText;
       }
-
-      const toolCalls = response.toolCalls ?? [];
 
       if (toolCalls.length === 0) {
         const text = "Model returned neither final text nor tool calls.";
@@ -62,6 +77,7 @@ export class AgentLoop {
         let result: ToolExecutionResult;
 
         if (check.decision === "deny") {
+          this.reporter.onToolStatus(call, "denied");
           result = {
             ok: false,
             content: `Permission denied: ${check.reason}`,
@@ -70,9 +86,24 @@ export class AgentLoop {
         } else if (check.decision === "ask" && !this.hasSessionApproval(call)) {
           const approval = await this.approve(call, check.reason);
 
+          if (approval !== "reject") {
+            this.reporter.onToolStatus(call, "running");
+          }
           result = await this.executeApprovedTool(call.name, call.args, approval, call);
         } else {
+          this.reporter.onToolStatus(call, "running");
           result = await this.executeTool(call.name, call.args);
+        }
+
+        if (check.decision !== "deny") {
+          this.reporter.onToolStatus(
+            call,
+            result.data?.reason === "user_rejected"
+              ? "rejected"
+              : result.ok
+                ? "succeeded"
+                : "failed",
+          );
         }
 
         await this.session.append({
