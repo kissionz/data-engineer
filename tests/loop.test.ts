@@ -10,6 +10,7 @@ import type { ModelClient } from "../src/model/base.js";
 import { PermissionGate } from "../src/permissions/gate.js";
 import { defaultPolicy } from "../src/permissions/policy.js";
 import { Workspace } from "../src/runtime/workspace.js";
+import type { Tool, ToolExecutionResult } from "../src/tools/base.js";
 import { ReadTool } from "../src/tools/read.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 
@@ -38,6 +39,62 @@ class ScriptedModel implements ModelClient {
   }
 }
 
+class BashTwiceModel implements ModelClient {
+  private step = 0;
+
+  async complete(_options: {
+    messages: AgentMessage[];
+    tools: Array<Record<string, unknown>>;
+  }): Promise<AgentResponse> {
+    this.step += 1;
+
+    if (this.step === 1) {
+      return {
+        toolCalls: [
+          {
+            id: "call_1",
+            name: "Bash",
+            args: { command: "npm test" },
+          },
+        ],
+      };
+    }
+
+    if (this.step === 2) {
+      return {
+        toolCalls: [
+          {
+            id: "call_2",
+            name: "Bash",
+            args: { command: "npm run build" },
+          },
+        ],
+      };
+    }
+
+    return { finalText: "done" };
+  }
+}
+
+class FakeBashTool implements Tool {
+  name = "Bash";
+  description = "Fake bash tool for loop tests.";
+  inputSchema = {
+    type: "object",
+    properties: {
+      command: { type: "string" },
+    },
+    required: ["command"],
+  };
+
+  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+    return {
+      ok: true,
+      content: `ran ${String(args.command)}`,
+    };
+  }
+}
+
 describe("AgentLoop", () => {
   it("continues after a tool result and persists session events", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
@@ -62,5 +119,28 @@ describe("AgentLoop", () => {
     expect(sessionText).toContain('"type":"assistant_tool_calls"');
     expect(sessionText).toContain('"type":"tool_result"');
     expect(sessionText).toContain('"type":"assistant_final"');
+  });
+
+  it("reuses session approval for the same bash command family", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const tools = new ToolRegistry();
+    tools.register(new FakeBashTool());
+    let approvalCount = 0;
+
+    const loop = new AgentLoop(
+      new BashTwiceModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => {
+        approvalCount += 1;
+        return "allow_session";
+      },
+    );
+
+    await expect(loop.run("run npm checks")).resolves.toBe("done");
+    expect(approvalCount).toBe(1);
   });
 });

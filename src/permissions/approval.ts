@@ -1,10 +1,12 @@
-import { confirm } from "@inquirer/prompts";
+import { select } from "@inquirer/prompts";
 import type { ToolCall } from "../agent/types.js";
+
+export type ApprovalDecision = "reject" | "allow_once" | "allow_session";
 
 export type ApprovalFunction = (
   call: ToolCall,
   reason: string,
-) => Promise<boolean>;
+) => Promise<ApprovalDecision>;
 
 export const askUserApproval: ApprovalFunction = async (call, reason) => {
   console.log("\nTool approval required");
@@ -13,8 +15,35 @@ export const askUserApproval: ApprovalFunction = async (call, reason) => {
   console.log("Args:");
   console.log(JSON.stringify(call.args, null, 2));
 
-  return confirm({
+  return select({
     message: "Approve this tool call?",
-    default: false,
+    default: "reject" satisfies ApprovalDecision,
+    choices: [
+      {
+        name: "Allow once",
+        value: "allow_once" satisfies ApprovalDecision,
+        description: "Approve only this tool call.",
+      },
+      {
+        name: "Allow for this session",
+        value: "allow_session" satisfies ApprovalDecision,
+        description: sessionScopeDescription(call),
+      },
+      {
+        name: "Reject",
+        value: "reject" satisfies ApprovalDecision,
+        description: "Do not run this tool call.",
+      },
+    ],
   });
 };
+
+function sessionScopeDescription(call: ToolCall): string {
+  if (call.name === "Bash") {
+    const command = String(call.args.command ?? "");
+    const commandFamily = command.trim().split(/\s+/)[0] || "this command type";
+    return `Remember approval for ${commandFamily} commands until this process exits.`;
+  }
+
+  return `Remember approval for ${call.name} until this process exits.`;
+}

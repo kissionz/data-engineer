@@ -1,5 +1,5 @@
 import type { ModelClient } from "../model/base.js";
-import type { ApprovalFunction } from "../permissions/approval.js";
+import type { ApprovalDecision, ApprovalFunction } from "../permissions/approval.js";
 import { askUserApproval } from "../permissions/approval.js";
 import type { PermissionGate } from "../permissions/gate.js";
 import type { ToolExecutionResult } from "../tools/base.js";
@@ -8,6 +8,8 @@ import type { ContextBuilder } from "./context.js";
 import type { SessionStore } from "./session.js";
 
 export class AgentLoop {
+  private readonly sessionApprovals = new Set<string>();
+
   constructor(
     private readonly model: ModelClient,
     private readonly tools: ToolRegistry,
@@ -65,16 +67,10 @@ export class AgentLoop {
             content: `Permission denied: ${check.reason}`,
             data: { reason: check.reason },
           };
-        } else if (check.decision === "ask") {
-          const approved = await this.approve(call, check.reason);
+        } else if (check.decision === "ask" && !this.hasSessionApproval(call)) {
+          const approval = await this.approve(call, check.reason);
 
-          result = approved
-            ? await this.executeTool(call.name, call.args)
-            : {
-                ok: false,
-                content: "User rejected tool call.",
-                data: { reason: "user_rejected" },
-              };
+          result = await this.executeApprovedTool(call.name, call.args, approval, call);
         } else {
           result = await this.executeTool(call.name, call.args);
         }
@@ -108,4 +104,45 @@ export class AgentLoop {
       };
     }
   }
+
+  private async executeApprovedTool(
+    name: string,
+    args: Record<string, unknown>,
+    approval: ApprovalDecision,
+    call: { name: string; args: Record<string, unknown> },
+  ): Promise<ToolExecutionResult> {
+    if (approval === "reject") {
+      return {
+        ok: false,
+        content: "User rejected tool call.",
+        data: { reason: "user_rejected" },
+      };
+    }
+
+    if (approval === "allow_session") {
+      this.sessionApprovals.add(sessionApprovalKey(call));
+    }
+
+    return this.executeTool(name, args);
+  }
+
+  private hasSessionApproval(call: {
+    name: string;
+    args: Record<string, unknown>;
+  }): boolean {
+    return this.sessionApprovals.has(sessionApprovalKey(call));
+  }
+}
+
+function sessionApprovalKey(call: {
+  name: string;
+  args: Record<string, unknown>;
+}): string {
+  if (call.name === "Bash") {
+    const command = String(call.args.command ?? "").trim();
+    const commandFamily = command.split(/\s+/)[0] || "unknown";
+    return `Bash:${commandFamily}`;
+  }
+
+  return call.name;
 }

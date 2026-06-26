@@ -80,3 +80,11 @@ npm run dev -- --max-turns 100
 ## Safety Model
 
 Readonly tools such as `Read` and `Grep` are allowed by default. File edits and shell commands require approval. Dangerous shell fragments and sensitive paths such as `.git`, `.env`, and `node_modules` are denied by policy before tool execution.
+
+When approval is required, you can choose:
+
+- Allow once
+- Allow for this session
+- Reject
+
+Session approvals are kept only in memory until the current CLI process exits. `Edit` approvals apply to later edit tool calls in the same session. `Bash` approvals are grouped by command family, such as `npm` or `git`, so approving `npm test` for the session also allows later `npm run build` without another prompt. Dangerous commands and denied paths are still blocked before approval.
