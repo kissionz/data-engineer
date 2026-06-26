@@ -23,6 +23,7 @@ import { EditTool } from "./tools/edit.js";
 import { GrepTool } from "./tools/grep.js";
 import { ReadTool } from "./tools/read.js";
 import { ToolRegistry } from "./tools/registry.js";
+import { WriteTool } from "./tools/write.js";
 
 interface CliOptions {
   task?: string;
@@ -61,6 +62,7 @@ async function main(): Promise<void> {
 
   tools.register(new ReadTool(workspace));
   tools.register(new GrepTool(workspace, executor));
+  tools.register(new WriteTool(workspace));
   tools.register(new EditTool(workspace));
   tools.register(new BashTool(workspace, executor));
 

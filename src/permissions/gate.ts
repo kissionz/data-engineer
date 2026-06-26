@@ -21,6 +21,10 @@ export class PermissionGate {
       return { decision: "deny", reason: "Path is denied by policy." };
     }
 
+    if (call.name === "Bash" && this.commandReferencesDeniedPath(call)) {
+      return { decision: "deny", reason: "Command references a denied path." };
+    }
+
     if (call.name === "Bash" && this.dangerousCommand(call)) {
       return {
         decision: "deny",
@@ -36,8 +40,15 @@ export class PermissionGate {
       return { decision: "allow", reason: "Readonly tool." };
     }
 
-    if (["Edit", "Write"].includes(call.name) && this.policy.askForWrite) {
-      return { decision: "ask", reason: "File modification requires approval." };
+    if (call.name === "Edit" && this.policy.askForWrite) {
+      return {
+        decision: "ask",
+        reason: "Updating an existing file requires approval.",
+      };
+    }
+
+    if (call.name === "Bash" && this.readonlyCommand(call)) {
+      return { decision: "allow", reason: "Readonly shell command." };
     }
 
     if (call.name === "Bash" && this.policy.askForBash) {
@@ -68,6 +79,38 @@ export class PermissionGate {
       command.includes(fragment),
     );
   }
+
+  private commandReferencesDeniedPath(call: ToolCall): boolean {
+    const command = String(call.args.command ?? "").replaceAll("\\", "/");
+
+    return /(?:^|[\s"'=])(?:[^\s"';&|<>]*\/)*(?:\.git|node_modules|\.env(?:\.[^/\s"';&|<>]*)?)(?:\/|$|[\s"'])/i.test(
+      command,
+    );
+  }
+
+  private readonlyCommand(call: ToolCall): boolean {
+    const command = String(call.args.command ?? "").trim();
+
+    if (!command || hasShellMutationSyntax(command)) {
+      return false;
+    }
+
+    return READONLY_COMMANDS.some((pattern) => pattern.test(command));
+  }
+}
+
+const READONLY_COMMANDS = [
+  /^(?:pwd|cd(?:\s+[^;&|<>]+)?|ls|dir)(?:\s+[^;&|<>]+)*$/i,
+  /^(?:rg|grep|cat|type|head|tail|wc|diff)(?:\s+[^;&|<>]+)*$/i,
+  /^git\s+(?:status|diff|log|show|rev-parse|ls-files|grep)(?:\s+[^;&|<>]+)*$/i,
+  /^(?:node|npm|npx|pnpm|yarn|bun|deno)\s+(?:--version|-v)$/i,
+];
+
+function hasShellMutationSyntax(command: string): boolean {
+  return (
+    /(?:^|[^<])>{1,2}|[;&|]/.test(command) ||
+    /(?:^|\s)--output(?:=|\s)/i.test(command)
+  );
 }
 
 function normalizePolicyPath(value: string): string {

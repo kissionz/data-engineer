@@ -8,6 +8,7 @@ import { BashTool } from "../src/tools/bash.js";
 import { EditTool } from "../src/tools/edit.js";
 import { GrepTool } from "../src/tools/grep.js";
 import { ReadTool } from "../src/tools/read.js";
+import { WriteTool } from "../src/tools/write.js";
 
 describe("P0 tools", () => {
   it("reads files with line numbers", async () => {
@@ -37,6 +38,27 @@ describe("P0 tools", () => {
 
     expect(result.ok).toBe(true);
     expect(await readFile(filePath, "utf8")).toBe("hello agent");
+  });
+
+  it("creates new files without overwriting existing files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const tool = new WriteTool(new Workspace(root));
+
+    const created = await tool.execute({
+      file_path: "nested/sample.txt",
+      content: "hello",
+    });
+    const overwritten = await tool.execute({
+      file_path: "nested/sample.txt",
+      content: "changed",
+    });
+
+    expect(created.ok).toBe(true);
+    expect(overwritten.ok).toBe(false);
+    expect(overwritten.data).toMatchObject({ reason: "file_exists" });
+    expect(await readFile(path.join(root, "nested/sample.txt"), "utf8")).toBe(
+      "hello",
+    );
   });
 
   it("rejects non-unique edit strings", async () => {

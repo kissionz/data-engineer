@@ -40,6 +40,42 @@ export class Workspace {
     return absPath;
   }
 
+  async assertCreatablePathWithin(absPath: string): Promise<void> {
+    this.assertPathWithin(absPath, `Path outside workspace: ${absPath}`);
+
+    let ancestor = path.dirname(absPath);
+
+    while (true) {
+      const info = await stat(ancestor).catch(() => null);
+
+      if (info) {
+        if (!info.isDirectory()) {
+          throw new Error(`Parent path is not a directory: ${ancestor}`);
+        }
+
+        const [rootRealPath, ancestorRealPath] = await Promise.all([
+          realpath(this.root),
+          realpath(ancestor),
+        ]);
+
+        assertWithin(
+          rootRealPath,
+          ancestorRealPath,
+          `Parent path resolves outside workspace: ${ancestor}`,
+        );
+        return;
+      }
+
+      const parent = path.dirname(ancestor);
+
+      if (parent === ancestor) {
+        throw new Error(`No existing parent directory for: ${absPath}`);
+      }
+
+      ancestor = parent;
+    }
+  }
+
   private assertPathWithin(absPath: string, message: string): void {
     assertWithin(this.root, absPath, message);
   }

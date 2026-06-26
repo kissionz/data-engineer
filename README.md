@@ -7,7 +7,7 @@ This P0 implementation includes:
 - Agent loop with model tool-call continuation
 - Append-only session event log
 - Workspace path boundary checks
-- Read, Grep, Edit, and Bash tools
+- Read, Grep, Write, Edit, and Bash tools
 - Tool registry
 - Permission gate with allow / ask / deny decisions
 - Real OpenAI Responses API model client by default
@@ -79,7 +79,7 @@ npm run dev -- --max-turns 100
 
 ## Safety Model
 
-Readonly tools such as `Read` and `Grep` are allowed by default. File edits and shell commands require approval. Dangerous shell fragments and sensitive paths such as `.git`, `.env`, and `node_modules` are denied by policy before tool execution.
+Permissions follow resource operations. `Read` and `Grep` are allowed by default. `Write` may create new files without approval but cannot overwrite an existing file. Updating files through `Edit` requires approval. Clearly readonly shell commands are allowed, while commands that may change state require approval. Dangerous shell fragments and sensitive paths such as `.git`, `.env`, and `node_modules` are denied before tool execution.
 
 When approval is required, you can choose:
 
