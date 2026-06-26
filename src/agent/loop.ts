@@ -78,61 +78,85 @@ export class AgentLoop {
       });
 
       for (const call of toolCalls) {
+        const validation = this.tools.validate(call.name, call.args);
         let hookBlock;
-
-        try {
-          hookBlock = await this.hooks?.emit("BeforeToolUse", {
-            toolCall: call,
-          });
-        } catch (error: unknown) {
-          hookBlock = {
-            decision: "block" as const,
-            reason: `BeforeToolUse hook failed: ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          };
-        }
-        const check = this.permissions.check(call);
         let result: ToolExecutionResult;
 
-        if (hookBlock?.decision === "block") {
-          this.reporter.onToolStatus(call, "denied");
+        if (!validation.ok) {
+          this.reporter.onToolStatus(call, "failed");
           result = {
             ok: false,
-            content: `Blocked by hook: ${hookBlock.reason ?? "No reason provided."}`,
+            content: `Invalid tool call:\n${validation.errors.join("\n")}`,
             data: {
-              reason: "hook_blocked",
-              hookData: hookBlock.data,
+              reason:
+                "reason" in validation
+                  ? validation.reason
+                  : "invalid_tool_arguments",
+              errors: validation.errors,
             },
           };
-        } else if (check.decision === "deny") {
-          this.reporter.onToolStatus(call, "denied");
-          result = {
-            ok: false,
-            content: `Permission denied: ${check.reason}`,
-            data: { reason: check.reason },
-          };
-        } else if (check.decision === "ask" && !this.hasSessionApproval(call)) {
-          const approval = await this.approve(call, check.reason);
-
-          if (approval !== "reject") {
-            this.reporter.onToolStatus(call, "running");
-          }
-          result = await this.executeApprovedTool(call.name, call.args, approval, call);
         } else {
-          this.reporter.onToolStatus(call, "running");
-          result = await this.executeTool(call.name, call.args);
-        }
+          try {
+            hookBlock = await this.hooks?.emit("BeforeToolUse", {
+              toolCall: call,
+            });
+          } catch (error: unknown) {
+            hookBlock = {
+              decision: "block" as const,
+              reason: `BeforeToolUse hook failed: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            };
+          }
+          const check = this.permissions.check(call);
 
-        if (!hookBlock && check.decision !== "deny") {
-          this.reporter.onToolStatus(
-            call,
-            result.data?.reason === "user_rejected"
-              ? "rejected"
-              : result.ok
-                ? "succeeded"
-                : "failed",
-          );
+          if (hookBlock?.decision === "block") {
+            this.reporter.onToolStatus(call, "denied");
+            result = {
+              ok: false,
+              content: `Blocked by hook: ${hookBlock.reason ?? "No reason provided."}`,
+              data: {
+                reason: "hook_blocked",
+                hookData: hookBlock.data,
+              },
+            };
+          } else if (check.decision === "deny") {
+            this.reporter.onToolStatus(call, "denied");
+            result = {
+              ok: false,
+              content: `Permission denied: ${check.reason}`,
+              data: { reason: check.reason },
+            };
+          } else if (
+            check.decision === "ask" &&
+            !this.hasSessionApproval(call)
+          ) {
+            const approval = await this.approve(call, check.reason);
+
+            if (approval !== "reject") {
+              this.reporter.onToolStatus(call, "running");
+            }
+            result = await this.executeApprovedTool(
+              call.name,
+              call.args,
+              approval,
+              call,
+            );
+          } else {
+            this.reporter.onToolStatus(call, "running");
+            result = await this.executeTool(call.name, call.args);
+          }
+
+          if (!hookBlock && check.decision !== "deny") {
+            this.reporter.onToolStatus(
+              call,
+              result.data?.reason === "user_rejected"
+                ? "rejected"
+                : result.ok
+                  ? "succeeded"
+                  : "failed",
+            );
+          }
         }
 
         try {

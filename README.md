@@ -31,6 +31,24 @@ Without `--task`, the CLI starts an interactive session and keeps accepting user
 npm start
 ```
 
+Each process starts a new isolated session by default. Resume the most recently
+selected session or a specific session explicitly:
+
+```bash
+npm start -- --resume latest
+npm start -- --resume 20260627-120000-a1b2c3
+```
+
+Interactive session commands:
+
+```text
+/new
+/resume <session-id|latest>
+/session
+/sessions
+/exit
+```
+
 ## Environment Setup
 
 Create a workspace-local `.env` file:
@@ -81,6 +99,8 @@ npm run dev -- --max-turns 100
 
 ## Safety Model
 
+Tool names and arguments are validated against the same JSON Schemas sent to the model before hooks or permissions run. Unknown tools and malformed calls are returned to the model as recoverable failures without prompting for approval.
+
 Permissions follow resource operations. `Read` and `Grep` are allowed by default. `Write` may create new files without approval but cannot overwrite an existing file. Updating files through `Edit` requires approval. Clearly readonly shell commands are allowed, while commands that may change state require approval. Dangerous shell fragments and sensitive paths such as `.git`, `.env`, and `node_modules` are denied before tool execution.
 
 When approval is required, you can choose:
@@ -93,6 +113,6 @@ Session approvals are kept only in memory until the current CLI process exits. `
 
 Model text is streamed to the terminal as it arrives. Tool calls show only a compact action summary and execution status; complete arguments and results remain in the session log for model continuity and diagnostics.
 
-Complex-task todos are persisted under `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
+Session logs and their task todos are persisted separately under `.harness/sessions/` and `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
 
 Long sessions retain the full append-only event log. Once enough new events accumulate, a bounded factual summary is appended and used with recent events for model context. `BeforeToolUse` and `AfterToolUse` hooks provide deterministic interception and observation; the default write hook blocks sensitive paths and oversized single-file writes.

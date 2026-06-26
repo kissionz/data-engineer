@@ -104,6 +104,28 @@ class WriteThenDoneModel implements ModelClient {
   }
 }
 
+class UnknownToolThenDoneModel implements ModelClient {
+  private step = 0;
+
+  async complete(): Promise<AgentResponse> {
+    this.step += 1;
+
+    if (this.step === 1) {
+      return {
+        toolCalls: [
+          {
+            id: "call-unknown",
+            name: "MissingTool",
+            args: {},
+          },
+        ],
+      };
+    }
+
+    return { finalText: "recovered" };
+  }
+}
+
 class FakeBashTool implements Tool {
   name = "Bash";
   description = "Fake bash tool for loop tests.";
@@ -233,5 +255,29 @@ describe("AgentLoop", () => {
     await expect(loop.run("write a file")).resolves.toBe("done");
     expect(writeTool.executions).toBe(0);
     expect(await readFile(sessionPath, "utf8")).toContain('"reason":"hook_blocked"');
+  });
+
+  it("returns invalid tool calls to the model without asking for approval", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    let approvalCount = 0;
+    const loop = new AgentLoop(
+      new UnknownToolThenDoneModel(),
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+      10,
+      async () => {
+        approvalCount += 1;
+        return "allow_once";
+      },
+    );
+
+    await expect(loop.run("use a missing tool")).resolves.toBe("recovered");
+    expect(approvalCount).toBe(0);
+    expect(await readFile(sessionPath, "utf8")).toContain(
+      '"reason":"unknown_tool"',
+    );
   });
 });

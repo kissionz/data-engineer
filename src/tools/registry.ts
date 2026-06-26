@@ -1,4 +1,9 @@
 import type { Tool, ToolExecutionResult } from "./base.js";
+import { validateSchema, type SchemaValidationResult } from "./schemaValidator.js";
+
+export type ToolValidationResult =
+  | SchemaValidationResult
+  | { ok: false; errors: string[]; reason: "unknown_tool" };
 
 export class ToolRegistry {
   private readonly tools = new Map<string, Tool>();
@@ -29,10 +34,40 @@ export class ToolRegistry {
     }));
   }
 
+  validate(name: string, args: Record<string, unknown>): ToolValidationResult {
+    const tool = this.tools.get(name);
+
+    if (!tool) {
+      return {
+        ok: false,
+        errors: [`Unknown tool: ${name}.`],
+        reason: "unknown_tool",
+      };
+    }
+
+    return validateSchema(tool.inputSchema, args);
+  }
+
   async execute(
     name: string,
     args: Record<string, unknown>,
   ): Promise<ToolExecutionResult> {
+    const validation = this.validate(name, args);
+
+    if (!validation.ok) {
+      return {
+        ok: false,
+        content: `Invalid tool call:\n${validation.errors.join("\n")}`,
+        data: {
+          reason:
+            "reason" in validation
+              ? validation.reason
+              : "invalid_tool_arguments",
+          errors: validation.errors,
+        },
+      };
+    }
+
     return this.get(name).execute(args);
   }
 }
