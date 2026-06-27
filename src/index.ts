@@ -33,6 +33,7 @@ import {
 } from "./runtime/sandboxConfig.js";
 import type { ShellExecutor } from "./runtime/shellExecutor.js";
 import { Workspace } from "./runtime/workspace.js";
+import { WorktreeManager, type WorktreeInfo } from "./runtime/worktree.js";
 import { SkillLoader } from "./skills/loader.js";
 import { BashTool } from "./tools/bash.js";
 import { EditTool } from "./tools/edit.js";
@@ -62,6 +63,8 @@ interface CliOptions {
   sandboxMemory: string;
   sandboxCpus: string;
   sandboxPids: string;
+  worktree: boolean;
+  worktreeBase: string;
 }
 
 async function main(): Promise<void> {
@@ -92,15 +95,35 @@ async function main(): Promise<void> {
     .option("--sandbox-memory <limit>", "Container memory limit", "1g")
     .option("--sandbox-cpus <count>", "Container CPU limit", "2")
     .option("--sandbox-pids <count>", "Container process limit", "256")
+    .option("--worktree", "Run the agent in a new isolated git worktree")
+    .option("--worktree-base <ref>", "Git ref used for a new worktree", "HEAD")
     .parse();
 
   const opts = program.opts<CliOptions>();
-  const workspaceRoot = path.resolve(opts.cwd);
-  await loadEnvFile(path.join(workspaceRoot, ".env"));
+  const sourceWorkspaceRoot = path.resolve(opts.cwd);
+  await loadEnvFile(path.join(sourceWorkspaceRoot, ".env"));
   assertModelConfiguration(opts.provider);
 
-  const workspace = new Workspace(workspaceRoot);
   const executor = new LocalCommandExecutor();
+  let worktree: WorktreeInfo | undefined;
+
+  if (opts.worktree) {
+    if (opts.resume) {
+      throw new Error(
+        "--worktree cannot be combined with --resume. Resume an existing worktree with --cwd instead.",
+      );
+    }
+
+    worktree = await new WorktreeManager(
+      executor,
+      sourceWorkspaceRoot,
+    ).create(opts.worktreeBase);
+    console.log(`Worktree: ${worktree.path}`);
+    console.log(`Branch: ${worktree.branch}`);
+  }
+
+  const workspaceRoot = worktree?.path ?? sourceWorkspaceRoot;
+  const workspace = new Workspace(workspaceRoot);
   const sandboxConfig = parseSandboxConfig({
     mode: optionOrEnv(
       program,
@@ -184,6 +207,7 @@ async function main(): Promise<void> {
     } finally {
       await runtime.session.release();
     }
+    printWorktreeReminder(worktree);
     return;
   }
 
@@ -193,6 +217,7 @@ async function main(): Promise<void> {
     sessionManager,
     createRuntime,
   );
+  printWorktreeReminder(worktree);
 }
 
 function optionOrEnv(
@@ -416,6 +441,15 @@ async function runInteractiveSession(
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function printWorktreeReminder(worktree: WorktreeInfo | undefined): void {
+  if (!worktree) {
+    return;
+  }
+
+  console.log(`Worktree retained: ${worktree.path}`);
+  console.log(`Review branch before merging: ${worktree.branch}`);
 }
 
 function createModel(

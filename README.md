@@ -24,6 +24,7 @@ This P0 implementation includes:
 - Append-only context compaction and tool lifecycle hooks
 - Docker-isolated Bash with explicit host/off modes
 - Bounded, read-only code-reviewer subagent
+- Explicit isolated Git worktree mode
 - Mock model only for explicit local loop testing
 
 ## Usage
@@ -208,3 +209,36 @@ SkillLoad
 It cannot access `Write`, `Edit`, `Bash`, `TodoWrite`, or `Task`, so it cannot
 modify files or recursively create more subagents. The parent receives only the
 bounded final review result.
+
+## Worktree Isolation
+
+Run a task on a clean repository in a new branch and sibling worktree:
+
+```bash
+npm start -- --worktree --task "Refactor the parser and run tests"
+npm start -- --worktree --worktree-base main
+```
+
+The harness prints the generated `harness/<id>` branch and worktree path. The
+agent's Workspace, Session, Todo, Skills, and sandbox state are all rooted in
+that worktree. The source repository must be clean so uncommitted local changes
+cannot be silently omitted.
+
+Worktrees are retained after exit. Resume directly from the printed path:
+
+```bash
+npm start -- --cwd /path/to/worktree --resume latest
+```
+
+Review and merge explicitly from the source repository:
+
+```bash
+git -C /path/to/worktree status
+git -C /path/to/worktree diff
+git merge harness/<id>
+git worktree remove /path/to/worktree
+git branch -d harness/<id>
+```
+
+The harness never merges or removes a worktree automatically. `--worktree`
+cannot be combined with `--resume`; use `--cwd` to continue an existing one.
