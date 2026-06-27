@@ -1,4 +1,9 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -237,4 +242,22 @@ describe("P0 tools", () => {
     expect(invalid.ok).toBe(false);
     expect(invalid.content).toContain("Only one todo");
   });
+
+  it.runIf(process.platform !== "win32")(
+    "refuses to read or write a symlinked todo file",
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+      const outside = path.join(root, "outside.json");
+      const linked = path.join(root, "todos.json");
+      await writeFile(outside, "[]\n", "utf8");
+      await symlink(outside, linked);
+      const store = new TodoStore(linked);
+
+      await expect(store.read()).rejects.toThrow("symbolic link");
+      await expect(
+        store.write([{ content: "Unsafe", status: "pending" }]),
+      ).rejects.toThrow("symbolic link");
+      await expect(readFile(outside, "utf8")).resolves.toBe("[]\n");
+    },
+  );
 });

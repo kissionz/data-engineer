@@ -28,6 +28,8 @@ describe("PermissionGate", () => {
       "GitDiff",
       "TodoRead",
       "TodoWrite",
+      "SkillList",
+      "SkillLoad",
     ]) {
       expect(gate.check({ id: name, name, args: {} })).toMatchObject({
         decision: "allow",
@@ -131,6 +133,14 @@ describe("PermissionGate", () => {
         id: "4",
         name: "Bash",
         args: { command: "rg token node_modules/package/index.js" },
+      }),
+    ).toMatchObject({ decision: "deny" });
+
+    expect(
+      gate.check({
+        id: "5",
+        name: "Bash",
+        args: { command: "cat config", cwd: ".GIT", file_path: "safe" },
       }),
     ).toMatchObject({ decision: "deny" });
   });

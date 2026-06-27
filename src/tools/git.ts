@@ -41,7 +41,11 @@ abstract class GitReadTool implements Tool {
 export class GitStatusTool extends GitReadTool {
   name = "GitStatus";
   description = "Show concise workspace git status.";
-  inputSchema = { type: "object", properties: {} };
+  inputSchema = {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  };
 
   async execute(): Promise<ToolExecutionResult> {
     return this.run(["status", "--short"]);
@@ -56,6 +60,7 @@ export class GitDiffTool extends GitReadTool {
     properties: {
       staged: { type: "boolean" },
     },
+    additionalProperties: false,
   };
 
   async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {

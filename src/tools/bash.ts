@@ -14,6 +14,7 @@ export class BashTool implements Tool {
       timeout_seconds: { type: "number" },
     },
     required: ["command"],
+    additionalProperties: false,
   };
 
   constructor(

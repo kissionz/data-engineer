@@ -19,6 +19,8 @@ export function defaultPolicy(): PermissionPolicy {
       "GitDiff",
       "TodoRead",
       "TodoWrite",
+      "SkillList",
+      "SkillLoad",
     ]),
     deniedTools: new Set(),
     allowReadonly: true,

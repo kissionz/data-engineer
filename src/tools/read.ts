@@ -14,6 +14,7 @@ export class ReadTool implements Tool {
       limit: { type: "number" },
     },
     required: ["file_path"],
+    additionalProperties: false,
   };
 
   constructor(private readonly workspace: Workspace) {}

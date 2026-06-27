@@ -2,12 +2,19 @@
 
 A TypeScript / Node.js local coding agent harness runtime.
 
+## Requirements
+
+- Node.js 22.12 or newer
+- Git for `GitStatus` and `GitDiff`
+- ripgrep (`rg`) for `Grep` and `Glob`
+
 This P0 implementation includes:
 
 - Agent loop with model tool-call continuation
 - Append-only session event log
 - Workspace path boundary checks
 - Read, Grep, Glob, Write, Edit, Bash, Git status/diff, and Todo tools
+- Explicit, read-only project Skill discovery and loading
 - Tool registry
 - Permission gate with allow / ask / deny decisions
 - Real OpenAI Responses API model client by default
@@ -116,3 +123,24 @@ Model text is streamed to the terminal as it arrives. Tool calls show only a com
 Session logs and their task todos are persisted separately under `.harness/sessions/` and `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
 
 Long sessions retain the full append-only event log. Once enough new events accumulate, a bounded factual summary is appended and used with recent events for model context. `BeforeToolUse` and `AfterToolUse` hooks provide deterministic interception and observation; the default write hook blocks sensitive paths and oversized single-file writes.
+
+## Project Skills
+
+Project skills live under `.harness/skills/<name>/SKILL.md` and may be committed
+with the repository. Each file uses YAML frontmatter:
+
+```md
+---
+name: typescript-testing
+description: Test and verify TypeScript changes.
+---
+
+# TypeScript Testing
+
+Run targeted tests before the full suite.
+```
+
+The model uses `SkillList` to discover metadata and `SkillLoad` to load one
+relevant instruction file explicitly. Skill names must match their directory,
+files are limited to 64KB, and paths cannot escape the workspace. Files under a
+skill's `scripts/` directory are never executed automatically.

@@ -14,6 +14,7 @@ export class WriteTool implements Tool {
       content: { type: "string" },
     },
     required: ["file_path", "content"],
+    additionalProperties: false,
   };
 
   constructor(private readonly workspace: Workspace) {}

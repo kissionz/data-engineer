@@ -35,6 +35,24 @@ function validateValue(
     case "string":
       if (typeof value !== "string") {
         errors.push(`${valuePath} must be a string.`);
+      } else {
+        if (
+          typeof schema.minLength === "number" &&
+          value.length < schema.minLength
+        ) {
+          errors.push(
+            `${valuePath} must contain at least ${schema.minLength} characters.`,
+          );
+        }
+
+        if (
+          typeof schema.maxLength === "number" &&
+          value.length > schema.maxLength
+        ) {
+          errors.push(
+            `${valuePath} cannot contain more than ${schema.maxLength} characters.`,
+          );
+        }
       }
       return;
     case "number":
@@ -83,6 +101,14 @@ function validateObject(
     }
 
     validateValue(propertySchema, value[name], `${valuePath}.${name}`, errors);
+  }
+
+  if (schema.additionalProperties === false) {
+    for (const name of Object.keys(value)) {
+      if (!Object.hasOwn(schema.properties, name)) {
+        errors.push(`${valuePath}.${name} is not allowed.`);
+      }
+    }
   }
 }
 

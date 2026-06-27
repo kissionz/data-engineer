@@ -65,6 +65,42 @@ describe("tool schema validation", () => {
     });
     expect(tool.executions).toBe(0);
   });
+
+  it("enforces string length and additional property constraints", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        name: { type: "string", minLength: 2, maxLength: 4 },
+      },
+      required: ["name"],
+      additionalProperties: false,
+    };
+
+    expect(validateSchema(schema, { name: "ok" })).toEqual({ ok: true });
+    expect(validateSchema(schema, { name: "", extra: true })).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "args.name must contain at least 2 characters.",
+        "args.extra is not allowed.",
+      ]),
+    });
+  });
+
+  it("rejects path-shadowing fields on Bash calls", () => {
+    const registry = new ToolRegistry();
+    registry.register(new SchemaOnlyTool());
+
+    expect(
+      registry.validate("Bash", {
+        command: "cat config",
+        cwd: ".git",
+        file_path: "safe",
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining(["args.file_path is not allowed."]),
+    });
+  });
 });
 
 class CountingTool implements Tool {
@@ -80,5 +116,23 @@ class CountingTool implements Tool {
   async execute(): Promise<ToolExecutionResult> {
     this.executions += 1;
     return { ok: true, content: "executed" };
+  }
+}
+
+class SchemaOnlyTool implements Tool {
+  name = "Bash";
+  description = "Schema validation test.";
+  inputSchema = {
+    type: "object",
+    properties: {
+      command: { type: "string" },
+      cwd: { type: "string" },
+    },
+    required: ["command"],
+    additionalProperties: false,
+  };
+
+  async execute(): Promise<ToolExecutionResult> {
+    return { ok: true, content: "unused" };
   }
 }

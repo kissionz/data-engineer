@@ -1,6 +1,8 @@
 node_modules/
 dist/
-.harness/
+.harness/*
+!.harness/skills/
+!.harness/skills/**
 .env
 .env.*
 !.env.example

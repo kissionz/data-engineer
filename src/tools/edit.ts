@@ -31,6 +31,7 @@ export class EditTool implements Tool {
       new_string: { type: "string" },
     },
     required: ["file_path", "old_string", "new_string"],
+    additionalProperties: false,
   };
 
   constructor(private readonly workspace: Workspace) {}

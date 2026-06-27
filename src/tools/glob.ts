@@ -13,6 +13,7 @@ export class GlobTool implements Tool {
       path: { type: "string" },
       limit: { type: "number" },
     },
+    additionalProperties: false,
   };
 
   constructor(

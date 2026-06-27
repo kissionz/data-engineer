@@ -12,6 +12,11 @@ export class Workspace {
     const resolved = path.resolve(this.root, userPath);
 
     this.assertPathWithin(resolved, `Path outside workspace: ${userPath}`);
+    assertNoSensitiveRelativePath(
+      this.root,
+      resolved,
+      `Sensitive path denied: ${userPath}`,
+    );
     return resolved;
   }
 
@@ -26,6 +31,11 @@ export class Workspace {
     ]);
 
     assertWithin(rootRealPath, targetRealPath, `Real path outside workspace: ${absPath}`);
+    assertNoSensitiveRelativePath(
+      rootRealPath,
+      targetRealPath,
+      `Sensitive real path denied: ${absPath}`,
+    );
   }
 
   async resolveExistingDirectory(userPath: string): Promise<string> {
@@ -63,6 +73,11 @@ export class Workspace {
           ancestorRealPath,
           `Parent path resolves outside workspace: ${ancestor}`,
         );
+        assertNoSensitiveRelativePath(
+          rootRealPath,
+          ancestorRealPath,
+          `Sensitive parent path denied: ${ancestor}`,
+        );
         return;
       }
 
@@ -85,6 +100,30 @@ function assertWithin(root: string, target: string, message: string): void {
   const relative = path.relative(root, target);
 
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
+    throw new Error(message);
+  }
+}
+
+function assertNoSensitiveRelativePath(
+  root: string,
+  target: string,
+  message: string,
+): void {
+  const segments = path
+    .relative(root, target)
+    .split(path.sep)
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase());
+
+  if (
+    segments.some(
+      (segment) =>
+        segment === ".git" ||
+        segment === "node_modules" ||
+        segment === ".env" ||
+        segment.startsWith(".env."),
+    )
+  ) {
     throw new Error(message);
   }
 }

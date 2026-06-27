@@ -34,6 +34,14 @@ export function summarizeToolCall(call: ToolCall): string {
     return `Todo update (${count} items)`;
   }
 
+  if (call.name === "SkillList") {
+    return "Skill list";
+  }
+
+  if (call.name === "SkillLoad") {
+    return `Skill load ${compact(String(call.args.name ?? "skill"))}`;
+  }
+
   if (call.name === "Bash") {
     return `Bash ${compact(String(call.args.command ?? "command"), 100)}`;
   }

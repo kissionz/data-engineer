@@ -59,17 +59,27 @@ export class PermissionGate {
   }
 
   private pathDenied(call: ToolCall): boolean {
-    const maybePath = call.args.file_path ?? call.args.path ?? call.args.cwd ?? "";
-    const normalized = normalizePolicyPath(String(maybePath));
-    const segments = normalized.split("/").filter(Boolean);
+    const paths = [
+      call.args.file_path,
+      call.args.path,
+      call.args.cwd,
+    ].filter((value): value is string => typeof value === "string");
 
-    return segments.some(
-      (segment) =>
-        segment === ".git" ||
-        segment === "node_modules" ||
-        segment === ".env" ||
-        segment.startsWith(".env."),
-    );
+    return paths.some((candidate) => {
+      const normalized = normalizePolicyPath(candidate);
+      const segments = normalized
+        .split("/")
+        .filter(Boolean)
+        .map((segment) => segment.toLowerCase());
+
+      return segments.some(
+        (segment) =>
+          segment === ".git" ||
+          segment === "node_modules" ||
+          segment === ".env" ||
+          segment.startsWith(".env."),
+      );
+    });
   }
 
   private dangerousCommand(call: ToolCall): boolean {

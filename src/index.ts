@@ -25,12 +25,14 @@ import { PermissionGate } from "./permissions/gate.js";
 import { loadEnvFile } from "./runtime/env.js";
 import { LocalCommandExecutor } from "./runtime/localExecutor.js";
 import { Workspace } from "./runtime/workspace.js";
+import { SkillLoader } from "./skills/loader.js";
 import { BashTool } from "./tools/bash.js";
 import { EditTool } from "./tools/edit.js";
 import { GitDiffTool, GitStatusTool } from "./tools/git.js";
 import { GlobTool } from "./tools/glob.js";
 import { GrepTool } from "./tools/grep.js";
 import { ReadTool } from "./tools/read.js";
+import { SkillListTool, SkillLoadTool } from "./tools/skill.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { TodoReadTool, TodoStore, TodoWriteTool } from "./tools/todo.js";
 import { WriteTool } from "./tools/write.js";
@@ -96,7 +98,11 @@ async function main(): Promise<void> {
     }
 
     console.log(`Session: ${runtime.session.id}`);
-    await runTask(runtime.agent, opts.task);
+    try {
+      await runTask(runtime.agent, opts.task);
+    } finally {
+      await runtime.session.release();
+    }
     return;
   }
 
@@ -130,6 +136,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
   const todoStore = new TodoStore(options.session.todoPath);
   const sessionStore = new SessionStore(options.session.sessionPath);
   const hooks = new HookManager();
+  const skillLoader = new SkillLoader(options.workspace);
   hooks.register("BeforeToolUse", protectSensitiveWrites);
 
   tools.register(new ReadTool(options.workspace));
@@ -142,6 +149,8 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
   tools.register(new GitDiffTool(options.workspace, options.executor));
   tools.register(new TodoReadTool(todoStore));
   tools.register(new TodoWriteTool(todoStore));
+  tools.register(new SkillListTool(skillLoader));
+  tools.register(new SkillLoadTool(skillLoader));
 
   return new AgentLoop(
     createModel(options.provider, options.modelName, options.baseUrl),
@@ -196,8 +205,14 @@ async function runInteractiveSession(
       }
 
       if (trimmed === "/new") {
-        runtime = createRuntime(await sessionManager.create());
-        console.log(`New session: ${runtime.session.id}`);
+        try {
+          const nextRuntime = createRuntime(await sessionManager.create());
+          await runtime.session.release();
+          runtime = nextRuntime;
+          console.log(`New session: ${runtime.session.id}`);
+        } catch (error: unknown) {
+          console.error(`Unable to create session: ${errorMessage(error)}`);
+        }
         continue;
       }
 
@@ -219,16 +234,34 @@ async function runInteractiveSession(
 
       if (trimmed.startsWith("/resume ")) {
         const sessionId = trimmed.slice("/resume ".length).trim();
-        runtime = createRuntime(await sessionManager.resume(sessionId));
-        console.log(`Resumed session: ${runtime.session.id}`);
+        try {
+          const nextSession = await sessionManager.resume(sessionId);
+
+          if (nextSession.id !== runtime.session.id) {
+            const nextRuntime = createRuntime(nextSession);
+            await runtime.session.release();
+            runtime = nextRuntime;
+          }
+          console.log(`Resumed session: ${runtime.session.id}`);
+        } catch (error: unknown) {
+          console.error(`Unable to resume session: ${errorMessage(error)}`);
+        }
         continue;
       }
 
       await runTask(runtime.agent, trimmed);
     }
   } finally {
-    prompt.close();
+    try {
+      await runtime.session.release();
+    } finally {
+      prompt.close();
+    }
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function createModel(

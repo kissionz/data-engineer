@@ -13,6 +13,7 @@ export class GrepTool implements Tool {
       path: { type: "string" },
     },
     required: ["pattern"],
+    additionalProperties: false,
   };
 
   constructor(

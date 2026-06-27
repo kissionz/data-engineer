@@ -44,4 +44,17 @@ describe("summarizeToolCall", () => {
     expect(detail).toContain("new value");
     expect(detail?.length).toBeLessThan(90);
   });
+
+  it("summarizes skill discovery and loading", () => {
+    expect(
+      summarizeToolCall({ id: "1", name: "SkillList", args: {} }),
+    ).toBe("Skill list");
+    expect(
+      summarizeToolCall({
+        id: "2",
+        name: "SkillLoad",
+        args: { name: "typescript-testing" },
+      }),
+    ).toBe("Skill load typescript-testing");
+  });
 });

@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { lstat, mkdir, open, type FileHandle } from "node:fs/promises";
+import type { Stats } from "node:fs";
 import path from "node:path";
 import type { Tool, ToolExecutionResult } from "./base.js";
 
@@ -14,7 +15,7 @@ export class TodoStore {
 
   async read(): Promise<TodoItem[]> {
     try {
-      const parsed = JSON.parse(await readFile(this.filePath, "utf8")) as unknown;
+      const parsed = JSON.parse(await readSafeFile(this.filePath)) as unknown;
       return validateTodos(parsed);
     } catch (error: unknown) {
       if (
@@ -32,14 +33,21 @@ export class TodoStore {
   async write(todos: TodoItem[]): Promise<void> {
     const validated = validateTodos(todos);
     await mkdir(path.dirname(this.filePath), { recursive: true });
-    await writeFile(this.filePath, `${JSON.stringify(validated, null, 2)}\n`, "utf8");
+    await writeSafeFile(
+      this.filePath,
+      `${JSON.stringify(validated, null, 2)}\n`,
+    );
   }
 }
 
 export class TodoReadTool implements Tool {
   name = "TodoRead";
   description = "Read the current task todo list.";
-  inputSchema = { type: "object", properties: {} };
+  inputSchema = {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  };
 
   constructor(private readonly store: TodoStore) {}
 
@@ -84,6 +92,7 @@ export class TodoWriteTool implements Tool {
       },
     },
     required: ["todos"],
+    additionalProperties: false,
   };
 
   constructor(private readonly store: TodoStore) {}
@@ -141,4 +150,87 @@ function validateTodos(value: unknown): TodoItem[] {
   }
 
   return todos;
+}
+
+async function readSafeFile(filePath: string): Promise<string> {
+  const pathInfo = await lstat(filePath);
+
+  if (pathInfo.isSymbolicLink() || !pathInfo.isFile()) {
+    throw new Error("Refusing to read a symbolic link or non-file todo path.");
+  }
+
+  const handle = await open(filePath, "r");
+
+  try {
+    await assertSameFile(filePath, pathInfo, handle);
+    return await handle.readFile("utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function writeSafeFile(filePath: string, content: string): Promise<void> {
+  let handle: FileHandle;
+
+  try {
+    handle = await open(filePath, "wx", 0o600);
+  } catch (error: unknown) {
+    if (!hasCode(error, "EEXIST")) {
+      throw error;
+    }
+
+    const pathInfo = await lstat(filePath);
+
+    if (pathInfo.isSymbolicLink() || !pathInfo.isFile()) {
+      throw new Error("Refusing to write a symbolic link or non-file todo path.");
+    }
+
+    handle = await open(filePath, "r+");
+
+    try {
+      await assertSameFile(filePath, pathInfo, handle);
+      await handle.truncate(0);
+    } catch (error: unknown) {
+      await handle.close();
+      throw error;
+    }
+  }
+
+  try {
+    await handle.writeFile(content, "utf8");
+  } finally {
+    await handle.close();
+  }
+}
+
+async function assertSameFile(
+  filePath: string,
+  previousPathInfo: Stats,
+  handle: FileHandle,
+): Promise<void> {
+  const [currentPathInfo, fileInfo] = await Promise.all([
+    lstat(filePath),
+    handle.stat(),
+  ]);
+
+  if (
+    currentPathInfo.isSymbolicLink() ||
+    !currentPathInfo.isFile() ||
+    !sameFile(previousPathInfo, currentPathInfo) ||
+    !sameFile(currentPathInfo, fileInfo)
+  ) {
+    throw new Error("Todo file changed while it was being opened.");
+  }
+}
+
+function sameFile(left: Stats, right: Stats): boolean {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function hasCode(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === code
+  );
 }
