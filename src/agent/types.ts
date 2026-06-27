@@ -26,20 +26,33 @@ export interface AgentResponse {
   toolCalls?: ToolCall[];
 }
 
-export type SessionEvent =
+export interface SessionEventEnvelope {
+  eventId: string;
+  sequence: number;
+  sessionId: string;
+  timestamp: string;
+  ts: string;
+}
+
+export type SessionStatus =
+  | "running"
+  | "waiting_for_approval"
+  | "completed"
+  | "cancelled"
+  | "failed";
+
+export type SessionEvent = SessionEventEnvelope &
+  (
   | {
       type: "user_message";
-      ts: string;
       text: string;
     }
   | {
       type: "assistant_tool_calls";
-      ts: string;
       toolCalls: ToolCall[];
     }
   | {
       type: "tool_result";
-      ts: string;
       toolCallId: string;
       name: string;
       ok: boolean;
@@ -48,30 +61,58 @@ export type SessionEvent =
     }
   | {
       type: "assistant_final";
-      ts: string;
       text: string;
+    }
+  | {
+      type: "model_request_started";
+    }
+  | {
+      type: "model_response_received";
+      hasFinalText: boolean;
+      toolCallCount: number;
+    }
+  | {
+      type: "approval_requested";
+      toolCallId: string;
+      fingerprint: string;
+      scope: string;
+      reason: string;
+    }
+  | {
+      type: "approval_resolved";
+      toolCallId: string;
+      fingerprint: string;
+      scope: string;
+      decision: "reject" | "allow_once" | "allow_session";
+    }
+  | {
+      type: "tool_execution_started";
+      toolCall: ToolCall;
+      fingerprint: string;
+      effect: "readonly" | "side_effect";
     }
   | {
       type: "harness_message";
-      ts: string;
-      kind: "git_diff_review" | "stop_block";
+      kind: "git_diff_review" | "stop_block" | "tool_replay";
       text: string;
     }
   | {
+      type: "session_status_changed";
+      status: SessionStatus;
+    }
+  | {
       type: "session_cancelled";
-      ts: string;
       reason: string;
     }
   | {
       type: "session_failed";
-      ts: string;
       message: string;
     }
   | {
       type: "summary";
-      ts: string;
       text: string;
-    };
+    }
+  );
 
 export type SessionEventInput =
   | {
@@ -95,9 +136,41 @@ export type SessionEventInput =
       text: string;
     }
   | {
+      type: "model_request_started";
+    }
+  | {
+      type: "model_response_received";
+      hasFinalText: boolean;
+      toolCallCount: number;
+    }
+  | {
+      type: "approval_requested";
+      toolCallId: string;
+      fingerprint: string;
+      scope: string;
+      reason: string;
+    }
+  | {
+      type: "approval_resolved";
+      toolCallId: string;
+      fingerprint: string;
+      scope: string;
+      decision: "reject" | "allow_once" | "allow_session";
+    }
+  | {
+      type: "tool_execution_started";
+      toolCall: ToolCall;
+      fingerprint: string;
+      effect: "readonly" | "side_effect";
+    }
+  | {
       type: "harness_message";
-      kind: "git_diff_review" | "stop_block";
+      kind: "git_diff_review" | "stop_block" | "tool_replay";
       text: string;
+    }
+  | {
+      type: "session_status_changed";
+      status: SessionStatus;
     }
   | {
       type: "session_cancelled";

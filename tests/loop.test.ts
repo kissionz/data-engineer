@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -137,12 +138,59 @@ class FakeBashTool implements Tool {
     },
     required: ["command"],
   };
+  executions = 0;
 
   async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+    this.executions += 1;
     return {
       ok: true,
       content: `ran ${String(args.command)}`,
     };
+  }
+}
+
+class RepeatedToolCallModel implements ModelClient {
+  private step = 0;
+
+  constructor(
+    private readonly first: ToolCall,
+    private readonly second: ToolCall = first,
+  ) {}
+
+  async complete(): Promise<AgentResponse> {
+    this.step += 1;
+
+    if (this.step === 1) {
+      return { toolCalls: [this.first, this.second] };
+    }
+
+    return { finalText: "done" };
+  }
+}
+
+class ReplayAcrossTurnsModel implements ModelClient {
+  private step = 0;
+
+  constructor(private readonly call: ToolCall) {}
+
+  async complete(): Promise<AgentResponse> {
+    this.step += 1;
+    return this.step <= 2
+      ? { toolCalls: [this.call] }
+      : { finalText: "done" };
+  }
+}
+
+class SingleToolThenDoneModel implements ModelClient {
+  private step = 0;
+
+  constructor(private readonly call: ToolCall) {}
+
+  async complete(): Promise<AgentResponse> {
+    this.step += 1;
+    return this.step === 1
+      ? { toolCalls: [this.call] }
+      : { finalText: "done" };
   }
 }
 
@@ -337,7 +385,7 @@ describe("AgentLoop", () => {
     expect(reporter.statuses).toEqual(["running", "succeeded"]);
   });
 
-  it("reuses session approval for the same bash command family", async () => {
+  it("rechecks approval when concrete bash arguments change", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
     const tools = new ToolRegistry();
     tools.register(new FakeBashTool());
@@ -357,7 +405,290 @@ describe("AgentLoop", () => {
     );
 
     await expect(loop.run("run npm checks")).resolves.toBe("done");
-    expect(approvalCount).toBe(1);
+    expect(approvalCount).toBe(2);
+  });
+
+  it("executes duplicate tool call ids only once in the same response", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    const call = {
+      id: "same-call",
+      name: "Bash",
+      args: { command: "npm test" },
+    };
+    const loop = new AgentLoop(
+      new RepeatedToolCallModel(call),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => "allow_once",
+    );
+
+    await expect(loop.run("run once")).resolves.toBe("done");
+    expect(bash.executions).toBe(1);
+    expect(await readFile(
+      path.join(root, ".harness", "sessions", "test.jsonl"),
+      "utf8",
+    )).toContain("executed only once");
+  });
+
+  it("replays a completed tool call id across turns without executing again", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    const call = {
+      id: "replayed-call",
+      name: "Bash",
+      args: { command: "npm test" },
+    };
+    const loop = new AgentLoop(
+      new ReplayAcrossTurnsModel(call),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => "allow_once",
+    );
+
+    await expect(loop.run("run once")).resolves.toBe("done");
+    expect(bash.executions).toBe(1);
+    expect(await readFile(
+      path.join(root, ".harness", "sessions", "test.jsonl"),
+      "utf8",
+    )).toContain("deduplicated");
+  });
+
+  it("rejects a reused tool call id with different arguments", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    const loop = new AgentLoop(
+      new RepeatedToolCallModel(
+        { id: "collision", name: "Bash", args: { command: "npm test" } },
+        { id: "collision", name: "Bash", args: { command: "npm run build" } },
+      ),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => "allow_once",
+    );
+
+    await expect(loop.run("detect collision")).resolves.toBe("done");
+    expect(bash.executions).toBe(1);
+    expect(await readFile(
+      path.join(root, ".harness", "sessions", "test.jsonl"),
+      "utf8",
+    )).toContain("tool_call_id_collision");
+  });
+
+  it("marks a started tool with no result as unknown without replaying it", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const store = new SessionStore(sessionPath);
+    const call = {
+      id: "crashed-call",
+      name: "Bash",
+      args: { command: "npm publish" },
+    };
+    await store.append({ type: "assistant_tool_calls", toolCalls: [call] });
+    await store.append({
+      type: "tool_execution_started",
+      toolCall: call,
+      fingerprint: "persisted-fingerprint",
+      effect: "side_effect",
+    });
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    const loop = new AgentLoop(
+      new CountingFinalModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      store,
+      10,
+    );
+
+    await expect(loop.run("resume safely")).resolves.toBe("done");
+    expect(bash.executions).toBe(0);
+    const events = await store.load();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "tool_result",
+        toolCallId: "crashed-call",
+        data: expect.objectContaining({
+          code: "unknown_outcome",
+          retryable: false,
+        }),
+      }),
+    );
+  });
+
+  it("does not let an old result hide a later repeated invocation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const store = new SessionStore(sessionPath);
+    const call = {
+      id: "legacy-duplicate",
+      name: "Bash",
+      args: { command: "npm publish" },
+    };
+    const fingerprint = testFingerprint(call);
+    await store.append({ type: "assistant_tool_calls", toolCalls: [call] });
+    await store.append({
+      type: "tool_result",
+      toolCallId: call.id,
+      name: call.name,
+      ok: true,
+      content: "first invocation completed",
+    });
+    await store.append({ type: "assistant_tool_calls", toolCalls: [call] });
+    await store.append({
+      type: "tool_execution_started",
+      toolCall: call,
+      fingerprint,
+      effect: "side_effect",
+    });
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    const loop = new AgentLoop(
+      new CountingFinalModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      store,
+      10,
+    );
+
+    await expect(loop.run("resume duplicate safely")).resolves.toBe("done");
+    expect(bash.executions).toBe(0);
+    const results = (await store.load()).filter(
+      (event) =>
+        event.type === "tool_result" &&
+        event.toolCallId === "legacy-duplicate",
+    );
+    expect(results).toHaveLength(2);
+    expect(results.at(-1)).toMatchObject({
+      ok: false,
+      data: { code: "unknown_outcome", fingerprint, retryable: false },
+    });
+  });
+
+  it("resumes a pending approval before accepting the new task", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const store = new SessionStore(sessionPath);
+    const call = {
+      id: "pending-approval",
+      name: "Bash",
+      args: { command: "npm test" },
+    };
+    const fingerprint = testFingerprint(call);
+    await store.append({ type: "assistant_tool_calls", toolCalls: [call] });
+    await store.append({
+      type: "approval_requested",
+      toolCallId: call.id,
+      fingerprint,
+      scope: fingerprint,
+      reason: "Bash command requires approval.",
+    });
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    let approvals = 0;
+    const loop = new AgentLoop(
+      new CountingFinalModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      store,
+      10,
+      async () => {
+        approvals += 1;
+        return "allow_once";
+      },
+    );
+
+    await expect(loop.run("continue after recovery")).resolves.toBe("done");
+    expect(approvals).toBe(1);
+    expect(bash.executions).toBe(1);
+    expect(await store.load()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "approval_resolved",
+          toolCallId: call.id,
+          decision: "allow_once",
+        }),
+        expect.objectContaining({
+          type: "tool_result",
+          toolCallId: call.id,
+          ok: true,
+        }),
+      ]),
+    );
+  });
+
+  it("restores only a persisted session approval bound to its original call", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const store = new SessionStore(sessionPath);
+    const original = {
+      id: "approved-original",
+      name: "Bash",
+      args: { command: "npm test" },
+    };
+    const fingerprint = testFingerprint(original);
+    await store.append({
+      type: "assistant_tool_calls",
+      toolCalls: [original],
+    });
+    await store.append({
+      type: "approval_resolved",
+      toolCallId: original.id,
+      fingerprint,
+      scope: fingerprint,
+      decision: "allow_session",
+    });
+    await store.append({
+      type: "tool_result",
+      toolCallId: original.id,
+      name: original.name,
+      ok: true,
+      content: "previously completed",
+    });
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    let approvals = 0;
+    const loop = new AgentLoop(
+      new SingleToolThenDoneModel({
+        ...original,
+        id: "approved-reuse",
+      }),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      store,
+      10,
+      async () => {
+        approvals += 1;
+        return "reject";
+      },
+    );
+
+    await expect(loop.run("reuse exact approval")).resolves.toBe("done");
+    expect(approvals).toBe(0);
+    expect(bash.executions).toBe(1);
   });
 
   it("blocks tool execution when a BeforeToolUse hook rejects it", async () => {
@@ -611,3 +942,9 @@ describe("AgentLoop", () => {
     );
   });
 });
+
+function testFingerprint(call: ToolCall): string {
+  return createHash("sha256")
+    .update(`${call.name}\0${JSON.stringify(call.args)}`)
+    .digest("hex");
+}

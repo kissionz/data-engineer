@@ -174,8 +174,8 @@ async function main(): Promise<void> {
     executor,
     workspace,
   );
-  const sessionManager = new SessionManager(workspaceRoot);
   const modelName = opts.model ?? process.env.OPENAI_MODEL ?? "gpt-4.1";
+  const sessionManager = new SessionManager(workspaceRoot, { model: modelName });
   const baseUrl = opts.baseUrl ?? process.env.OPENAI_BASE_URL;
   const maxTurns = parsePositiveInteger(opts.maxTurns, "--max-turns");
   const initialSession = await sessionManager.start(opts.resume);
@@ -304,7 +304,12 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     options.baseUrl,
   );
   const todoStore = new TodoStore(options.session.todoPath);
-  const sessionStore = new SessionStore(options.session.sessionPath);
+  const sessionStore = new SessionStore(
+    options.session.sessionPath,
+    options.session.id,
+    (event) =>
+      options.session.updateLastSequence(event.sequence).then(() => undefined),
+  );
   const hooks = new HookManager();
   const skillLoader = new SkillLoader(options.workspace);
   hooks.register("BeforeToolUse", protectSensitiveWrites);
@@ -349,6 +354,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     new ConsoleReporter(),
     new SessionCompactor(sessionStore),
     hooks,
+    (status) => options.session.updateStatus(status).then(() => undefined),
   );
 }
 
@@ -395,7 +401,9 @@ async function runInteractiveSession(
 ): Promise<void> {
   let runtime = initialRuntime;
   console.log(`Interactive harness session started. Session: ${runtime.session.id}`);
-  console.log("Commands: /new, /resume <id>, /session, /sessions, /exit");
+  console.log(
+    "Commands: /new, /resume <id>, /session, /sessions, /inspect [id], /exit",
+  );
 
   try {
     while (true) {
@@ -441,13 +449,37 @@ async function runInteractiveSession(
       }
 
       if (trimmed === "/session") {
-        console.log(`Session: ${runtime.session.id}`);
+        const metadata = await runtime.session.readMetadata();
+        console.log(
+          `Session: ${metadata.id}\nStatus: ${metadata.status}\nModel: ${metadata.model}`,
+        );
         continue;
       }
 
       if (trimmed === "/sessions") {
         const sessions = await sessionManager.list();
-        console.log(sessions.length > 0 ? sessions.join("\n") : "[No sessions]");
+        const summaries = await Promise.all(
+          sessions.map(async (id) => {
+            const metadata = await sessionManager.inspect(id);
+            return `${id}\t${metadata.status}\t${metadata.model}`;
+          }),
+        );
+        console.log(summaries.length > 0 ? summaries.join("\n") : "[No sessions]");
+        continue;
+      }
+
+      if (trimmed === "/inspect" || trimmed.startsWith("/inspect ")) {
+        const requestedId = trimmed.slice("/inspect".length).trim();
+
+        try {
+          const metadata =
+            !requestedId || requestedId === runtime.session.id
+              ? await runtime.session.readMetadata()
+              : await sessionManager.inspect(requestedId);
+          console.log(JSON.stringify(metadata, null, 2));
+        } catch (error: unknown) {
+          console.error(`Unable to inspect session: ${errorMessage(error)}`);
+        }
         continue;
       }
 

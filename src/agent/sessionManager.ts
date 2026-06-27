@@ -11,11 +11,35 @@ import {
 } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
+import { SessionStore } from "./session.js";
+import type { SessionEvent, SessionStatus } from "./types.js";
+export type { SessionStatus } from "./types.js";
+
+export interface SessionMetadata {
+  id: string;
+  workspaceRoot: string;
+  model: string;
+  createdAt: string;
+  updatedAt: string;
+  status: SessionStatus;
+  lastSequence: number;
+  parentSessionId?: string;
+}
+
+export interface SessionManagerOptions {
+  model?: string;
+  parentSessionId?: string;
+}
 
 export interface ManagedSession {
   id: string;
   sessionPath: string;
   todoPath: string;
+  metadataPath: string;
+  readMetadata(): Promise<SessionMetadata>;
+  updateStatus(status: SessionStatus): Promise<SessionMetadata>;
+  updateLastSequence(sequence: number): Promise<SessionMetadata>;
   release(): Promise<void>;
 }
 
@@ -23,6 +47,7 @@ interface SessionFiles {
   id: string;
   sessionPath: string;
   todoPath: string;
+  metadataPath: string;
 }
 
 interface SessionLock {
@@ -33,6 +58,9 @@ interface SessionLock {
 }
 
 export class SessionManager {
+  private readonly workspaceRoot: string;
+  private readonly model: string;
+  private readonly parentSessionId?: string;
   private readonly harnessDir: string;
   private readonly sessionsDir: string;
   private readonly todosDir: string;
@@ -40,8 +68,11 @@ export class SessionManager {
   private readonly currentFile: string;
   private readonly activeSessions = new Map<string, ManagedSession>();
 
-  constructor(workspaceRoot: string) {
-    this.harnessDir = path.join(workspaceRoot, ".harness");
+  constructor(workspaceRoot: string, options: SessionManagerOptions = {}) {
+    this.workspaceRoot = path.resolve(workspaceRoot);
+    this.model = options.model ?? "unknown";
+    this.parentSessionId = options.parentSessionId;
+    this.harnessDir = path.join(this.workspaceRoot, ".harness");
     this.sessionsDir = path.join(this.harnessDir, "sessions");
     this.todosDir = path.join(this.harnessDir, "todos");
     this.locksDir = path.join(this.sessionsDir, ".locks");
@@ -92,6 +123,16 @@ export class SessionManager {
         throw error;
       }
 
+      try {
+        await this.createMetadata(session);
+      } catch (error: unknown) {
+        await Promise.all([
+          removeIfExists(session.sessionPath),
+          removeIfExists(session.todoPath),
+        ]);
+        throw error;
+      }
+
       let managed: ManagedSession | undefined;
 
       try {
@@ -103,6 +144,7 @@ export class SessionManager {
         await Promise.all([
           removeIfExists(session.sessionPath),
           removeIfExists(session.todoPath),
+          removeIfExists(session.metadataPath),
         ]);
         throw error;
       }
@@ -152,6 +194,50 @@ export class SessionManager {
       .slice(0, Math.max(1, limit));
   }
 
+  async inspect(requestedId: string): Promise<SessionMetadata> {
+    await this.ensureStorageDirectories();
+    const id =
+      requestedId === "latest"
+        ? await this.readCurrentOrLegacy()
+        : validateRealSessionId(requestedId);
+    const session = this.describe(id);
+
+    try {
+      await assertRegularFile(session.sessionPath, `Session ${id}`);
+    } catch (error: unknown) {
+      if (hasCode(error, "ENOENT")) {
+        throw new Error(`Session not found: ${id}`);
+      }
+      throw error;
+    }
+
+    const [metadata, events] = await Promise.all([
+      this.ensureMetadata(session),
+      new SessionStore(session.sessionPath, session.id).load(),
+    ]);
+    const latestLifecycle = [...events].reverse().find((event) =>
+      [
+        "session_status_changed",
+        "session_cancelled",
+        "session_failed",
+        "assistant_final",
+        "approval_requested",
+        "approval_resolved",
+      ].includes(event.type),
+    );
+    const latestEvent = events.at(-1);
+
+    return {
+      ...metadata,
+      status: lifecycleStatus(latestLifecycle) ?? metadata.status,
+      lastSequence: Math.max(
+        metadata.lastSequence,
+        latestEvent?.sequence ?? 0,
+      ),
+      updatedAt: latestEvent?.timestamp ?? metadata.updatedAt,
+    };
+  }
+
   private describe(id: string): SessionFiles {
     const safeId = validateRealSessionId(id);
 
@@ -159,7 +245,71 @@ export class SessionManager {
       id: safeId,
       sessionPath: path.join(this.sessionsDir, `${safeId}.jsonl`),
       todoPath: path.join(this.todosDir, `${safeId}.json`),
+      metadataPath: path.join(this.sessionsDir, `${safeId}.meta.json`),
     };
+  }
+
+  private async createMetadata(session: SessionFiles): Promise<SessionMetadata> {
+    const timestamp = new Date().toISOString();
+    const metadata: SessionMetadata = {
+      id: session.id,
+      workspaceRoot: this.workspaceRoot,
+      model: this.model,
+      createdAt: timestamp,
+      updatedAt: timestamp,
+      status: "running",
+      lastSequence: 0,
+      ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
+    };
+    await writeMetadataAtomic(session.metadataPath, metadata, false);
+    return metadata;
+  }
+
+  private async ensureMetadata(session: SessionFiles): Promise<SessionMetadata> {
+    let replaceExisting = false;
+    try {
+      return await readMetadata(session.metadataPath, session.id);
+    } catch (error: unknown) {
+      if (hasCode(error, "ENOENT")) {
+        replaceExisting = false;
+      } else if (isRecoverableMetadataError(error, session.id)) {
+        replaceExisting = true;
+      } else {
+        throw error;
+      }
+    }
+
+    const events = await new SessionStore(session.sessionPath, session.id).load();
+    const info = await lstat(session.sessionPath);
+    const createdAt = info.birthtimeMs > 0
+      ? info.birthtime.toISOString()
+      : info.mtime.toISOString();
+    const latestEvent = events.at(-1);
+    const updatedAt = latestEvent?.timestamp ?? new Date().toISOString();
+    const metadata: SessionMetadata = {
+      id: session.id,
+      workspaceRoot: this.workspaceRoot,
+      model: this.model,
+      createdAt,
+      updatedAt,
+      status:
+        lifecycleStatus(
+          [...events].reverse().find((event) =>
+            [
+              "session_status_changed",
+              "session_cancelled",
+              "session_failed",
+              "assistant_final",
+              "approval_requested",
+              "approval_resolved",
+            ].includes(event.type),
+          ),
+        ) ?? "running",
+      lastSequence: latestEvent?.sequence ?? 0,
+      ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
+    };
+    await writeMetadataAtomic(session.metadataPath, metadata, replaceExisting);
+    return metadata;
   }
 
   private async ensureStorageDirectories(): Promise<void> {
@@ -186,7 +336,7 @@ export class SessionManager {
       await temporary.sync();
       await temporary.close();
       await assertRegularFile(this.currentFile, "Current session pointer", true);
-      await rename(temporaryPath, this.currentFile);
+      await renameWithRetry(temporaryPath, this.currentFile);
     } catch (error: unknown) {
       await temporary.close().catch(() => undefined);
       await removeIfExists(temporaryPath);
@@ -265,11 +415,13 @@ export class SessionManager {
           flag: "wx",
           mode: 0o600,
         });
+        await this.ensureMetadata(session);
         await this.setCurrent(id);
       } catch (error: unknown) {
         await Promise.all([
           removeIfExists(session.sessionPath),
           removeIfExists(session.todoPath),
+          removeIfExists(session.metadataPath),
         ]);
         if (hasCode(error, "EEXIST")) {
           continue;
@@ -345,8 +497,43 @@ export class SessionManager {
       }
 
       let released = false;
+      let metadataQueue: Promise<SessionMetadata> = Promise.resolve(
+        await this.ensureMetadata(session),
+      );
+      const updateMetadata = (
+        update: (current: SessionMetadata) => SessionMetadata,
+      ): Promise<SessionMetadata> => {
+        const operation = metadataQueue
+          .catch(() => readMetadata(session.metadataPath, session.id))
+          .then(async (current) => {
+            const next = update(current);
+            await writeMetadataAtomic(session.metadataPath, next, true);
+            return next;
+          });
+        metadataQueue = operation;
+        return operation;
+      };
       const managed: ManagedSession = {
         ...session,
+        readMetadata: () => metadataQueue.catch(() =>
+          readMetadata(session.metadataPath, session.id),
+        ),
+        updateStatus: (status) =>
+          updateMetadata((current) => ({
+            ...current,
+            status,
+            updatedAt: new Date().toISOString(),
+          })),
+        updateLastSequence: (sequence) => {
+          if (!Number.isSafeInteger(sequence) || sequence < 0) {
+            return Promise.reject(new Error(`Invalid session sequence: ${sequence}`));
+          }
+          return updateMetadata((current) => ({
+            ...current,
+            lastSequence: Math.max(current.lastSequence, sequence),
+            updatedAt: new Date().toISOString(),
+          }));
+        },
         release: async () => {
           if (released) {
             return;
@@ -443,6 +630,170 @@ async function readSafeFile(filePath: string, label: string): Promise<string> {
     return await handle.readFile("utf8");
   } finally {
     await handle.close();
+  }
+}
+
+async function readMetadata(
+  metadataPath: string,
+  expectedId: string,
+): Promise<SessionMetadata> {
+  const parsed = JSON.parse(
+    await readSafeFile(metadataPath, `Metadata for session ${expectedId}`),
+  ) as unknown;
+
+  if (!isSessionMetadata(parsed) || parsed.id !== expectedId) {
+    throw new Error(`Metadata for session ${expectedId} is invalid.`);
+  }
+  return parsed;
+}
+
+function isSessionMetadata(value: unknown): value is SessionMetadata {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+
+  const metadata = value as Partial<SessionMetadata>;
+  return (
+    typeof metadata.id === "string" &&
+    typeof metadata.workspaceRoot === "string" &&
+    typeof metadata.model === "string" &&
+    typeof metadata.createdAt === "string" &&
+    typeof metadata.updatedAt === "string" &&
+    isSessionStatus(metadata.status) &&
+    typeof metadata.lastSequence === "number" &&
+    Number.isSafeInteger(metadata.lastSequence) &&
+    metadata.lastSequence >= 0 &&
+    (metadata.parentSessionId === undefined ||
+      typeof metadata.parentSessionId === "string")
+  );
+}
+
+function isSessionStatus(value: unknown): value is SessionStatus {
+  return (
+    value === "running" ||
+    value === "waiting_for_approval" ||
+    value === "completed" ||
+    value === "cancelled" ||
+    value === "failed"
+  );
+}
+
+function lifecycleStatus(event: SessionEvent | undefined): SessionStatus | undefined {
+  if (event?.type === "session_status_changed") {
+    return event.status;
+  }
+  if (event?.type === "session_cancelled") {
+    return "cancelled";
+  }
+  if (event?.type === "session_failed") {
+    return "failed";
+  }
+  if (event?.type === "assistant_final") {
+    return "completed";
+  }
+  if (event?.type === "approval_requested") {
+    return "waiting_for_approval";
+  }
+  if (event?.type === "approval_resolved") {
+    return "running";
+  }
+  return undefined;
+}
+
+function isRecoverableMetadataError(
+  error: unknown,
+  sessionId: string,
+): boolean {
+  return (
+    error instanceof SyntaxError ||
+    (error instanceof Error &&
+      error.message === `Metadata for session ${sessionId} is invalid.`)
+  );
+}
+
+async function writeMetadataAtomic(
+  metadataPath: string,
+  metadata: SessionMetadata,
+  allowExisting: boolean,
+): Promise<void> {
+  await assertRegularFile(metadataPath, `Metadata for session ${metadata.id}`, true);
+  if (!allowExisting) {
+    try {
+      await lstat(metadataPath);
+      const error = new Error(`Metadata already exists for session ${metadata.id}.`);
+      (error as NodeJS.ErrnoException).code = "EEXIST";
+      throw error;
+    } catch (error: unknown) {
+      if (!hasCode(error, "ENOENT")) {
+        throw error;
+      }
+    }
+  }
+
+  const temporaryPath = path.join(
+    path.dirname(metadataPath),
+    `.${path.basename(metadataPath)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`,
+  );
+  const temporary = await open(temporaryPath, "wx", 0o600);
+
+  try {
+    await temporary.writeFile(`${JSON.stringify(metadata, null, 2)}\n`, "utf8");
+    await temporary.sync();
+    await temporary.close();
+    await assertRegularFile(
+      metadataPath,
+      `Metadata for session ${metadata.id}`,
+      true,
+    );
+    await renameWithRetry(temporaryPath, metadataPath);
+    await syncDirectory(path.dirname(metadataPath));
+  } catch (error: unknown) {
+    await temporary.close().catch(() => undefined);
+    await removeIfExists(temporaryPath);
+    throw error;
+  }
+}
+
+async function syncDirectory(directoryPath: string): Promise<void> {
+  let directory;
+  try {
+    directory = await open(directoryPath, "r");
+    await directory.sync();
+  } catch (error: unknown) {
+    if (
+      !hasCode(error, "EINVAL") &&
+      !hasCode(error, "EPERM") &&
+      !hasCode(error, "EACCES") &&
+      !hasCode(error, "EBADF") &&
+      !hasCode(error, "EISDIR") &&
+      !hasCode(error, "ENOTSUP")
+    ) {
+      throw error;
+    }
+  } finally {
+    await directory?.close().catch(() => undefined);
+  }
+}
+
+async function renameWithRetry(
+  sourcePath: string,
+  destinationPath: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    try {
+      await rename(sourcePath, destinationPath);
+      return;
+    } catch (error: unknown) {
+      if (
+        attempt === 3 ||
+        (!hasCode(error, "EPERM") &&
+          !hasCode(error, "EACCES") &&
+          !hasCode(error, "EBUSY"))
+      ) {
+        throw error;
+      }
+      await delay(25 * 2 ** attempt);
+    }
   }
 }
 

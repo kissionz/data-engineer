@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import type { ModelClient } from "../model/base.js";
 import type { HookManager } from "../hooks/manager.js";
-import type { HookEventName } from "../hooks/types.js";
+import type { HookEventName, HookResult } from "../hooks/types.js";
 import type { ApprovalDecision, ApprovalFunction } from "../permissions/approval.js";
 import { askUserApproval } from "../permissions/approval.js";
 import type { PermissionGate } from "../permissions/gate.js";
@@ -11,6 +12,12 @@ import type { SessionCompactor } from "./compaction.js";
 import type { AgentReporter } from "./reporter.js";
 import { silentReporter } from "./reporter.js";
 import type { SessionStore } from "./session.js";
+import type {
+  SessionEvent,
+  SessionStatus,
+  ToolCall,
+  ToolResult,
+} from "./types.js";
 import {
   CANCELLED_TEXT,
   isCancellationError,
@@ -31,6 +38,9 @@ export class AgentLoop {
     private readonly reporter: AgentReporter = silentReporter,
     private readonly compactor?: SessionCompactor,
     private readonly hooks?: HookManager,
+    private readonly updateSessionStatus?: (
+      status: SessionStatus,
+    ) => Promise<void>,
   ) {}
 
   async run(userTask: string, signal?: AbortSignal): Promise<string> {
@@ -41,6 +51,10 @@ export class AgentLoop {
 
     try {
       throwIfCancelled(signal);
+      await this.restoreSessionApprovals();
+      await this.recoverPendingApprovals(signal);
+      await this.recordStatus("running");
+      await this.recoverInterruptedToolCalls();
       await this.compactor?.compactIfNeeded();
       await this.session.append({
         type: "user_message",
@@ -57,6 +71,7 @@ export class AgentLoop {
 
         const messages = await this.context.build(events);
 
+        await this.session.append({ type: "model_request_started" });
         let receivedText = false;
         let bufferedText = "";
         const deferStreaming = this.hooks?.has("BeforeAgentStop") ?? false;
@@ -80,6 +95,11 @@ export class AgentLoop {
             }
           });
         throwIfCancelled(signal);
+        await this.session.append({
+          type: "model_response_received",
+          hasFinalText: Boolean(response.finalText),
+          toolCallCount: response.toolCalls?.length ?? 0,
+        });
 
         const toolCalls = response.toolCalls ?? [];
 
@@ -114,6 +134,7 @@ export class AgentLoop {
             type: "assistant_final",
             text: response.finalText,
           });
+          await this.recordStatus("completed");
 
           return response.finalText;
         }
@@ -126,19 +147,27 @@ export class AgentLoop {
         if (toolCalls.length === 0) {
           const text = "Model returned neither final text nor tool calls.";
           await this.session.append({ type: "assistant_final", text });
+          await this.recordStatus("completed");
           return text;
         }
 
-        await this.session.append({
-          type: "assistant_tool_calls",
+        const { freshCalls, replayNotices } = await this.deduplicateToolCalls(
           toolCalls,
-        });
-        for (const call of toolCalls) {
+        );
+
+        if (freshCalls.length > 0) {
+          await this.session.append({
+            type: "assistant_tool_calls",
+            toolCalls: freshCalls,
+          });
+        }
+        for (const call of freshCalls) {
           pendingToolCalls.set(call.id, call);
         }
 
-        for (const call of toolCalls) {
+        for (const call of freshCalls) {
           throwIfCancelled(signal);
+          const fingerprint = toolCallFingerprint(call);
           const validation = this.tools.validate(call.name, call.args);
           let hookBlock;
           let result: ToolExecutionResult;
@@ -198,25 +227,39 @@ export class AgentLoop {
               check.decision === "ask" &&
               !this.hasSessionApproval(call)
             ) {
+              await this.session.append({
+                type: "approval_requested",
+                toolCallId: call.id,
+                fingerprint,
+                scope: fingerprint,
+                reason: check.reason,
+              });
+              await this.recordStatus("waiting_for_approval");
               const approval = await this.approve(call, check.reason, signal);
               throwIfCancelled(signal);
+              await this.session.append({
+                type: "approval_resolved",
+                toolCallId: call.id,
+                fingerprint,
+                scope: fingerprint,
+                decision: approval,
+              });
+              await this.recordStatus("running");
 
               if (approval !== "reject") {
                 this.reporter.onToolStatus(call, "running");
               }
               result = await this.executeApprovedTool(
-                call.name,
-                call.args,
                 approval,
                 call,
+                fingerprint,
                 signal,
               );
             } else {
               this.reporter.onToolStatus(call, "running");
-              result = await this.executeTool(
-                call.name,
-                call.args,
-                call.id,
+              result = await this.executeTrackedTool(
+                call,
+                fingerprint,
                 signal,
               );
             }
@@ -262,10 +305,19 @@ export class AgentLoop {
           pendingToolCalls.delete(call.id);
           throwIfCancelled(signal);
         }
+
+        for (const notice of replayNotices) {
+          await this.session.append({
+            type: "harness_message",
+            kind: "tool_replay",
+            text: notice,
+          });
+        }
       }
 
       const text = "Stopped: max turns reached.";
       await this.session.append({ type: "assistant_final", text });
+      await this.recordStatus("completed");
       return text;
     } catch (error: unknown) {
       this.reporter.onTextEnd();
@@ -279,6 +331,7 @@ export class AgentLoop {
           type: "session_cancelled",
           reason: CANCELLED_TEXT,
         });
+        await this.recordStatusSafely("cancelled");
         return CANCELLED_TEXT;
       }
 
@@ -287,6 +340,7 @@ export class AgentLoop {
         type: "session_failed",
         message: safeErrorMessage(error),
       });
+      await this.recordStatusSafely("failed");
       throw error;
     }
   }
@@ -392,10 +446,9 @@ export class AgentLoop {
   }
 
   private async executeApprovedTool(
-    name: string,
-    args: Record<string, unknown>,
     approval: ApprovalDecision,
     call: { id: string; name: string; args: Record<string, unknown> },
+    fingerprint: string,
     signal?: AbortSignal,
   ): Promise<ToolExecutionResult> {
     if (approval === "reject") {
@@ -407,10 +460,24 @@ export class AgentLoop {
     }
 
     if (approval === "allow_session") {
-      this.sessionApprovals.add(sessionApprovalKey(call));
+      this.sessionApprovals.add(fingerprint);
     }
 
-    return this.executeTool(name, args, call.id, signal);
+    return this.executeTrackedTool(call, fingerprint, signal);
+  }
+
+  private async executeTrackedTool(
+    call: ToolCall,
+    fingerprint: string,
+    signal?: AbortSignal,
+  ): Promise<ToolExecutionResult> {
+    await this.session.append({
+      type: "tool_execution_started",
+      toolCall: call,
+      fingerprint,
+      effect: toolEffect(call.name),
+    });
+    return this.executeTool(call.name, call.args, call.id, signal);
   }
 
   private async appendTerminalEvent(
@@ -459,21 +526,372 @@ export class AgentLoop {
     name: string;
     args: Record<string, unknown>;
   }): boolean {
-    return this.sessionApprovals.has(sessionApprovalKey(call));
+    return this.sessionApprovals.has(
+      toolCallFingerprint({
+        id: "",
+        name: call.name,
+        args: call.args,
+      }),
+    );
+  }
+
+  private async restoreSessionApprovals(): Promise<void> {
+    const events = await this.session.load();
+    const records = buildToolCallIndex(events);
+
+    for (const event of events) {
+      const record =
+        event.type === "approval_resolved"
+          ? records.get(event.toolCallId)
+          : undefined;
+      if (
+        event.type === "approval_resolved" &&
+        event.decision === "allow_session" &&
+        event.scope === event.fingerprint &&
+        record?.fingerprint === event.fingerprint &&
+        !record.collision
+      ) {
+        this.sessionApprovals.add(event.scope);
+      }
+    }
+  }
+
+  private async recoverInterruptedToolCalls(): Promise<void> {
+    const events = await this.session.load();
+    const records = buildToolCallIndex(events);
+
+    for (const record of records.values()) {
+      if (record.result) {
+        continue;
+      }
+
+      await this.session.append({
+        type: "tool_result",
+        toolCallId: record.call.id,
+        name: record.call.name,
+        ok: false,
+        content: record.started
+          ? "Tool execution outcome is unknown after an interrupted session; it was not replayed."
+          : "Tool call was interrupted before execution.",
+        data: {
+          code: record.started ? "unknown_outcome" : "interrupted",
+          fingerprint: record.fingerprint,
+          retryable: false,
+        },
+      });
+    }
+  }
+
+  private async recoverPendingApprovals(signal?: AbortSignal): Promise<void> {
+    const events = await this.session.load();
+    const records = buildToolCallIndex(events);
+    const pending = pendingApprovalRequests(events);
+
+    for (const request of pending) {
+      const record = records.get(request.toolCallId);
+      if (
+        !record ||
+        record.result ||
+        record.started ||
+        record.fingerprint !== request.fingerprint
+      ) {
+        continue;
+      }
+
+      await this.recordStatus("waiting_for_approval");
+      const validation = this.tools.validate(record.call.name, record.call.args);
+      let result: ToolExecutionResult;
+
+      if (!validation.ok) {
+        result = {
+          ok: false,
+          content: `Invalid recovered tool call:\n${validation.errors.join("\n")}`,
+          data: { reason: "invalid_recovered_tool_call" },
+        };
+      } else {
+        const check = this.permissions.check(record.call);
+        const hookBlock = await this.emitBeforeToolUseForRecovery(
+          record.call,
+          signal,
+        );
+
+        if (hookBlock?.decision === "block") {
+          result = {
+            ok: false,
+            content: `Blocked by hook during recovery: ${
+              hookBlock.reason ?? "No reason provided."
+            }`,
+            data: { reason: "hook_blocked" },
+          };
+        } else if (check.decision === "deny") {
+          result = {
+            ok: false,
+            content: `Permission denied during recovery: ${check.reason}`,
+            data: { reason: check.reason },
+          };
+        } else {
+          const approval = await this.approve(
+            record.call,
+            request.reason,
+            signal,
+          );
+          throwIfCancelled(signal);
+          await this.session.append({
+            type: "approval_resolved",
+            toolCallId: record.call.id,
+            fingerprint: record.fingerprint,
+            scope: record.fingerprint,
+            decision: approval,
+          });
+
+          if (approval === "reject") {
+            result = {
+              ok: false,
+              content: "User rejected recovered tool call.",
+              data: { reason: "user_rejected" },
+            };
+          } else {
+            if (approval === "allow_session") {
+              this.sessionApprovals.add(record.fingerprint);
+            }
+            this.reporter.onToolStatus(record.call, "running");
+            result = await this.executeTrackedTool(
+              record.call,
+              record.fingerprint,
+              signal,
+            );
+            if (!signal?.aborted) {
+              result = await this.emitObservationalHook(
+                "AfterToolUse",
+                record.call,
+                result,
+                signal,
+              );
+              if (
+                result.ok &&
+                (record.call.name === "Edit" || record.call.name === "Write")
+              ) {
+                result = await this.emitObservationalHook(
+                  "AfterEdit",
+                  record.call,
+                  result,
+                  signal,
+                );
+              }
+            }
+          }
+        }
+      }
+
+      await this.session.append({
+        type: "tool_result",
+        toolCallId: record.call.id,
+        name: record.call.name,
+        ok: result.ok,
+        content: result.content,
+        data: result.data,
+      });
+      this.reporter.onToolStatus(
+        record.call,
+        result.data?.reason === "user_rejected"
+          ? "rejected"
+          : result.ok
+            ? "succeeded"
+            : "failed",
+      );
+      await this.recordStatus("running");
+    }
+  }
+
+  private async emitBeforeToolUseForRecovery(
+    call: ToolCall,
+    signal?: AbortSignal,
+  ): Promise<HookResult | null | undefined> {
+    try {
+      return await this.hooks?.emit("BeforeToolUse", { toolCall: call }, signal);
+    } catch (error: unknown) {
+      if (isCancellationError(error, signal)) {
+        throw error;
+      }
+      return {
+        decision: "block",
+        reason: `BeforeToolUse hook failed during recovery: ${safeErrorMessage(error)}`,
+      };
+    }
+  }
+
+  private async deduplicateToolCalls(toolCalls: ToolCall[]): Promise<{
+    freshCalls: ToolCall[];
+    replayNotices: string[];
+  }> {
+    const records = buildToolCallIndex(await this.session.load());
+    const freshCalls: ToolCall[] = [];
+    const replayNotices: string[] = [];
+
+    for (const call of toolCalls) {
+      const fingerprint = toolCallFingerprint(call);
+      const existing = records.get(call.id);
+
+      if (!existing) {
+        records.set(call.id, { call, fingerprint, started: false });
+        freshCalls.push(call);
+        continue;
+      }
+
+      if (existing.collision || existing.fingerprint !== fingerprint) {
+        replayNotices.push(
+          [
+            `Tool call ${call.id} was rejected: the id was already used with different arguments.`,
+            "Code: tool_call_id_collision. No tool was executed for the duplicate call.",
+          ].join("\n"),
+        );
+        continue;
+      }
+
+      replayNotices.push(
+        existing.result
+          ? [
+              `Tool call ${call.id} was deduplicated and not executed again.`,
+              `Recorded result (ok=${existing.result.ok}):`,
+              existing.result.content,
+            ].join("\n")
+          : `Tool call ${call.id} was duplicated in the same response and was executed only once.`,
+      );
+    }
+
+    return { freshCalls, replayNotices };
+  }
+
+  private async recordStatus(status: SessionStatus): Promise<void> {
+    await this.session.append({ type: "session_status_changed", status });
+    await this.updateSessionStatus?.(status).catch(() => undefined);
+  }
+
+  private async recordStatusSafely(status: SessionStatus): Promise<void> {
+    try {
+      await this.recordStatus(status);
+    } catch {
+      // Preserve the original cancellation or failure.
+    }
   }
 }
 
-function sessionApprovalKey(call: {
-  name: string;
-  args: Record<string, unknown>;
-}): string {
-  if (call.name === "Bash") {
-    const command = String(call.args.command ?? "").trim();
-    const commandFamily = command.split(/\s+/)[0] || "unknown";
-    return `Bash:${commandFamily}`;
+interface ToolCallRecord {
+  call: ToolCall;
+  fingerprint: string;
+  started: boolean;
+  result?: ToolResult;
+  collision?: boolean;
+}
+
+function buildToolCallIndex(events: SessionEvent[]): Map<string, ToolCallRecord> {
+  const records = new Map<string, ToolCallRecord>();
+
+  for (const event of events) {
+    if (event.type === "assistant_tool_calls") {
+      for (const call of event.toolCalls) {
+        const fingerprint = toolCallFingerprint(call);
+        const current = records.get(call.id);
+        if (current) {
+          records.set(call.id, {
+            call,
+            fingerprint,
+            started: false,
+            collision: true,
+          });
+        } else {
+          records.set(call.id, {
+            call,
+            fingerprint,
+            started: false,
+          });
+        }
+      }
+      continue;
+    }
+
+    if (event.type === "tool_execution_started") {
+      const current = records.get(event.toolCall.id);
+      if (current && current.fingerprint !== event.fingerprint) {
+        current.collision = true;
+        current.started = true;
+        continue;
+      }
+      records.set(event.toolCall.id, {
+        call: event.toolCall,
+        fingerprint: event.fingerprint,
+        started: true,
+        result: current?.result,
+        collision: current?.collision,
+      });
+      continue;
+    }
+
+    if (event.type === "tool_result") {
+      const current = records.get(event.toolCallId);
+      if (current && !current.result) {
+        current.result = {
+          toolCallId: event.toolCallId,
+          name: event.name,
+          ok: event.ok,
+          content: event.content,
+          data: event.data,
+        };
+      }
+    }
   }
 
-  return call.name;
+  return records;
+}
+
+function pendingApprovalRequests(
+  events: SessionEvent[],
+): Array<Extract<SessionEvent, { type: "approval_requested" }>> {
+  const pending = new Map<
+    string,
+    Extract<SessionEvent, { type: "approval_requested" }>
+  >();
+
+  for (const event of events) {
+    if (event.type === "approval_requested") {
+      pending.set(event.toolCallId, event);
+    } else if (
+      event.type === "approval_resolved" ||
+      event.type === "tool_result"
+    ) {
+      pending.delete(event.toolCallId);
+    }
+  }
+
+  return [...pending.values()];
+}
+
+function toolCallFingerprint(call: ToolCall): string {
+  return createHash("sha256")
+    .update(`${call.name}\0${stableSerialize(call.args)}`)
+    .digest("hex");
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSerialize).join(",")}]`;
+  }
+
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value as Record<string, unknown>)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([key, child]) => `${JSON.stringify(key)}:${stableSerialize(child)}`)
+      .join(",")}}`;
+  }
+
+  return JSON.stringify(value) ?? "null";
+}
+
+function toolEffect(name: string): "readonly" | "side_effect" {
+  return ["Read", "Grep", "Glob", "GitStatus", "GitDiff", "TodoRead", "SkillList"]
+    .includes(name)
+    ? "readonly"
+    : "side_effect";
 }
 
 function needsGitDiffReview(

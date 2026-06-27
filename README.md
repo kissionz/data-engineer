@@ -14,6 +14,7 @@ This P0 implementation includes:
 
 - Agent loop with model tool-call continuation
 - Append-only session event log
+- Durable session metadata, lifecycle state, and tool-call deduplication
 - Workspace path boundary checks
 - Atomic UTF-8 file writes with SHA-256 conflict detection
 - Read, Grep, Glob, Write, Edit, Bash, Git status/diff, and Todo tools
@@ -61,6 +62,7 @@ Interactive session commands:
 /resume <session-id|latest>
 /session
 /sessions
+/inspect [session-id|latest]
 /exit
 ```
 
@@ -133,7 +135,10 @@ When approval is required, you can choose:
 - Allow for this session
 - Reject
 
-Session approvals are kept only in memory until the current CLI process exits. `Edit` approvals apply to later edit tool calls in the same session. `Bash` approvals are grouped by command family, such as `npm` or `git`, so approving `npm test` for the session also allows later `npm run build` without another prompt. Dangerous commands and denied paths are still blocked before approval.
+Session approvals are recorded in the session log. An `allow_session` decision is
+reused only for the same tool and normalized concrete arguments; changed
+arguments are checked again. Dangerous commands and denied paths are still
+blocked before approval.
 
 Model text is streamed to the terminal as it arrives. Tool calls show only a compact action summary and execution status; complete arguments and results remain in the session log for model continuity and diagnostics.
 
@@ -152,7 +157,15 @@ but portable Node.js does not expose an atomic compare-and-swap rename against
 non-cooperating external writers. Avoid editing the same file concurrently from
 another process; use `--worktree` for isolated high-risk work.
 
-Session logs and their task todos are persisted separately under `.harness/sessions/` and `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
+Session logs, metadata, and task todos are persisted under
+`.harness/sessions/` and `.harness/todos/`. New events carry a session ID,
+unique event ID, monotonic sequence, and timestamp. Metadata exposes the model
+and lifecycle state. Completed `toolCallId` values are replayed from the log,
+while executions interrupted after they started are marked with an unknown
+outcome and are not run again automatically. This state is for task recovery,
+not long-term user memory. Internal `rg` and `git` tools use argument-based
+process execution for Windows and Unix compatibility; only the explicit
+`Bash` tool invokes a shell.
 
 The same task `AbortSignal` is passed through the model request, tool registry,
 command-backed tools, review subagent, and local or Docker executors. Local

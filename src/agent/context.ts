@@ -57,22 +57,24 @@ export class ContextBuilder {
     }
 
     const eventsAfterSummary = events.slice(latestSummaryIndex + 1);
-    const recentEvents = alignRecentEvents(
-      eventsAfterSummary,
-      this.maxRecentEvents,
+    const recentEvents = sanitizeDuplicateToolCalls(
+      alignRecentEvents(eventsAfterSummary, this.maxRecentEvents),
     );
-    const completedToolCallIds = new Set(
-      recentEvents
-        .filter(
-          (
-            event,
-          ): event is Extract<SessionEvent, { type: "tool_result" }> =>
-            event.type === "tool_result",
-        )
-        .map((event) => event.toolCallId),
-    );
+    const { completedToolCalls, pairedToolResults } =
+      pairCompletedToolCalls(recentEvents);
+    if (recentEvents[0]?.type === "assistant_tool_calls") {
+      messages.push({
+        role: "user",
+        content:
+          "Earlier context was compacted; continue from this complete recent tool-call turn.",
+      });
+    }
 
-    for (const event of recentEvents) {
+    for (let eventIndex = 0; eventIndex < recentEvents.length; eventIndex += 1) {
+      const event = recentEvents[eventIndex];
+      if (!event) {
+        continue;
+      }
       if (event.type === "user_message") {
         messages.push({ role: "user", content: event.text });
       } else if (event.type === "assistant_final") {
@@ -86,7 +88,7 @@ export class ContextBuilder {
           toolCalls: event.toolCalls,
         });
         for (const call of event.toolCalls) {
-          if (!completedToolCallIds.has(call.id)) {
+          if (!completedToolCalls.has(toolOccurrenceKey(eventIndex, call.id))) {
             messages.push({
               role: "tool",
               content: `Tool ${call.name} result (ok=false):\n\nTool call interrupted before a result was recorded.`,
@@ -104,6 +106,9 @@ export class ContextBuilder {
           }
         }
       } else if (event.type === "tool_result") {
+        if (!pairedToolResults.has(eventIndex)) {
+          continue;
+        }
         messages.push({
           role: "tool",
           content: `Tool ${event.name} result (ok=${event.ok}):\n\n${event.content}`,
@@ -117,7 +122,10 @@ export class ContextBuilder {
         });
       } else if (event.type === "harness_message") {
         messages.push({
-          role: event.kind === "git_diff_review" ? "user" : "system",
+          role:
+            event.kind === "git_diff_review" || event.kind === "tool_replay"
+              ? "user"
+              : "system",
           content: `Harness runtime message (${event.kind}):\n\n${event.text}`,
         });
       } else if (event.type === "session_cancelled") {
@@ -152,16 +160,112 @@ export class ContextBuilder {
   }
 }
 
+function pairCompletedToolCalls(events: SessionEvent[]): {
+  completedToolCalls: Set<string>;
+  pairedToolResults: Set<number>;
+} {
+  const pending = new Map<string, string[]>();
+  const completedToolCalls = new Set<string>();
+  const pairedToolResults = new Set<number>();
+
+  events.forEach((event, eventIndex) => {
+    if (event.type === "assistant_tool_calls") {
+      for (const call of event.toolCalls) {
+        const queue = pending.get(call.id) ?? [];
+        queue.push(toolOccurrenceKey(eventIndex, call.id));
+        pending.set(call.id, queue);
+      }
+    } else if (event.type === "tool_result") {
+      const queue = pending.get(event.toolCallId);
+      const occurrence = queue?.shift();
+      if (occurrence) {
+        completedToolCalls.add(occurrence);
+        pairedToolResults.add(eventIndex);
+      }
+    }
+  });
+
+  return { completedToolCalls, pairedToolResults };
+}
+
+function toolOccurrenceKey(eventIndex: number, toolCallId: string): string {
+  return `${eventIndex}:${toolCallId}`;
+}
+
+function sanitizeDuplicateToolCalls(events: SessionEvent[]): SessionEvent[] {
+  const counts = new Map<string, number>();
+  for (const event of events) {
+    if (event.type === "assistant_tool_calls") {
+      for (const call of event.toolCalls) {
+        counts.set(call.id, (counts.get(call.id) ?? 0) + 1);
+      }
+    }
+  }
+  const duplicateIds = new Set(
+    [...counts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([id]) => id),
+  );
+  const first = events[0];
+
+  if (duplicateIds.size === 0 || !first) {
+    return events;
+  }
+
+  const notice: SessionEvent = {
+    ...first,
+    type: "harness_message",
+    kind: "tool_replay",
+    text: [
+      `Suppressed invalid historical tool-call ids: ${[
+        ...duplicateIds,
+      ].join(", ")}.`,
+      "Their latest side-effect outcome must be treated as unknown; do not replay them.",
+    ].join("\n"),
+  };
+  const sanitized = events.flatMap((event): SessionEvent[] => {
+    if (event.type === "assistant_tool_calls") {
+      const toolCalls = event.toolCalls.filter(
+        (call) => !duplicateIds.has(call.id),
+      );
+      return toolCalls.length > 0 ? [{ ...event, toolCalls }] : [];
+    }
+    if (event.type === "tool_result" && duplicateIds.has(event.toolCallId)) {
+      return [];
+    }
+    return [event];
+  });
+
+  return [notice, ...sanitized];
+}
+
 function alignRecentEvents(
   events: SessionEvent[],
   maxRecentEvents: number,
 ): SessionEvent[] {
-  const recent = events.slice(-maxRecentEvents);
+  const boundedStart = Math.max(0, events.length - maxRecentEvents);
+  let start = boundedStart;
+  const lowerBound = Math.max(0, boundedStart - maxRecentEvents);
 
+  while (
+    start > lowerBound &&
+    events[start]?.type !== "user_message" &&
+    events[start]?.type !== "assistant_tool_calls"
+  ) {
+    start -= 1;
+  }
+
+  if (
+    events[start]?.type === "user_message" ||
+    events[start]?.type === "assistant_tool_calls"
+  ) {
+    return events.slice(start);
+  }
+
+  const recent = events.slice(boundedStart);
   while (recent[0]?.type === "tool_result") {
     recent.shift();
   }
-
   return recent;
 }
 

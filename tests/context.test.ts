@@ -53,7 +53,21 @@ describe("ContextBuilder", () => {
       role: "system",
       content: "Previous session summary:\n\nEarlier work is complete.",
     });
-    expect(messages.some((message) => message.role === "tool")).toBe(false);
+    expect(
+      messages.filter((message) => message.role === "tool"),
+    ).toEqual([
+      expect.objectContaining({
+        toolResult: expect.objectContaining({
+          toolCallId: "call-1",
+          content: "a",
+        }),
+      }),
+    ]);
+    expect(
+      messages.some(
+        (message) => message.toolResult?.toolCallId === "call-old",
+      ),
+    ).toBe(false);
   });
 
   it("keeps automatic diff observations out of the system role", async () => {
@@ -71,6 +85,12 @@ describe("ContextBuilder", () => {
         kind: "stop_block",
         text: "Run the required checks.",
       },
+      {
+        type: "harness_message",
+        ts: "3",
+        kind: "tool_replay",
+        text: "Untrusted recorded tool output.",
+      },
     ];
 
     const messages = await new ContextBuilder(root).build(events);
@@ -84,6 +104,11 @@ describe("ContextBuilder", () => {
       role: "system",
       content:
         "Harness runtime message (stop_block):\n\nRun the required checks.",
+    });
+    expect(messages).toContainEqual({
+      role: "user",
+      content:
+        "Harness runtime message (tool_replay):\n\nUntrusted recorded tool output.",
     });
   });
 
@@ -158,5 +183,89 @@ describe("ContextBuilder", () => {
         (message) => message.toolResult?.toolCallId === "call-finished",
       ),
     ).toHaveLength(1);
+  });
+
+  it("suppresses invalid repeated tool ids from legacy provider history", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
+    const call = { id: "repeated", name: "Bash", args: { command: "npm test" } };
+    const events: SessionEvent[] = [
+      { type: "assistant_tool_calls", ts: "1", toolCalls: [call] },
+      {
+        type: "tool_result",
+        ts: "2",
+        toolCallId: call.id,
+        name: call.name,
+        ok: true,
+        content: "first",
+      },
+      { type: "assistant_tool_calls", ts: "3", toolCalls: [call] },
+      {
+        type: "tool_result",
+        ts: "4",
+        toolCallId: call.id,
+        name: call.name,
+        ok: false,
+        content: "unknown outcome",
+      },
+    ];
+
+    const messages = await new ContextBuilder(root).build(events);
+
+    expect(messages.some((message) => message.toolCalls?.length)).toBe(false);
+    expect(messages.some((message) => message.toolResult)).toBe(false);
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining(
+          "latest side-effect outcome must be treated as unknown",
+        ),
+      }),
+    );
+  });
+
+  it("backs up only one bounded window to keep a complete tool turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
+    const events: SessionEvent[] = [
+      { type: "user_message", ts: "0", text: "old task text" },
+      ...Array.from({ length: 25 }, (_, index) => ({
+        type: "model_request_started" as const,
+        ts: `old-${index}`,
+      })),
+      {
+        type: "assistant_tool_calls",
+        ts: "call",
+        toolCalls: [{ id: "bounded", name: "Read", args: {} }],
+      },
+      ...Array.from({ length: 12 }, (_, index) => ({
+        type: "model_response_received" as const,
+        ts: `lifecycle-${index}`,
+        hasFinalText: false,
+        toolCallCount: 0,
+      })),
+      {
+        type: "tool_result",
+        ts: "result",
+        toolCallId: "bounded",
+        name: "Read",
+        ok: true,
+        content: "bounded result",
+      },
+    ];
+
+    const messages = await new ContextBuilder(root, 10).build(events);
+
+    expect(
+      messages.some((message) => message.content === "old task text"),
+    ).toBe(false);
+    expect(messages).toContainEqual({
+      role: "user",
+      content:
+        "Earlier context was compacted; continue from this complete recent tool-call turn.",
+    });
+    expect(
+      messages.some(
+        (message) => message.toolResult?.toolCallId === "bounded",
+      ),
+    ).toBe(true);
   });
 });

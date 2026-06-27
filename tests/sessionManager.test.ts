@@ -10,6 +10,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { SessionStore } from "../src/agent/session.js";
 import { SessionManager } from "../src/agent/sessionManager.js";
 
 describe("SessionManager", () => {
@@ -33,6 +34,163 @@ describe("SessionManager", () => {
     await expect(readFile(first.todoPath, "utf8")).resolves.toBe("[]\n");
     await first.release();
     await second.release();
+  });
+
+  it("creates and atomically updates session metadata", async () => {
+    const root = await makeRoot();
+    const manager = new SessionManager(root, {
+      model: "production-model",
+      parentSessionId: "parent-session",
+    });
+    const session = await manager.create();
+    const created = await session.readMetadata();
+
+    expect(created).toMatchObject({
+      id: session.id,
+      workspaceRoot: path.resolve(root),
+      model: "production-model",
+      status: "running",
+      lastSequence: 0,
+      parentSessionId: "parent-session",
+    });
+    expect(created.createdAt).toBe(created.updatedAt);
+
+    await session.updateLastSequence(7);
+    await session.updateLastSequence(3);
+    const completed = await session.updateStatus("completed");
+
+    expect(completed).toMatchObject({
+      status: "completed",
+      lastSequence: 7,
+    });
+    await expect(
+      readFile(session.metadataPath, "utf8").then(JSON.parse),
+    ).resolves.toMatchObject(completed);
+    expect(
+      (await readdir(path.dirname(session.metadataPath))).filter((name) =>
+        name.includes(".meta.json."),
+      ),
+    ).toEqual([]);
+    await session.release();
+  });
+
+  it("adds metadata when resuming an old flat-layout session", async () => {
+    const root = await makeRoot();
+    const sessionsDir = path.join(root, ".harness", "sessions");
+    const todosDir = path.join(root, ".harness", "todos");
+    await mkdir(sessionsDir, { recursive: true });
+    await mkdir(todosDir);
+    await writeFile(
+      path.join(sessionsDir, "old-session.jsonl"),
+      [
+        '{"type":"user_message","ts":"one","text":"legacy"}',
+        '{"type":"assistant_final","ts":"two","text":"done"}',
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(path.join(todosDir, "old-session.json"), "[]\n", "utf8");
+
+    const session = await new SessionManager(root, {
+      model: "resume-model",
+    }).resume("old-session");
+    const metadata = await session.readMetadata();
+
+    expect(metadata).toMatchObject({
+      id: "old-session",
+      workspaceRoot: path.resolve(root),
+      model: "resume-model",
+      status: "completed",
+      lastSequence: 2,
+    });
+    await expect(readFile(session.metadataPath, "utf8")).resolves.toContain(
+      '"lastSequence": 2',
+    );
+    await session.release();
+  });
+
+  it("inspects current metadata without acquiring the writer lease", async () => {
+    const root = await makeRoot();
+    const owner = await new SessionManager(root, {
+      model: "inspect-model",
+    }).create();
+    const observer = new SessionManager(root);
+
+    await expect(observer.inspect("latest")).resolves.toMatchObject({
+      id: owner.id,
+      model: "inspect-model",
+      status: "running",
+    });
+    await new SessionStore(owner.sessionPath, owner.id).append({
+      type: "session_status_changed",
+      status: "completed",
+    });
+    await expect(observer.inspect(owner.id)).resolves.toMatchObject({
+      status: "completed",
+      lastSequence: 1,
+    });
+    await new SessionStore(owner.sessionPath, owner.id).append({
+      type: "approval_requested",
+      toolCallId: "pending-call",
+      fingerprint: "fingerprint",
+      scope: "fingerprint",
+      reason: "Needs confirmation.",
+    });
+    await expect(observer.inspect(owner.id)).resolves.toMatchObject({
+      status: "waiting_for_approval",
+      lastSequence: 2,
+    });
+    await expect(observer.resume(owner.id)).rejects.toThrow(
+      "Session is already active",
+    );
+    await owner.release();
+  });
+
+  it("backfills metadata when inspecting an old session", async () => {
+    const root = await makeRoot();
+    const sessionsDir = path.join(root, ".harness", "sessions");
+    await mkdir(sessionsDir, { recursive: true });
+    await writeFile(
+      path.join(sessionsDir, "inspect-old.jsonl"),
+      '{"type":"user_message","ts":"one","text":"legacy"}\n',
+      "utf8",
+    );
+    const manager = new SessionManager(root, { model: "inspect-model" });
+
+    await expect(manager.inspect("inspect-old")).resolves.toMatchObject({
+      id: "inspect-old",
+      model: "inspect-model",
+      lastSequence: 1,
+    });
+    await expect(
+      readFile(path.join(sessionsDir, "inspect-old.meta.json"), "utf8"),
+    ).resolves.toContain('"lastSequence": 1');
+  });
+
+  it("rebuilds corrupt regular metadata from the event log", async () => {
+    const root = await makeRoot();
+    const manager = new SessionManager(root, { model: "recovery-model" });
+    const session = await manager.create();
+    await new SessionStore(session.sessionPath, session.id).append({
+      type: "assistant_final",
+      text: "done",
+    });
+    await session.release();
+    await writeFile(session.metadataPath, "{broken", "utf8");
+
+    await expect(manager.inspect(session.id)).resolves.toMatchObject({
+      id: session.id,
+      model: "recovery-model",
+      status: "completed",
+      lastSequence: 1,
+    });
+    await expect(
+      readFile(session.metadataPath, "utf8").then(JSON.parse),
+    ).resolves.toMatchObject({
+      id: session.id,
+      status: "completed",
+      lastSequence: 1,
+    });
   });
 
   it("rejects unsafe or missing session ids", async () => {
