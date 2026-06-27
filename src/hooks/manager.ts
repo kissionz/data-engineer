@@ -13,6 +13,10 @@ export class HookManager {
     this.hooks.set(eventName, handlers);
   }
 
+  has(eventName: HookEventName): boolean {
+    return (this.hooks.get(eventName)?.length ?? 0) > 0;
+  }
+
   async emit(
     eventName: HookEventName,
     payload: Record<string, unknown>,

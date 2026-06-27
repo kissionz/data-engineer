@@ -21,7 +21,8 @@ This P0 implementation includes:
 - Permission gate with allow / ask / deny decisions
 - Real OpenAI Responses API model client by default
 - Streaming model output with concise tool status lines
-- Append-only context compaction and tool lifecycle hooks
+- Append-only context compaction and deterministic tool lifecycle hooks
+- Automatic post-edit Git diff review
 - Docker-isolated Bash with explicit host/off modes
 - Bounded, read-only code-reviewer subagent
 - Explicit isolated Git worktree mode
@@ -131,7 +132,12 @@ Model text is streamed to the terminal as it arrives. Tool calls show only a com
 
 Session logs and their task todos are persisted separately under `.harness/sessions/` and `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
 
-Long sessions retain the full append-only event log. Once enough new events accumulate, a bounded factual summary is appended and used with recent events for model context. `BeforeToolUse` and `AfterToolUse` hooks provide deterministic interception and observation; the default write hook blocks sensitive paths and oversized single-file writes.
+Long sessions retain the full append-only event log. Once enough new events accumulate, a bounded factual summary is appended and used with recent events for model context. `BeforeToolUse`, `AfterToolUse`, `AfterEdit`, and `BeforeAgentStop` hooks provide deterministic interception and observation; the default write hook blocks sensitive paths and oversized single-file writes.
+
+After a successful `Write` or `Edit`, the runtime ensures `GitDiff` runs before
+the next model turn. If the model already ran `GitDiff` after the latest edit,
+the runtime does not repeat it. Automatic diff output is persisted as untrusted
+observation data rather than elevated system instructions.
 
 ## Bash Sandbox
 

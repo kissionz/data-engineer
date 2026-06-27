@@ -52,6 +52,12 @@ export type SessionEvent =
       text: string;
     }
   | {
+      type: "harness_message";
+      ts: string;
+      kind: "git_diff_review" | "stop_block";
+      text: string;
+    }
+  | {
       type: "summary";
       ts: string;
       text: string;
@@ -76,6 +82,11 @@ export type SessionEventInput =
     }
   | {
       type: "assistant_final";
+      text: string;
+    }
+  | {
+      type: "harness_message";
+      kind: "git_diff_review" | "stop_block";
       text: string;
     }
   | {

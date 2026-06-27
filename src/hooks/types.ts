@@ -1,4 +1,8 @@
-export type HookEventName = "BeforeToolUse" | "AfterToolUse";
+export type HookEventName =
+  | "BeforeToolUse"
+  | "AfterToolUse"
+  | "AfterEdit"
+  | "BeforeAgentStop";
 export type HookDecision = "allow" | "block";
 
 export interface HookResult {

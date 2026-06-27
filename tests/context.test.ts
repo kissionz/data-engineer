@@ -55,4 +55,35 @@ describe("ContextBuilder", () => {
     });
     expect(messages.some((message) => message.role === "tool")).toBe(false);
   });
+
+  it("keeps automatic diff observations out of the system role", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
+    const events: SessionEvent[] = [
+      {
+        type: "harness_message",
+        ts: "1",
+        kind: "git_diff_review",
+        text: "Untrusted diff output.",
+      },
+      {
+        type: "harness_message",
+        ts: "2",
+        kind: "stop_block",
+        text: "Run the required checks.",
+      },
+    ];
+
+    const messages = await new ContextBuilder(root).build(events);
+
+    expect(messages).toContainEqual({
+      role: "user",
+      content:
+        "Harness runtime message (git_diff_review):\n\nUntrusted diff output.",
+    });
+    expect(messages).toContainEqual({
+      role: "system",
+      content:
+        "Harness runtime message (stop_block):\n\nRun the required checks.",
+    });
+  });
 });

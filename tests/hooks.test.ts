@@ -20,6 +20,14 @@ describe("HookManager", () => {
     expect(last).not.toHaveBeenCalled();
   });
 
+  it("reports whether an event has registered handlers", () => {
+    const manager = new HookManager();
+
+    expect(manager.has("BeforeAgentStop")).toBe(false);
+    manager.register("BeforeAgentStop", () => null);
+    expect(manager.has("BeforeAgentStop")).toBe(true);
+  });
+
   it("blocks sensitive and oversized writes", () => {
     expect(
       protectSensitiveWrites({

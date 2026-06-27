@@ -26,6 +26,10 @@ export class ToolRegistry {
     return tool;
   }
 
+  has(name: string): boolean {
+    return this.tools.has(name);
+  }
+
   schemas(): Array<Record<string, unknown>> {
     return [...this.tools.values()].map((tool) => ({
       name: tool.name,

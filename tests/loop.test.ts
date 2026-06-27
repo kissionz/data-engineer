@@ -157,6 +157,80 @@ class CountingWriteTool implements Tool {
   }
 }
 
+class CountingGitDiffTool implements Tool {
+  name = "GitDiff";
+  description = "Fake git diff tool for loop tests.";
+  inputSchema = { type: "object", properties: {} };
+  executions = 0;
+
+  async execute(): Promise<ToolExecutionResult> {
+    this.executions += 1;
+    return { ok: true, content: "diff --git a/file.txt b/file.txt" };
+  }
+}
+
+class WriteThenInspectModel implements ModelClient {
+  private step = 0;
+  messages: AgentMessage[][] = [];
+
+  async complete(options: {
+    messages: AgentMessage[];
+  }): Promise<AgentResponse> {
+    this.messages.push(options.messages);
+    this.step += 1;
+
+    if (this.step === 1) {
+      return {
+        toolCalls: [
+          {
+            id: "call-write",
+            name: "Write",
+            args: { file_path: "file.txt", content: "content" },
+          },
+        ],
+      };
+    }
+
+    return { finalText: "reviewed" };
+  }
+}
+
+class WriteAndDiffModel implements ModelClient {
+  private step = 0;
+
+  async complete(): Promise<AgentResponse> {
+    this.step += 1;
+
+    if (this.step === 1) {
+      return {
+        toolCalls: [
+          {
+            id: "call-write",
+            name: "Write",
+            args: { file_path: "file.txt", content: "content" },
+          },
+          {
+            id: "call-diff",
+            name: "GitDiff",
+            args: {},
+          },
+        ],
+      };
+    }
+
+    return { finalText: "reviewed" };
+  }
+}
+
+class CountingFinalModel implements ModelClient {
+  calls = 0;
+
+  async complete(): Promise<AgentResponse> {
+    this.calls += 1;
+    return { finalText: "done" };
+  }
+}
+
 class RecordingReporter implements AgentReporter {
   text = "";
   statuses: ToolStatus[] = [];
@@ -278,6 +352,123 @@ describe("AgentLoop", () => {
     expect(approvalCount).toBe(0);
     expect(await readFile(sessionPath, "utf8")).toContain(
       '"reason":"unknown_tool"',
+    );
+  });
+
+  it("automatically reviews a successful edit with GitDiff", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const writeTool = new CountingWriteTool();
+    const diffTool = new CountingGitDiffTool();
+    const tools = new ToolRegistry();
+    tools.register(writeTool);
+    tools.register(diffTool);
+    const model = new WriteThenInspectModel();
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+
+    const loop = new AgentLoop(
+      model,
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+      10,
+      async () => "allow_once",
+    );
+
+    await expect(loop.run("write and review")).resolves.toBe("reviewed");
+    expect(diffTool.executions).toBe(1);
+    expect(model.messages[1]).toContainEqual(
+      expect.objectContaining({
+        role: "user",
+        content: expect.stringContaining("git_diff_review"),
+      }),
+    );
+    expect(await readFile(sessionPath, "utf8")).toContain(
+      '"kind":"git_diff_review"',
+    );
+  });
+
+  it("does not repeat GitDiff when the model already reviewed the edit", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const tools = new ToolRegistry();
+    const diffTool = new CountingGitDiffTool();
+    tools.register(new CountingWriteTool());
+    tools.register(diffTool);
+
+    const loop = new AgentLoop(
+      new WriteAndDiffModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => "allow_once",
+    );
+
+    await expect(loop.run("write and review")).resolves.toBe("reviewed");
+    expect(diffTool.executions).toBe(1);
+  });
+
+  it("emits AfterEdit after a successful write", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const tools = new ToolRegistry();
+    tools.register(new CountingWriteTool());
+    const hooks = new HookManager();
+    let editEvents = 0;
+    hooks.register("AfterEdit", () => {
+      editEvents += 1;
+      return null;
+    });
+
+    const loop = new AgentLoop(
+      new WriteThenDoneModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => "allow_once",
+      undefined,
+      undefined,
+      hooks,
+    );
+
+    await expect(loop.run("write")).resolves.toBe("done");
+    expect(editEvents).toBe(1);
+  });
+
+  it("continues when BeforeAgentStop blocks the first final response", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const model = new CountingFinalModel();
+    const hooks = new HookManager();
+    let stopChecks = 0;
+    hooks.register("BeforeAgentStop", () => {
+      stopChecks += 1;
+      return stopChecks === 1
+        ? { decision: "block", reason: "Run required checks." }
+        : null;
+    });
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const reporter = new RecordingReporter();
+
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+      10,
+      undefined,
+      reporter,
+      undefined,
+      hooks,
+    );
+
+    await expect(loop.run("finish carefully")).resolves.toBe("done");
+    expect(model.calls).toBe(2);
+    expect(reporter.text).toBe("done");
+    expect(await readFile(sessionPath, "utf8")).toContain(
+      '"kind":"stop_block"',
     );
   });
 });

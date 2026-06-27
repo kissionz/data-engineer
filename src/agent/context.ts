@@ -86,6 +86,11 @@ export class ContextBuilder {
             data: event.data,
           },
         });
+      } else if (event.type === "harness_message") {
+        messages.push({
+          role: event.kind === "git_diff_review" ? "user" : "system",
+          content: `Harness runtime message (${event.kind}):\n\n${event.text}`,
+        });
       }
     }
 
