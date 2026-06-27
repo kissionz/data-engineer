@@ -1,4 +1,4 @@
-import type { CommandExecutor } from "../runtime/commandExecutor.js";
+import type { ShellExecutor } from "../runtime/shellExecutor.js";
 import type { Workspace } from "../runtime/workspace.js";
 import type { Tool, ToolExecutionResult } from "./base.js";
 
@@ -19,7 +19,7 @@ export class BashTool implements Tool {
 
   constructor(
     private readonly workspace: Workspace,
-    private readonly executor: CommandExecutor,
+    private readonly executor: ShellExecutor,
     private readonly maxOutputChars = 12_000,
   ) {}
 
@@ -36,11 +36,11 @@ export class BashTool implements Tool {
         : 30;
     const timeoutMs = Math.min(Math.max(timeoutSeconds, 1), 120) * 1000;
 
-    const result = await this.executor.run({
-      command: args.command,
+    const result = await this.executor.runScript({
+      script: args.command,
       cwd,
       timeoutMs,
-      shell: true,
+      maxOutputChars: this.maxOutputChars,
     });
 
     let output = "";
@@ -57,7 +57,7 @@ export class BashTool implements Tool {
       output = "[No output]";
     }
 
-    let truncated = false;
+    let truncated = result.outputTruncated ?? false;
 
     if (output.length > this.maxOutputChars) {
       output = `[Output truncated: showing tail]\n${output.slice(-this.maxOutputChars)}`;

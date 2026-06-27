@@ -7,6 +7,8 @@ A TypeScript / Node.js local coding agent harness runtime.
 - Node.js 22.12 or newer
 - Git for `GitStatus` and `GitDiff`
 - ripgrep (`rg`) for `Grep` and `Glob`
+- Docker with Linux containers for sandboxed Bash, or Bash installed locally
+  when explicitly using host mode
 
 This P0 implementation includes:
 
@@ -20,6 +22,7 @@ This P0 implementation includes:
 - Real OpenAI Responses API model client by default
 - Streaming model output with concise tool status lines
 - Append-only context compaction and tool lifecycle hooks
+- Docker-isolated Bash with explicit host/off modes
 - Mock model only for explicit local loop testing
 
 ## Usage
@@ -79,6 +82,10 @@ The CLI reads:
 - `OPENAI_API_KEY`: required for the default OpenAI provider
 - `OPENAI_MODEL`: optional model override, defaults to `gpt-4.1`
 - `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL, defaults to `https://api.openai.com/v1`
+- `HARNESS_BASH_SANDBOX`: `auto`, `docker`, `host`, or `off`
+- `HARNESS_SANDBOX_IMAGE`: Docker image used for Bash
+- `HARNESS_SANDBOX_PULL`: `never` or `missing`
+- `HARNESS_SANDBOX_NETWORK`: `none` or `bridge`
 
 You can also pass the model explicitly:
 
@@ -123,6 +130,42 @@ Model text is streamed to the terminal as it arrives. Tool calls show only a com
 Session logs and their task todos are persisted separately under `.harness/sessions/` and `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
 
 Long sessions retain the full append-only event log. Once enough new events accumulate, a bounded factual summary is appended and used with recent events for model context. `BeforeToolUse` and `AfterToolUse` hooks provide deterministic interception and observation; the default write hook blocks sensitive paths and oversized single-file writes.
+
+## Bash Sandbox
+
+The default `auto` mode uses Docker only when the daemon, Linux container mode,
+local Docker context, sandbox image, and workspace mount all pass readiness
+checks. If any check fails, the Bash tool is not registered. It never silently
+falls back to host execution.
+
+Fetch the default image when missing:
+
+```bash
+npm start -- --sandbox-pull missing
+```
+
+Require Docker or disable Bash explicitly:
+
+```bash
+npm start -- --bash-sandbox docker
+npm start -- --bash-sandbox off
+```
+
+Host Bash is an explicit compatibility choice and has no OS isolation:
+
+```bash
+npm start -- --bash-sandbox host
+```
+
+On Windows, host mode requires `bash.exe` on `PATH`, such as Git for Windows.
+Docker mode runs Bash with no network by default, a read-only container root,
+dropped capabilities, process/memory/CPU limits, a hidden `.harness`, masked
+`.env*` files, read-only `.git`, and per-session Linux `node_modules`. Enable
+network access only for tasks that require it:
+
+```bash
+npm start -- --sandbox-network bridge
+```
 
 ## Project Skills
 

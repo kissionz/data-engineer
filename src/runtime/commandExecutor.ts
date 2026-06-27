@@ -4,14 +4,15 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  outputTruncated?: boolean;
 }
 
 export interface CommandOptions {
   command: string;
-  args?: string[];
+  args: string[];
   cwd: string;
   timeoutMs: number;
-  shell?: boolean;
+  maxOutputChars?: number;
 }
 
 export interface CommandExecutor {

@@ -23,7 +23,15 @@ import {
 import { defaultPolicy } from "./permissions/policy.js";
 import { PermissionGate } from "./permissions/gate.js";
 import { loadEnvFile } from "./runtime/env.js";
+import { DockerAvailabilityChecker } from "./runtime/dockerAvailability.js";
+import { DockerShellExecutor } from "./runtime/dockerShellExecutor.js";
 import { LocalCommandExecutor } from "./runtime/localExecutor.js";
+import { LocalShellExecutor } from "./runtime/localShellExecutor.js";
+import {
+  parseSandboxConfig,
+  type SandboxConfig,
+} from "./runtime/sandboxConfig.js";
+import type { ShellExecutor } from "./runtime/shellExecutor.js";
 import { Workspace } from "./runtime/workspace.js";
 import { SkillLoader } from "./skills/loader.js";
 import { BashTool } from "./tools/bash.js";
@@ -46,6 +54,13 @@ interface CliOptions {
   baseUrl?: string;
   maxTurns: string;
   resume?: string;
+  bashSandbox: string;
+  sandboxImage: string;
+  sandboxPull: string;
+  sandboxNetwork: string;
+  sandboxMemory: string;
+  sandboxCpus: string;
+  sandboxPids: string;
 }
 
 async function main(): Promise<void> {
@@ -61,6 +76,21 @@ async function main(): Promise<void> {
     .option("--base-url <baseUrl>", "OpenAI-compatible API base URL")
     .option("--max-turns <turns>", "Maximum agent turns per user message", "50")
     .option("--resume <session>", "Resume a session id or latest")
+    .option(
+      "--bash-sandbox <mode>",
+      "Bash execution: auto, docker, host, or off",
+      "auto",
+    )
+    .option(
+      "--sandbox-image <image>",
+      "Docker sandbox image",
+      "node:22-bookworm",
+    )
+    .option("--sandbox-pull <policy>", "Image pull: missing or never", "never")
+    .option("--sandbox-network <mode>", "Container network: none or bridge", "none")
+    .option("--sandbox-memory <limit>", "Container memory limit", "1g")
+    .option("--sandbox-cpus <count>", "Container CPU limit", "2")
+    .option("--sandbox-pids <count>", "Container process limit", "256")
     .parse();
 
   const opts = program.opts<CliOptions>();
@@ -70,6 +100,55 @@ async function main(): Promise<void> {
 
   const workspace = new Workspace(workspaceRoot);
   const executor = new LocalCommandExecutor();
+  const sandboxConfig = parseSandboxConfig({
+    mode: optionOrEnv(
+      program,
+      "bashSandbox",
+      opts.bashSandbox,
+      "HARNESS_BASH_SANDBOX",
+    ),
+    image: optionOrEnv(
+      program,
+      "sandboxImage",
+      opts.sandboxImage,
+      "HARNESS_SANDBOX_IMAGE",
+    ),
+    pull: optionOrEnv(
+      program,
+      "sandboxPull",
+      opts.sandboxPull,
+      "HARNESS_SANDBOX_PULL",
+    ),
+    network: optionOrEnv(
+      program,
+      "sandboxNetwork",
+      opts.sandboxNetwork,
+      "HARNESS_SANDBOX_NETWORK",
+    ),
+    memory: optionOrEnv(
+      program,
+      "sandboxMemory",
+      opts.sandboxMemory,
+      "HARNESS_SANDBOX_MEMORY",
+    ),
+    cpus: optionOrEnv(
+      program,
+      "sandboxCpus",
+      opts.sandboxCpus,
+      "HARNESS_SANDBOX_CPUS",
+    ),
+    pids: optionOrEnv(
+      program,
+      "sandboxPids",
+      opts.sandboxPids,
+      "HARNESS_SANDBOX_PIDS",
+    ),
+  });
+  const shellExecutorFactory = await createShellExecutorFactory(
+    sandboxConfig,
+    executor,
+    workspace,
+  );
   const sessionManager = new SessionManager(workspaceRoot);
   const modelName = opts.model ?? process.env.OPENAI_MODEL ?? "gpt-4.1";
   const baseUrl = opts.baseUrl ?? process.env.OPENAI_BASE_URL;
@@ -83,6 +162,7 @@ async function main(): Promise<void> {
       workspaceRoot,
       workspace,
       executor,
+      shellExecutor: shellExecutorFactory(session),
       provider: opts.provider,
       modelName,
       baseUrl,
@@ -114,21 +194,79 @@ async function main(): Promise<void> {
   );
 }
 
+function optionOrEnv(
+  program: Command,
+  optionName: string,
+  optionValue: string,
+  environmentName: string,
+): string {
+  return program.getOptionValueSource(optionName) === "default"
+    ? process.env[environmentName] ?? optionValue
+    : optionValue;
+}
+
 interface SessionRuntime {
   session: ManagedSession;
   agent: AgentLoop;
 }
+
+type ShellExecutorFactory = (
+  session: ManagedSession,
+) => ShellExecutor | undefined;
 
 interface CreateAgentOptions {
   session: ManagedSession;
   workspaceRoot: string;
   workspace: Workspace;
   executor: LocalCommandExecutor;
+  shellExecutor?: ShellExecutor;
   provider: string;
   modelName: string;
   baseUrl?: string;
   maxTurns: number;
   interactivePrompt?: InteractivePrompt;
+}
+
+async function createShellExecutorFactory(
+  config: SandboxConfig,
+  executor: LocalCommandExecutor,
+  workspace: Workspace,
+): Promise<ShellExecutorFactory> {
+  if (config.mode === "off") {
+    return () => undefined;
+  }
+
+  if (config.mode === "host") {
+    const local = new LocalShellExecutor(executor);
+    return () => local;
+  }
+
+  const availability = await new DockerAvailabilityChecker(executor).check(
+    workspace.root,
+    config,
+  );
+
+  if (!availability.available) {
+    if (config.mode === "docker") {
+      throw new Error(`Docker sandbox is unavailable: ${availability.reason}`);
+    }
+
+    console.warn(
+      [
+        `Bash tool disabled: ${availability.reason}`,
+        "Start Docker or explicitly use --bash-sandbox host to run Bash on the host.",
+      ].join("\n"),
+    );
+    return () => undefined;
+  }
+
+  return (session) =>
+    new DockerShellExecutor(
+      executor,
+      workspace,
+      session.id,
+      config,
+    );
 }
 
 function createAgent(options: CreateAgentOptions): AgentLoop {
@@ -144,7 +282,9 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
   tools.register(new GlobTool(options.workspace, options.executor));
   tools.register(new WriteTool(options.workspace));
   tools.register(new EditTool(options.workspace));
-  tools.register(new BashTool(options.workspace, options.executor));
+  if (options.shellExecutor) {
+    tools.register(new BashTool(options.workspace, options.shellExecutor));
+  }
   tools.register(new GitStatusTool(options.workspace, options.executor));
   tools.register(new GitDiffTool(options.workspace, options.executor));
   tools.register(new TodoReadTool(todoStore));

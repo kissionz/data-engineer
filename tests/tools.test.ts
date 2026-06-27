@@ -11,6 +11,10 @@ import type {
   CommandExecutor,
   CommandOptions,
 } from "../src/runtime/commandExecutor.js";
+import type {
+  ShellExecutor,
+  ShellOptions,
+} from "../src/runtime/shellExecutor.js";
 import { Workspace } from "../src/runtime/workspace.js";
 import { BashTool } from "../src/tools/bash.js";
 import { EditTool } from "../src/tools/edit.js";
@@ -88,9 +92,9 @@ describe("P0 tools", () => {
 
   it("runs bash through the command executor", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
-    const calls: CommandOptions[] = [];
-    const executor: CommandExecutor = {
-      async run(options) {
+    const calls: ShellOptions[] = [];
+    const executor: ShellExecutor = {
+      async runScript(options) {
         calls.push(options);
         return {
           ok: true,
@@ -109,7 +113,7 @@ describe("P0 tools", () => {
     expect(result.ok).toBe(true);
     expect(result.content).toContain("ok");
     expect(calls[0]?.cwd).toBe(root);
-    expect(calls[0]?.shell).toBe(true);
+    expect(calls[0]?.script).toBe("echo ok");
   });
 
   it("runs grep through ripgrep with workspace constrained path", async () => {
@@ -138,7 +142,6 @@ describe("P0 tools", () => {
     expect(calls[0]?.command).toBe("rg");
     expect(calls[0]?.args).toContain("--line-number");
     expect(calls[0]?.args).toContain("AgentLoop");
-    expect(calls[0]?.shell).toBeUndefined();
   });
 
   it("lists matching files with a bounded Glob result", async () => {
@@ -173,7 +176,6 @@ describe("P0 tools", () => {
     expect(calls[0]).toMatchObject({
       command: "rg",
     });
-    expect(calls[0]?.shell).toBeUndefined();
     expect(calls[0]?.args).toContain("**/*.ts");
   });
 
@@ -213,8 +215,6 @@ describe("P0 tools", () => {
         ":(exclude)**/node_modules/**",
       ],
     });
-    expect(calls[0]?.shell).toBeUndefined();
-    expect(calls[1]?.shell).toBeUndefined();
   });
 
   it("persists and validates task todos", async () => {
