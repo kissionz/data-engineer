@@ -57,4 +57,18 @@ describe("summarizeToolCall", () => {
       }),
     ).toBe("Skill load typescript-testing");
   });
+
+  it("summarizes subagent tasks without dumping the full prompt", () => {
+    const summary = summarizeToolCall({
+      id: "3",
+      name: "Task",
+      args: {
+        subagent: "code-reviewer",
+        task: `Review ${"all files ".repeat(20)}`,
+      },
+    });
+
+    expect(summary).toMatch(/^Task code-reviewer: Review /);
+    expect(summary.length).toBeLessThan(140);
+  });
 });

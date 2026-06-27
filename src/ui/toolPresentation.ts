@@ -42,6 +42,12 @@ export function summarizeToolCall(call: ToolCall): string {
     return `Skill load ${compact(String(call.args.name ?? "skill"))}`;
   }
 
+  if (call.name === "Task") {
+    const subagent = compact(String(call.args.subagent ?? "subagent"), 40);
+    const task = compact(String(call.args.task ?? "task"), 70);
+    return `Task ${subagent}: ${task}`;
+  }
+
   if (call.name === "Bash") {
     return `Bash ${compact(String(call.args.command ?? "command"), 100)}`;
   }

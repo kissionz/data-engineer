@@ -30,6 +30,7 @@ describe("PermissionGate", () => {
       "TodoWrite",
       "SkillList",
       "SkillLoad",
+      "Task",
     ]) {
       expect(gate.check({ id: name, name, args: {} })).toMatchObject({
         decision: "allow",

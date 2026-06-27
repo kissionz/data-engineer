@@ -41,6 +41,7 @@ import { GlobTool } from "./tools/glob.js";
 import { GrepTool } from "./tools/grep.js";
 import { ReadTool } from "./tools/read.js";
 import { SkillListTool, SkillLoadTool } from "./tools/skill.js";
+import { TaskTool } from "./tools/task.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { TodoReadTool, TodoStore, TodoWriteTool } from "./tools/todo.js";
 import { WriteTool } from "./tools/write.js";
@@ -271,6 +272,11 @@ async function createShellExecutorFactory(
 
 function createAgent(options: CreateAgentOptions): AgentLoop {
   const tools = new ToolRegistry();
+  const model = createModel(
+    options.provider,
+    options.modelName,
+    options.baseUrl,
+  );
   const todoStore = new TodoStore(options.session.todoPath);
   const sessionStore = new SessionStore(options.session.sessionPath);
   const hooks = new HookManager();
@@ -291,9 +297,17 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
   tools.register(new TodoWriteTool(todoStore));
   tools.register(new SkillListTool(skillLoader));
   tools.register(new SkillLoadTool(skillLoader));
+  tools.register(
+    new TaskTool(
+      model,
+      options.workspace,
+      options.executor,
+      options.session.id,
+    ),
+  );
 
   return new AgentLoop(
-    createModel(options.provider, options.modelName, options.baseUrl),
+    model,
     tools,
     new PermissionGate(defaultPolicy()),
     new ContextBuilder(options.workspaceRoot),

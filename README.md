@@ -23,6 +23,7 @@ This P0 implementation includes:
 - Streaming model output with concise tool status lines
 - Append-only context compaction and tool lifecycle hooks
 - Docker-isolated Bash with explicit host/off modes
+- Bounded, read-only code-reviewer subagent
 - Mock model only for explicit local loop testing
 
 ## Usage
@@ -187,3 +188,23 @@ The model uses `SkillList` to discover metadata and `SkillLoad` to load one
 relevant instruction file explicitly. Skill names must match their directory,
 files are limited to 64KB, and paths cannot escape the workspace. Files under a
 skill's `scripts/` directory are never executed automatically.
+
+## Read-Only Subagent
+
+The `Task` tool can run the built-in `code-reviewer` as a separate AgentLoop.
+It has its own hidden append-only audit log and a maximum of 20 turns. Its tool
+registry contains only:
+
+```text
+Read
+Grep
+Glob
+GitStatus
+GitDiff
+SkillList
+SkillLoad
+```
+
+It cannot access `Write`, `Edit`, `Bash`, `TodoWrite`, or `Task`, so it cannot
+modify files or recursively create more subagents. The parent receives only the
+bounded final review result.

@@ -21,6 +21,7 @@ export function defaultPolicy(): PermissionPolicy {
       "TodoWrite",
       "SkillList",
       "SkillLoad",
+      "Task",
     ]),
     deniedTools: new Set(),
     allowReadonly: true,
