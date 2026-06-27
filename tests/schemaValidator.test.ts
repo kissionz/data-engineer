@@ -86,6 +86,27 @@ describe("tool schema validation", () => {
     });
   });
 
+  it("enforces string patterns", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        hash: { type: "string", pattern: "^[a-f0-9]{64}$" },
+      },
+      required: ["hash"],
+      additionalProperties: false,
+    };
+
+    expect(
+      validateSchema(schema, { hash: "a".repeat(64) }),
+    ).toEqual({ ok: true });
+    expect(
+      validateSchema(schema, { hash: "not-a-sha256" }),
+    ).toMatchObject({
+      ok: false,
+      errors: [expect.stringContaining("required pattern")],
+    });
+  });
+
   it("rejects path-shadowing fields on Bash calls", () => {
     const registry = new ToolRegistry();
     registry.register(new SchemaOnlyTool());

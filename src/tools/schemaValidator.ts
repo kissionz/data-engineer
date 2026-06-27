@@ -53,6 +53,20 @@ function validateValue(
             `${valuePath} cannot contain more than ${schema.maxLength} characters.`,
           );
         }
+
+        if (typeof schema.pattern === "string") {
+          let pattern: RegExp | undefined;
+
+          try {
+            pattern = new RegExp(schema.pattern);
+          } catch {
+            errors.push(`${valuePath} has an invalid schema pattern.`);
+          }
+
+          if (pattern && !pattern.test(value)) {
+            errors.push(`${valuePath} does not match the required pattern.`);
+          }
+        }
       }
       return;
     case "number":

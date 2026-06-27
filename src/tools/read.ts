@@ -1,6 +1,14 @@
-import { readFile, stat } from "node:fs/promises";
+import {
+  DEFAULT_MAX_TEXT_FILE_BYTES,
+  readTextFileSnapshot,
+} from "../runtime/textFile.js";
 import type { Workspace } from "../runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
+import { fileOperationFailure } from "./fileErrors.js";
 
 export class ReadTool implements Tool {
   name = "Read";
@@ -17,28 +25,32 @@ export class ReadTool implements Tool {
     additionalProperties: false,
   };
 
-  constructor(private readonly workspace: Workspace) {}
+  constructor(
+    private readonly workspace: Workspace,
+    private readonly maxFileBytes = DEFAULT_MAX_TEXT_FILE_BYTES,
+  ) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
     if (typeof args.file_path !== "string") {
       return { ok: false, content: "file_path must be a string." };
     }
 
     const filePath = args.file_path;
-    const absPath = this.workspace.resolve(filePath);
-    const info = await stat(absPath).catch(() => null);
+    let snapshot;
 
-    if (!info) {
-      return { ok: false, content: `File not found: ${filePath}` };
+    try {
+      snapshot = await readTextFileSnapshot(this.workspace, filePath, {
+        maxBytes: this.maxFileBytes,
+        signal: context?.signal,
+      });
+    } catch (error: unknown) {
+      return fileOperationFailure(error);
     }
 
-    if (!info.isFile()) {
-      return { ok: false, content: `Not a file: ${filePath}` };
-    }
-
-    await this.workspace.assertRealPathWithin(absPath);
-
-    const text = await readFile(absPath, "utf8");
+    const text = snapshot.text;
     const lines = text.split(/\r?\n/);
     const offset = integerArg(args.offset, 0, 0);
     const limit = integerArg(args.limit, 300, 1);
@@ -58,6 +70,12 @@ export class ReadTool implements Tool {
       content: numbered + (truncated ? "\n\n[Output truncated]" : ""),
       data: {
         path: filePath,
+        sha256: snapshot.hash,
+        size: snapshot.size,
+        encoding: "utf-8",
+        bom: snapshot.bom,
+        lineEnding: snapshot.lineEnding,
+        mode: snapshot.mode,
         totalLines: lines.length,
         offset,
         limit,

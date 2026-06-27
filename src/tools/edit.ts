@@ -1,11 +1,16 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
 import { throwIfCancelled } from "../agent/cancellation.js";
+import {
+  FileOperationError,
+  atomicReplaceTextFile,
+  readTextFileSnapshot,
+} from "../runtime/textFile.js";
 import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
   ToolExecutionResult,
 } from "./base.js";
+import { fileOperationFailure } from "./fileErrors.js";
 
 function unifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split(/\r?\n/);
@@ -26,14 +31,19 @@ function unifiedDiff(oldText: string, newText: string, filePath: string): string
 
 export class EditTool implements Tool {
   name = "Edit";
-  description = "Replace an exact string in a text file.";
+  description =
+    "Atomically replace an exact string in a UTF-8 text file. Pass the sha256 from Read as expected_hash.";
 
   inputSchema = {
     type: "object",
     properties: {
       file_path: { type: "string" },
-      old_string: { type: "string" },
+      old_string: { type: "string", minLength: 1 },
       new_string: { type: "string" },
+      expected_hash: {
+        type: "string",
+        pattern: "^[A-Fa-f0-9]{64}$",
+      },
     },
     required: ["file_path", "old_string", "new_string"],
     additionalProperties: false,
@@ -58,48 +68,100 @@ export class EditTool implements Tool {
     }
 
     const filePath = args.file_path;
-    const absPath = this.workspace.resolve(filePath);
-    const info = await stat(absPath).catch(() => null);
 
-    if (!info) {
-      return { ok: false, content: `File not found: ${filePath}` };
-    }
+    try {
+      const snapshot = await readTextFileSnapshot(this.workspace, filePath, {
+        forEdit: true,
+        signal: context?.signal,
+      });
+      const expectedHash =
+        typeof args.expected_hash === "string"
+          ? args.expected_hash.toLowerCase()
+          : undefined;
 
-    if (!info.isFile()) {
-      return { ok: false, content: `Not a file: ${filePath}` };
-    }
+      if (expectedHash && expectedHash !== snapshot.hash) {
+        throw new FileOperationError("conflict", true, {
+          path: filePath,
+          reason: "expected_hash_mismatch",
+          expectedHash,
+          actualHash: snapshot.hash,
+        });
+      }
 
-    await this.workspace.assertRealPathWithin(absPath);
+      const oldString = adaptLineEndings(
+        args.old_string,
+        snapshot.lineEnding,
+      );
+      const newString = adaptLineEndings(
+        args.new_string,
+        snapshot.lineEnding,
+      );
+      const content = snapshot.text;
+      const count = content.split(oldString).length - 1;
 
-    const content = await readFile(absPath, "utf8");
-    const count = content.split(args.old_string).length - 1;
+      if (count === 0) {
+        return {
+          ok: false,
+          content: "old_string not found. Read the file again before editing.",
+          data: {
+            code: "conflict",
+            retryable: true,
+            details: { reason: "old_string_not_found" },
+          },
+        };
+      }
 
-    if (count === 0) {
+      if (count > 1) {
+        return {
+          ok: false,
+          content: `old_string matched ${count} times. Provide a more specific old_string.`,
+          data: {
+            code: "conflict",
+            retryable: true,
+            details: { reason: "old_string_not_unique", count },
+          },
+        };
+      }
+
+      const newContent = content.replace(oldString, newString);
+      throwIfCancelled(context?.signal);
+      const updated = await atomicReplaceTextFile(snapshot, newContent, {
+        signal: context?.signal,
+      });
+
+      const diff = unifiedDiff(content, newContent, filePath);
+
       return {
-        ok: false,
-        content: "old_string not found. Read the file again before editing.",
-        data: { reason: "old_string_not_found" },
+        ok: true,
+        content: `Edited ${filePath}:\n\n${diff}`,
+        data: {
+          path: filePath,
+          diff,
+          previousSha256: snapshot.hash,
+          sha256: updated.hash,
+          size: updated.size,
+          lineEnding: updated.lineEnding,
+          mode: updated.mode,
+          bom: updated.bom,
+        },
       };
+    } catch (error: unknown) {
+      return fileOperationFailure(error);
     }
-
-    if (count > 1) {
-      return {
-        ok: false,
-        content: `old_string matched ${count} times. Provide a more specific old_string.`,
-        data: { reason: "old_string_not_unique", count },
-      };
-    }
-
-    const newContent = content.replace(args.old_string, args.new_string);
-    throwIfCancelled(context?.signal);
-    await writeFile(absPath, newContent, "utf8");
-
-    const diff = unifiedDiff(content, newContent, filePath);
-
-    return {
-      ok: true,
-      content: `Edited ${filePath}:\n\n${diff}`,
-      data: { path: filePath, diff },
-    };
   }
+}
+
+function adaptLineEndings(
+  value: string,
+  lineEnding: "none" | "lf" | "crlf" | "mixed",
+): string {
+  if (lineEnding === "crlf") {
+    return value.replace(/\r\n|\r|\n/g, "\r\n");
+  }
+
+  if (lineEnding === "lf") {
+    return value.replace(/\r\n/g, "\n");
+  }
+
+  return value;
 }

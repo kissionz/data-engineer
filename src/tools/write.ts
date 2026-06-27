@@ -1,16 +1,17 @@
-import { mkdir, stat, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { throwIfCancelled } from "../agent/cancellation.js";
+import { atomicCreateTextFile } from "../runtime/textFile.js";
 import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
   ToolExecutionResult,
 } from "./base.js";
+import { fileOperationFailure } from "./fileErrors.js";
 
 export class WriteTool implements Tool {
   name = "Write";
-  description = "Create a new text file. Existing files cannot be overwritten.";
+  description =
+    "Atomically create a UTF-8 text file in an existing workspace directory. Existing files cannot be overwritten.";
 
   inputSchema = {
     type: "object",
@@ -37,30 +38,31 @@ export class WriteTool implements Tool {
     }
 
     const filePath = args.file_path;
-    const absPath = this.workspace.resolve(filePath);
-    const exists = await stat(absPath).then(
-      () => true,
-      () => false,
-    );
 
-    if (exists) {
+    try {
+      throwIfCancelled(context?.signal);
+      const created = await atomicCreateTextFile(
+        this.workspace,
+        filePath,
+        args.content,
+        { signal: context?.signal },
+      );
+
       return {
-        ok: false,
-        content: `File already exists: ${filePath}. Use Edit to update it.`,
-        data: { reason: "file_exists", path: filePath },
+        ok: true,
+        content: `Created file: ${filePath}`,
+        data: {
+          operation: "create",
+          path: filePath,
+          sha256: created.hash,
+          size: created.size,
+          lineEnding: created.lineEnding,
+          mode: created.mode,
+          bom: created.bom,
+        },
       };
+    } catch (error: unknown) {
+      return fileOperationFailure(error);
     }
-
-    await this.workspace.assertCreatablePathWithin(absPath);
-    throwIfCancelled(context?.signal);
-    await mkdir(path.dirname(absPath), { recursive: true });
-    throwIfCancelled(context?.signal);
-    await writeFile(absPath, args.content, { encoding: "utf8", flag: "wx" });
-
-    return {
-      ok: true,
-      content: `Created file: ${filePath}`,
-      data: { operation: "create", path: filePath },
-    };
   }
 }

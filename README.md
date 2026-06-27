@@ -15,6 +15,7 @@ This P0 implementation includes:
 - Agent loop with model tool-call continuation
 - Append-only session event log
 - Workspace path boundary checks
+- Atomic UTF-8 file writes with SHA-256 conflict detection
 - Read, Grep, Glob, Write, Edit, Bash, Git status/diff, and Todo tools
 - Explicit, read-only project Skill discovery and loading
 - Tool registry
@@ -135,6 +136,21 @@ When approval is required, you can choose:
 Session approvals are kept only in memory until the current CLI process exits. `Edit` approvals apply to later edit tool calls in the same session. `Bash` approvals are grouped by command family, such as `npm` or `git`, so approving `npm test` for the session also allows later `npm run build` without another prompt. Dangerous commands and denied paths are still blocked before approval.
 
 Model text is streamed to the terminal as it arrives. Tool calls show only a compact action summary and execution status; complete arguments and results remain in the session log for model continuity and diagnostics.
+
+`Read` reports the full file SHA-256, byte size, UTF-8 BOM, line-ending style,
+and mode even when the displayed lines are paginated. `Edit` accepts that hash
+as `expected_hash`; stale hashes, concurrent changes, binary files, invalid
+UTF-8, oversized files, and symlink write targets fail without replacing the
+target. `Edit` preserves BOM, line endings, and ordinary permission bits through
+a same-folder temporary file and atomic rename; setuid/setgid/sticky bits are
+intentionally not restored. Create-only `Write` publishes a complete temporary
+file with an atomic no-overwrite hard link and requires its parent directory to
+already exist.
+
+The runtime rechecks file identity and content immediately before publishing,
+but portable Node.js does not expose an atomic compare-and-swap rename against
+non-cooperating external writers. Avoid editing the same file concurrently from
+another process; use `--worktree` for isolated high-risk work.
 
 Session logs and their task todos are persisted separately under `.harness/sessions/` and `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
 

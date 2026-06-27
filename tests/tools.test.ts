@@ -1,9 +1,16 @@
 import {
+  access,
+  chmod,
+  mkdir,
   mkdtemp,
   readFile,
+  rename,
+  stat,
   symlink,
+  unlink,
   writeFile,
 } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -38,6 +45,35 @@ describe("P0 tools", () => {
 
     expect(result.ok).toBe(true);
     expect(result.content).toContain("2 | two");
+    expect(result.data).toMatchObject({
+      sha256: createHash("sha256")
+        .update("one\ntwo\nthree")
+        .digest("hex"),
+      size: 13,
+      encoding: "utf-8",
+      bom: false,
+      lineEnding: "lf",
+    });
+  });
+
+  it("returns the same full-file hash for paginated reads", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    await writeFile(path.join(root, "sample.txt"), "one\ntwo\nthree", "utf8");
+    const tool = new ReadTool(new Workspace(root));
+
+    const first = await tool.execute({
+      file_path: "sample.txt",
+      offset: 0,
+      limit: 1,
+    });
+    const last = await tool.execute({
+      file_path: "sample.txt",
+      offset: 2,
+      limit: 1,
+    });
+
+    expect(first.data?.sha256).toBe(last.data?.sha256);
+    expect(first.data?.truncated).toBe(true);
   });
 
   it("edits only unique exact strings", async () => {
@@ -55,8 +91,208 @@ describe("P0 tools", () => {
     expect(await readFile(filePath, "utf8")).toBe("hello agent");
   });
 
+  it("rejects a stale expected hash without changing the file", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const filePath = path.join(root, "sample.txt");
+    await writeFile(filePath, "first version", "utf8");
+    const workspace = new Workspace(root);
+    const read = await new ReadTool(workspace).execute({
+      file_path: "sample.txt",
+    });
+    await writeFile(filePath, "external version", "utf8");
+
+    const result = await new EditTool(workspace).execute({
+      file_path: "sample.txt",
+      old_string: "version",
+      new_string: "change",
+      expected_hash: read.data?.sha256,
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      data: {
+        code: "conflict",
+        retryable: true,
+        details: { reason: "expected_hash_mismatch" },
+      },
+    });
+    expect(await readFile(filePath, "utf8")).toBe("external version");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "preserves UTF-8 BOM, CRLF, and executable mode",
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+      const filePath = path.join(root, "script.txt");
+      const original = Buffer.concat([
+        Buffer.from([0xef, 0xbb, 0xbf]),
+        Buffer.from("alpha\r\nbeta\r\n"),
+      ]);
+      await writeFile(filePath, original);
+      await chmod(filePath, 0o755);
+      const workspace = new Workspace(root);
+      const read = await new ReadTool(workspace).execute({
+        file_path: "script.txt",
+      });
+
+      const result = await new EditTool(workspace).execute({
+        file_path: "script.txt",
+        old_string: "alpha\nbeta",
+        new_string: "one\ntwo",
+        expected_hash: read.data?.sha256,
+      });
+      const updated = await readFile(filePath);
+
+      expect(result.ok).toBe(true);
+      expect(updated.subarray(0, 3)).toEqual(
+        Buffer.from([0xef, 0xbb, 0xbf]),
+      );
+      expect(updated.subarray(3).toString("utf8")).toBe("one\r\ntwo\r\n");
+      expect((await stat(filePath)).mode & 0o777).toBe(0o755);
+    },
+  );
+
+  it("allows only one concurrent edit from the same snapshot", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const filePath = path.join(root, "race.txt");
+    await writeFile(filePath, "base", "utf8");
+    const workspace = new Workspace(root);
+    const read = await new ReadTool(workspace).execute({
+      file_path: "race.txt",
+    });
+    const edit = new EditTool(workspace);
+
+    const results = await Promise.all([
+      edit.execute({
+        file_path: "race.txt",
+        old_string: "base",
+        new_string: "one",
+        expected_hash: read.data?.sha256,
+      }),
+      edit.execute({
+        file_path: "race.txt",
+        old_string: "base",
+        new_string: "two",
+        expected_hash: read.data?.sha256,
+      }),
+    ]);
+
+    expect(results.filter((result) => result.ok)).toHaveLength(1);
+    expect(results.filter((result) => !result.ok)).toContainEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({ code: "conflict" }),
+      }),
+    );
+    expect(["one", "two"]).toContain(await readFile(filePath, "utf8"));
+  });
+
+  it("rejects binary files without changing their bytes", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const bytes = Buffer.from([0xff, 0x00, 0x41]);
+    await writeFile(path.join(root, "binary.dat"), bytes);
+    const workspace = new Workspace(root);
+
+    const read = await new ReadTool(workspace).execute({
+      file_path: "binary.dat",
+    });
+    const edit = await new EditTool(workspace).execute({
+      file_path: "binary.dat",
+      old_string: "A",
+      new_string: "B",
+    });
+
+    expect(read.data).toMatchObject({ code: "binary_file" });
+    expect(edit.data).toMatchObject({ code: "binary_file" });
+    expect(await readFile(path.join(root, "binary.dat"))).toEqual(bytes);
+  });
+
+  it("detects a target swapped to an external symlink before reading", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "harness-outside-"));
+    const targetPath = path.join(root, "target.txt");
+    const outsidePath = path.join(outside, "secret.txt");
+    await writeFile(targetPath, "safe", "utf8");
+    await writeFile(outsidePath, "outside secret", "utf8");
+    const workspace = new SwappingWorkspace(root, async (absolutePath) => {
+      if (absolutePath !== targetPath) {
+        return;
+      }
+      await unlink(targetPath);
+      await symlink(outsidePath, targetPath);
+    });
+
+    const result = await new ReadTool(workspace).execute({
+      file_path: "target.txt",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      data: { code: "conflict" },
+    });
+    expect(result.content).not.toContain("outside secret");
+    expect(await readFile(outsidePath, "utf8")).toBe("outside secret");
+  });
+
+  it("does not edit an external file after a symlink swap", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "harness-outside-"));
+    const targetPath = path.join(root, "target.txt");
+    const outsidePath = path.join(outside, "secret.txt");
+    await writeFile(targetPath, "safe token", "utf8");
+    await writeFile(outsidePath, "outside token", "utf8");
+    const workspace = new SwappingWorkspace(root, async (absolutePath) => {
+      if (absolutePath !== targetPath) {
+        return;
+      }
+      await unlink(targetPath);
+      await symlink(outsidePath, targetPath);
+    });
+
+    const result = await new EditTool(workspace).execute({
+      file_path: "target.txt",
+      old_string: "token",
+      new_string: "changed",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      data: { code: "conflict" },
+    });
+    expect(await readFile(outsidePath, "utf8")).toBe("outside token");
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "does not publish a new file after its parent is swapped",
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+      const outside = await mkdtemp(path.join(os.tmpdir(), "harness-outside-"));
+      const parentPath = path.join(root, "nested");
+      await mkdir(parentPath);
+      const workspace = new SwappingWorkspace(root, async (absolutePath) => {
+        if (absolutePath !== parentPath) {
+          return;
+        }
+        await rename(parentPath, path.join(root, "original-parent"));
+        await symlink(outside, parentPath, "dir");
+      });
+
+      const result = await new WriteTool(workspace).execute({
+        file_path: "nested/new.txt",
+        content: "must stay inside",
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        data: { code: "conflict" },
+      });
+      await expect(access(path.join(outside, "new.txt"))).rejects.toThrow();
+    },
+  );
+
+
   it("creates new files without overwriting existing files", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    await mkdir(path.join(root, "nested"));
     const tool = new WriteTool(new Workspace(root));
 
     const created = await tool.execute({
@@ -70,7 +306,11 @@ describe("P0 tools", () => {
 
     expect(created.ok).toBe(true);
     expect(overwritten.ok).toBe(false);
-    expect(overwritten.data).toMatchObject({ reason: "file_exists" });
+    expect(overwritten.data).toMatchObject({
+      code: "conflict",
+      retryable: true,
+      details: { reason: "already_exists" },
+    });
     expect(await readFile(path.join(root, "nested/sample.txt"), "utf8")).toBe(
       "hello",
     );
@@ -119,7 +359,11 @@ describe("P0 tools", () => {
     });
 
     expect(result.ok).toBe(false);
-    expect(result.data).toMatchObject({ reason: "old_string_not_unique" });
+    expect(result.data).toMatchObject({
+      code: "conflict",
+      retryable: true,
+      details: { reason: "old_string_not_unique", count: 2 },
+    });
   });
 
   it("runs bash through the command executor", async () => {
@@ -332,3 +576,23 @@ describe("P0 tools", () => {
     },
   );
 });
+
+class SwappingWorkspace extends Workspace {
+  private swapped = false;
+
+  constructor(
+    root: string,
+    private readonly swap: (absolutePath: string) => Promise<void>,
+  ) {
+    super(root);
+  }
+
+  override async assertRealPathWithin(absolutePath: string): Promise<void> {
+    await super.assertRealPathWithin(absolutePath);
+
+    if (!this.swapped) {
+      this.swapped = true;
+      await this.swap(absolutePath);
+    }
+  }
+}
