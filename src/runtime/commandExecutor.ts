@@ -4,6 +4,8 @@ export interface CommandResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  cancelled: boolean;
+  cleanupFailed?: boolean;
   outputTruncated?: boolean;
 }
 
@@ -13,6 +15,7 @@ export interface CommandOptions {
   cwd: string;
   timeoutMs: number;
   maxOutputChars?: number;
+  signal?: AbortSignal;
 }
 
 export interface CommandExecutor {

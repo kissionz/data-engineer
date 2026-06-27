@@ -11,6 +11,11 @@ import type { SessionCompactor } from "./compaction.js";
 import type { AgentReporter } from "./reporter.js";
 import { silentReporter } from "./reporter.js";
 import type { SessionStore } from "./session.js";
+import {
+  CANCELLED_TEXT,
+  isCancellationError,
+  throwIfCancelled,
+} from "./cancellation.js";
 
 export class AgentLoop {
   private readonly sessionApprovals = new Set<string>();
@@ -28,208 +33,278 @@ export class AgentLoop {
     private readonly hooks?: HookManager,
   ) {}
 
-  async run(userTask: string): Promise<string> {
-    await this.compactor?.compactIfNeeded();
-    await this.session.append({
-      type: "user_message",
-      text: userTask,
-    });
+  async run(userTask: string, signal?: AbortSignal): Promise<string> {
+    const pendingToolCalls = new Map<
+      string,
+      { id: string; name: string; args: Record<string, unknown> }
+    >();
 
-    for (let turn = 0; turn < this.maxTurns; turn += 1) {
-      let events = await this.session.load();
-
-      if (await this.ensureGitDiffReviewed(events)) {
-        events = await this.session.load();
-      }
-
-      const messages = await this.context.build(events);
-
-      let receivedText = false;
-      let bufferedText = "";
-      const deferStreaming = this.hooks?.has("BeforeAgentStop") ?? false;
-      const response = await this.model
-        .complete({
-          messages,
-          tools: this.tools.schemas(),
-          onTextDelta: (delta) => {
-            receivedText = true;
-            if (deferStreaming) {
-              bufferedText += delta;
-            } else {
-              this.reporter.onTextDelta(delta);
-            }
-          },
-        })
-        .finally(() => {
-          if (!deferStreaming) {
-            this.reporter.onTextEnd();
-          }
-        });
-
-      const toolCalls = response.toolCalls ?? [];
-
-      if (toolCalls.length === 0 && response.finalText) {
-        const stopBlock = await this.beforeAgentStop(
-          response.finalText,
-          events,
-        );
-
-        if (stopBlock) {
-          await this.session.append({
-            type: "harness_message",
-            kind: "stop_block",
-            text: stopBlock,
-          });
-          continue;
-        }
-
-        if (deferStreaming) {
-          this.reporter.onTextDelta(
-            receivedText ? bufferedText : response.finalText,
-          );
-          this.reporter.onTextEnd();
-        } else if (!receivedText) {
-          this.reporter.onTextDelta(response.finalText);
-          this.reporter.onTextEnd();
-        }
-
-        await this.session.append({
-          type: "assistant_final",
-          text: response.finalText,
-        });
-
-        return response.finalText;
-      }
-
-      if (deferStreaming && bufferedText) {
-        this.reporter.onTextDelta(bufferedText);
-        this.reporter.onTextEnd();
-      }
-
-      if (toolCalls.length === 0) {
-        const text = "Model returned neither final text nor tool calls.";
-        await this.session.append({ type: "assistant_final", text });
-        return text;
-      }
-
+    try {
+      throwIfCancelled(signal);
+      await this.compactor?.compactIfNeeded();
       await this.session.append({
-        type: "assistant_tool_calls",
-        toolCalls,
+        type: "user_message",
+        text: userTask,
       });
 
-      for (const call of toolCalls) {
-        const validation = this.tools.validate(call.name, call.args);
-        let hookBlock;
-        let result: ToolExecutionResult;
+      for (let turn = 0; turn < this.maxTurns; turn += 1) {
+        throwIfCancelled(signal);
+        let events = await this.session.load();
 
-        if (!validation.ok) {
-          this.reporter.onToolStatus(call, "failed");
-          result = {
-            ok: false,
-            content: `Invalid tool call:\n${validation.errors.join("\n")}`,
-            data: {
-              reason:
-                "reason" in validation
-                  ? validation.reason
-                  : "invalid_tool_arguments",
-              errors: validation.errors,
-            },
-          };
-        } else {
-          try {
-            hookBlock = await this.hooks?.emit("BeforeToolUse", {
-              toolCall: call,
-            });
-          } catch (error: unknown) {
-            hookBlock = {
-              decision: "block" as const,
-              reason: `BeforeToolUse hook failed: ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-            };
-          }
-          const check = this.permissions.check(call);
-
-          if (hookBlock?.decision === "block") {
-            this.reporter.onToolStatus(call, "denied");
-            result = {
-              ok: false,
-              content: `Blocked by hook: ${hookBlock.reason ?? "No reason provided."}`,
-              data: {
-                reason: "hook_blocked",
-                hookData: hookBlock.data,
-              },
-            };
-          } else if (check.decision === "deny") {
-            this.reporter.onToolStatus(call, "denied");
-            result = {
-              ok: false,
-              content: `Permission denied: ${check.reason}`,
-              data: { reason: check.reason },
-            };
-          } else if (
-            check.decision === "ask" &&
-            !this.hasSessionApproval(call)
-          ) {
-            const approval = await this.approve(call, check.reason);
-
-            if (approval !== "reject") {
-              this.reporter.onToolStatus(call, "running");
-            }
-            result = await this.executeApprovedTool(
-              call.name,
-              call.args,
-              approval,
-              call,
-            );
-          } else {
-            this.reporter.onToolStatus(call, "running");
-            result = await this.executeTool(call.name, call.args);
-          }
-
-          if (!hookBlock && check.decision !== "deny") {
-            this.reporter.onToolStatus(
-              call,
-              result.data?.reason === "user_rejected"
-                ? "rejected"
-                : result.ok
-                  ? "succeeded"
-                  : "failed",
-            );
-          }
+        if (await this.ensureGitDiffReviewed(events, signal)) {
+          events = await this.session.load();
         }
 
-        result = await this.emitObservationalHook("AfterToolUse", call, result);
+        const messages = await this.context.build(events);
 
-        if (result.ok && (call.name === "Edit" || call.name === "Write")) {
-          result = await this.emitObservationalHook("AfterEdit", call, result);
+        let receivedText = false;
+        let bufferedText = "";
+        const deferStreaming = this.hooks?.has("BeforeAgentStop") ?? false;
+        const response = await this.model
+          .complete({
+            messages,
+            tools: this.tools.schemas(),
+            onTextDelta: (delta) => {
+              receivedText = true;
+              if (deferStreaming) {
+                bufferedText += delta;
+              } else {
+                this.reporter.onTextDelta(delta);
+              }
+            },
+            signal,
+          })
+          .finally(() => {
+            if (!deferStreaming) {
+              this.reporter.onTextEnd();
+            }
+          });
+        throwIfCancelled(signal);
+
+        const toolCalls = response.toolCalls ?? [];
+
+        if (toolCalls.length === 0 && response.finalText) {
+          const stopBlock = await this.beforeAgentStop(
+            response.finalText,
+            events,
+            signal,
+          );
+          throwIfCancelled(signal);
+
+          if (stopBlock) {
+            await this.session.append({
+              type: "harness_message",
+              kind: "stop_block",
+              text: stopBlock,
+            });
+            continue;
+          }
+
+          if (deferStreaming) {
+            this.reporter.onTextDelta(
+              receivedText ? bufferedText : response.finalText,
+            );
+            this.reporter.onTextEnd();
+          } else if (!receivedText) {
+            this.reporter.onTextDelta(response.finalText);
+            this.reporter.onTextEnd();
+          }
+
+          await this.session.append({
+            type: "assistant_final",
+            text: response.finalText,
+          });
+
+          return response.finalText;
+        }
+
+        if (deferStreaming && bufferedText) {
+          this.reporter.onTextDelta(bufferedText);
+          this.reporter.onTextEnd();
+        }
+
+        if (toolCalls.length === 0) {
+          const text = "Model returned neither final text nor tool calls.";
+          await this.session.append({ type: "assistant_final", text });
+          return text;
         }
 
         await this.session.append({
-          type: "tool_result",
-          toolCallId: call.id,
-          name: call.name,
-          ok: result.ok,
-          content: result.content,
-          data: result.data,
+          type: "assistant_tool_calls",
+          toolCalls,
         });
-      }
-    }
+        for (const call of toolCalls) {
+          pendingToolCalls.set(call.id, call);
+        }
 
-    const text = "Stopped: max turns reached.";
-    await this.session.append({ type: "assistant_final", text });
-    return text;
+        for (const call of toolCalls) {
+          throwIfCancelled(signal);
+          const validation = this.tools.validate(call.name, call.args);
+          let hookBlock;
+          let result: ToolExecutionResult;
+
+          if (!validation.ok) {
+            this.reporter.onToolStatus(call, "failed");
+            result = {
+              ok: false,
+              content: `Invalid tool call:\n${validation.errors.join("\n")}`,
+              data: {
+                reason:
+                  "reason" in validation
+                    ? validation.reason
+                    : "invalid_tool_arguments",
+                errors: validation.errors,
+              },
+            };
+          } else {
+            try {
+              hookBlock = await this.hooks?.emit(
+                "BeforeToolUse",
+                { toolCall: call },
+                signal,
+              );
+            } catch (error: unknown) {
+              if (isCancellationError(error, signal)) {
+                throw error;
+              }
+
+              hookBlock = {
+                decision: "block" as const,
+                reason: `BeforeToolUse hook failed: ${
+                  error instanceof Error ? error.message : String(error)
+                }`,
+              };
+            }
+            const check = this.permissions.check(call);
+
+            if (hookBlock?.decision === "block") {
+              this.reporter.onToolStatus(call, "denied");
+              result = {
+                ok: false,
+                content: `Blocked by hook: ${hookBlock.reason ?? "No reason provided."}`,
+                data: {
+                  reason: "hook_blocked",
+                  hookData: hookBlock.data,
+                },
+              };
+            } else if (check.decision === "deny") {
+              this.reporter.onToolStatus(call, "denied");
+              result = {
+                ok: false,
+                content: `Permission denied: ${check.reason}`,
+                data: { reason: check.reason },
+              };
+            } else if (
+              check.decision === "ask" &&
+              !this.hasSessionApproval(call)
+            ) {
+              const approval = await this.approve(call, check.reason, signal);
+              throwIfCancelled(signal);
+
+              if (approval !== "reject") {
+                this.reporter.onToolStatus(call, "running");
+              }
+              result = await this.executeApprovedTool(
+                call.name,
+                call.args,
+                approval,
+                call,
+                signal,
+              );
+            } else {
+              this.reporter.onToolStatus(call, "running");
+              result = await this.executeTool(
+                call.name,
+                call.args,
+                call.id,
+                signal,
+              );
+            }
+
+            if (!hookBlock && check.decision !== "deny") {
+              this.reporter.onToolStatus(
+                call,
+                result.data?.reason === "user_rejected"
+                  ? "rejected"
+                  : result.ok
+                    ? "succeeded"
+                    : "failed",
+              );
+            }
+          }
+
+          if (!signal?.aborted) {
+            result = await this.emitObservationalHook(
+              "AfterToolUse",
+              call,
+              result,
+              signal,
+            );
+
+            if (result.ok && (call.name === "Edit" || call.name === "Write")) {
+              result = await this.emitObservationalHook(
+                "AfterEdit",
+                call,
+                result,
+                signal,
+              );
+            }
+          }
+
+          await this.session.append({
+            type: "tool_result",
+            toolCallId: call.id,
+            name: call.name,
+            ok: result.ok,
+            content: result.content,
+            data: result.data,
+          });
+          pendingToolCalls.delete(call.id);
+          throwIfCancelled(signal);
+        }
+      }
+
+      const text = "Stopped: max turns reached.";
+      await this.session.append({ type: "assistant_final", text });
+      return text;
+    } catch (error: unknown) {
+      this.reporter.onTextEnd();
+
+      if (isCancellationError(error, signal)) {
+        await this.appendInterruptedToolResults(
+          pendingToolCalls,
+          "cancelled",
+        );
+        await this.appendTerminalEvent({
+          type: "session_cancelled",
+          reason: CANCELLED_TEXT,
+        });
+        return CANCELLED_TEXT;
+      }
+
+      await this.appendInterruptedToolResults(pendingToolCalls, "interrupted");
+      await this.appendTerminalEvent({
+        type: "session_failed",
+        message: safeErrorMessage(error),
+      });
+      throw error;
+    }
   }
 
   private async emitObservationalHook(
     eventName: Extract<HookEventName, "AfterToolUse" | "AfterEdit">,
     toolCall: { id: string; name: string; args: Record<string, unknown> },
     result: ToolExecutionResult,
+    signal?: AbortSignal,
   ): Promise<ToolExecutionResult> {
     try {
-      await this.hooks?.emit(eventName, { toolCall, result });
+      await this.hooks?.emit(eventName, { toolCall, result }, signal);
       return result;
     } catch (error: unknown) {
+      if (isCancellationError(error, signal)) {
+        throw error;
+      }
+
       const message = error instanceof Error ? error.message : String(error);
       return {
         ...result,
@@ -244,6 +319,7 @@ export class AgentLoop {
 
   private async ensureGitDiffReviewed(
     events: Awaited<ReturnType<SessionStore["load"]>>,
+    signal?: AbortSignal,
   ): Promise<boolean> {
     if (!this.tools.has("GitDiff") || !needsGitDiffReview(events)) {
       return false;
@@ -255,7 +331,12 @@ export class AgentLoop {
       args: {},
     };
     this.reporter.onToolStatus(call, "running");
-    const result = await this.executeTool(call.name, call.args);
+    const result = await this.executeTool(
+      call.name,
+      call.args,
+      call.id,
+      signal,
+    );
     this.reporter.onToolStatus(call, result.ok ? "succeeded" : "failed");
     await this.session.append({
       type: "harness_message",
@@ -273,16 +354,21 @@ export class AgentLoop {
   private async beforeAgentStop(
     finalText: string,
     events: Awaited<ReturnType<SessionStore["load"]>>,
+    signal?: AbortSignal,
   ): Promise<string | null> {
     try {
       const result = await this.hooks?.emit("BeforeAgentStop", {
         finalText,
         events,
-      });
+      }, signal);
       return result?.decision === "block"
         ? result.reason ?? "Agent stop blocked by hook."
         : null;
     } catch (error: unknown) {
+      if (isCancellationError(error, signal)) {
+        throw error;
+      }
+
       return `BeforeAgentStop hook failed: ${
         error instanceof Error ? error.message : String(error)
       }`;
@@ -292,9 +378,11 @@ export class AgentLoop {
   private async executeTool(
     name: string,
     args: Record<string, unknown>,
+    toolCallId: string,
+    signal?: AbortSignal,
   ): Promise<ToolExecutionResult> {
     try {
-      return await this.tools.execute(name, args);
+      return await this.tools.execute(name, args, { signal, toolCallId });
     } catch (error: unknown) {
       return {
         ok: false,
@@ -307,7 +395,8 @@ export class AgentLoop {
     name: string,
     args: Record<string, unknown>,
     approval: ApprovalDecision,
-    call: { name: string; args: Record<string, unknown> },
+    call: { id: string; name: string; args: Record<string, unknown> },
+    signal?: AbortSignal,
   ): Promise<ToolExecutionResult> {
     if (approval === "reject") {
       return {
@@ -321,7 +410,49 @@ export class AgentLoop {
       this.sessionApprovals.add(sessionApprovalKey(call));
     }
 
-    return this.executeTool(name, args);
+    return this.executeTool(name, args, call.id, signal);
+  }
+
+  private async appendTerminalEvent(
+    event:
+      | { type: "session_cancelled"; reason: string }
+      | { type: "session_failed"; message: string },
+  ): Promise<void> {
+    try {
+      await this.session.append(event);
+    } catch {
+      // Preserve the original cancellation or failure when persistence is unavailable.
+    }
+  }
+
+  private async appendInterruptedToolResults(
+    pending: Map<
+      string,
+      { id: string; name: string; args: Record<string, unknown> }
+    >,
+    code: "cancelled" | "interrupted",
+  ): Promise<void> {
+    for (const call of pending.values()) {
+      try {
+        await this.session.append({
+          type: "tool_result",
+          toolCallId: call.id,
+          name: call.name,
+          ok: false,
+          content:
+            code === "cancelled"
+              ? "Tool call cancelled before completion."
+              : "Tool call interrupted before completion.",
+          data: {
+            code,
+            retryable: false,
+          },
+        });
+      } catch {
+        // ContextBuilder also repairs missing tool outputs during replay.
+      }
+    }
+    pending.clear();
   }
 
   private hasSessionApproval(call: {
@@ -381,4 +512,12 @@ function needsGitDiffReview(
   });
 
   return latestModification > latestReview;
+}
+
+function safeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.replaceAll(/\p{Cc}/gu, " ").trim();
+  return normalized.length <= 2_000
+    ? normalized
+    : `${normalized.slice(0, 1_997)}...`;
 }

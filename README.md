@@ -21,6 +21,7 @@ This P0 implementation includes:
 - Permission gate with allow / ask / deny decisions
 - Real OpenAI Responses API model client by default
 - Streaming model output with concise tool status lines
+- End-to-end task cancellation across model requests and child processes
 - Append-only context compaction and deterministic tool lifecycle hooks
 - Automatic post-edit Git diff review
 - Docker-isolated Bash with explicit host/off modes
@@ -61,6 +62,11 @@ Interactive session commands:
 /sessions
 /exit
 ```
+
+While a task is running, press `Ctrl+C` once to cancel it gracefully. After
+cleanup, type `y` to terminate the session or `n` to continue. Press `Ctrl+C`
+again while cancellation is pending to exit immediately. In one-shot
+`--task` mode, a graceful cancellation exits with status 130.
 
 ## Environment Setup
 
@@ -131,6 +137,12 @@ Session approvals are kept only in memory until the current CLI process exits. `
 Model text is streamed to the terminal as it arrives. Tool calls show only a compact action summary and execution status; complete arguments and results remain in the session log for model continuity and diagnostics.
 
 Session logs and their task todos are persisted separately under `.harness/sessions/` and `.harness/todos/`. They are task execution state, not long-term user memory. Internal `rg` and `git` tools use argument-based process execution for Windows and Unix compatibility; only the explicit `Bash` tool invokes a shell.
+
+The same task `AbortSignal` is passed through the model request, tool registry,
+command-backed tools, review subagent, and local or Docker executors. Local
+commands terminate the complete process tree with a grace period before forced
+cleanup. Cancellation and task failures are recorded separately in the session;
+a model or transport error ends only the current interactive turn.
 
 Long sessions retain the full append-only event log. Once enough new events accumulate, a bounded factual summary is appended and used with recent events for model context. `BeforeToolUse`, `AfterToolUse`, `AfterEdit`, and `BeforeAgentStop` hooks provide deterministic interception and observation; the default write hook blocks sensitive paths and oversized single-file writes.
 

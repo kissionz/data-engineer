@@ -1,4 +1,5 @@
 import { select } from "@inquirer/prompts";
+import { AgentCancelledError } from "../agent/cancellation.js";
 import type { ToolCall } from "../agent/types.js";
 import {
   summarizeApproval,
@@ -10,9 +11,14 @@ export type ApprovalDecision = "reject" | "allow_once" | "allow_session";
 export type ApprovalFunction = (
   call: ToolCall,
   reason: string,
+  signal?: AbortSignal,
 ) => Promise<ApprovalDecision>;
 
-export const askUserApproval: ApprovalFunction = async (call, reason) => {
+export const askUserApproval: ApprovalFunction = async (
+  call,
+  reason,
+  signal,
+) => {
   console.log("\nTool approval required");
   console.log(`Action: ${summarizeToolCall(call)}`);
   const detail = summarizeApproval(call);
@@ -22,36 +28,52 @@ export const askUserApproval: ApprovalFunction = async (call, reason) => {
   }
   console.log(`Reason: ${reason}`);
 
-  return select({
-    message: "Approve this tool call?",
-    default: "reject" satisfies ApprovalDecision,
-    choices: [
+  try {
+    return await select(
       {
-        name: "Allow once",
-        value: "allow_once" satisfies ApprovalDecision,
-        description: "Approve only this tool call.",
+        message: "Approve this tool call?",
+        default: "reject" satisfies ApprovalDecision,
+        choices: [
+          {
+            name: "Allow once",
+            value: "allow_once" satisfies ApprovalDecision,
+            description: "Approve only this tool call.",
+          },
+          {
+            name: "Allow for this session",
+            value: "allow_session" satisfies ApprovalDecision,
+            description: sessionScopeDescription(call),
+          },
+          {
+            name: "Reject",
+            value: "reject" satisfies ApprovalDecision,
+            description: "Do not run this tool call.",
+          },
+        ],
       },
-      {
-        name: "Allow for this session",
-        value: "allow_session" satisfies ApprovalDecision,
-        description: sessionScopeDescription(call),
-      },
-      {
-        name: "Reject",
-        value: "reject" satisfies ApprovalDecision,
-        description: "Do not run this tool call.",
-      },
-    ],
-  });
+      { signal },
+    );
+  } catch (error: unknown) {
+    if (
+      error instanceof Error &&
+      ["AbortPromptError", "ExitPromptError"].includes(error.name)
+    ) {
+      throw new AgentCancelledError();
+    }
+
+    throw error;
+  }
 };
 
 export function restoreInputAfterApproval(
   approve: ApprovalFunction,
   resumeInput: () => void,
+  pauseInput: () => void = () => undefined,
 ): ApprovalFunction {
-  return async (call, reason) => {
+  return async (call, reason, signal) => {
+    pauseInput();
     try {
-      return await approve(call, reason);
+      return await approve(call, reason, signal);
     } finally {
       resumeInput();
     }

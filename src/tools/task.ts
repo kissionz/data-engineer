@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { CANCELLED_TEXT } from "../agent/cancellation.js";
 import { AgentLoop } from "../agent/loop.js";
 import { ContextBuilder } from "../agent/context.js";
 import { SessionStore } from "../agent/session.js";
@@ -10,7 +11,11 @@ import type { CommandExecutor } from "../runtime/commandExecutor.js";
 import type { Workspace } from "../runtime/workspace.js";
 import { SkillLoader } from "../skills/loader.js";
 import { CODE_REVIEWER_SPEC } from "../subagents/spec.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
 import { GitDiffTool, GitStatusTool } from "./git.js";
 import { GlobTool } from "./glob.js";
 import { GrepTool } from "./grep.js";
@@ -43,7 +48,10 @@ export class TaskTool implements Tool {
     private readonly maxResultChars = 20_000,
   ) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
     if (
       args.subagent !== CODE_REVIEWER_SPEC.name ||
       typeof args.task !== "string" ||
@@ -79,8 +87,21 @@ export class TaskTool implements Tool {
       new SessionStore(childSessionPath),
       CODE_REVIEWER_SPEC.maxTurns,
       async () => "reject",
-    ).run(args.task.trim());
+    ).run(args.task.trim(), context?.signal);
     const truncated = result.length > this.maxResultChars;
+
+    if (result === CANCELLED_TEXT) {
+      return {
+        ok: false,
+        content: CANCELLED_TEXT,
+        data: {
+          code: "cancelled",
+          retryable: false,
+          subagent: CODE_REVIEWER_SPEC.name,
+          childSessionId,
+        },
+      };
+    }
 
     return {
       ok: true,

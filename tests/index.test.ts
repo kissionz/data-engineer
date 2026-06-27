@@ -39,4 +39,33 @@ describe("restoreInputAfterApproval", () => {
 
     expect(resumeInput).toHaveBeenCalledOnce();
   });
+
+  it("passes cancellation through the approval wrapper", async () => {
+    const controller = new AbortController();
+    const approve: ApprovalFunction = vi.fn().mockResolvedValue("reject");
+    const resumeInput = vi.fn();
+    const pauseInput = vi.fn();
+    const wrapped = restoreInputAfterApproval(
+      approve,
+      resumeInput,
+      pauseInput,
+    );
+
+    await wrapped(
+      call,
+      "File modification requires approval.",
+      controller.signal,
+    );
+
+    expect(approve).toHaveBeenCalledWith(
+      call,
+      "File modification requires approval.",
+      controller.signal,
+    );
+    expect(pauseInput).toHaveBeenCalledOnce();
+    expect(resumeInput).toHaveBeenCalledOnce();
+    expect(pauseInput.mock.invocationCallOrder[0]).toBeLessThan(
+      (approve as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? 0,
+    );
+  });
 });

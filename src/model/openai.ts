@@ -78,6 +78,7 @@ export class OpenAIModel implements ModelClient {
     messages: AgentMessage[];
     tools: Array<Record<string, unknown>>;
     onTextDelta?: (delta: string) => void;
+    signal?: AbortSignal;
   }): Promise<AgentResponse> {
     const response = await this.fetchImpl(`${this.baseUrl}/responses`, {
       method: "POST",
@@ -91,6 +92,7 @@ export class OpenAIModel implements ModelClient {
         tools: options.tools.map(toOpenAITool),
         stream: true,
       }),
+      signal: options.signal,
     });
 
     if (!response.ok) {

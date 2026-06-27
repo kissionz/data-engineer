@@ -39,6 +39,7 @@ export class DockerShellExecutor implements ShellExecutor {
     );
     installExitCleanup();
     activeContainers.add(containerName);
+    let cleanupFailed = false;
 
     try {
       const result = await this.executor.run({
@@ -47,18 +48,33 @@ export class DockerShellExecutor implements ShellExecutor {
         cwd: this.workspace.root,
         timeoutMs: options.timeoutMs,
         maxOutputChars: options.maxOutputChars,
+        signal: options.signal,
       });
 
-      if (result.timedOut) {
-        await this.removeContainer(containerName);
+      if (result.timedOut || result.cancelled) {
+        cleanupFailed = !(await this.removeContainer(containerName));
       }
 
-      return result;
+      return cleanupFailed
+        ? {
+            ...result,
+            ok: false,
+            cleanupFailed: true,
+            stderr: [
+              result.stderr,
+              `Docker container cleanup failed: ${containerName}`,
+            ]
+              .filter(Boolean)
+              .join("\n"),
+          }
+        : result;
     } catch (error: unknown) {
-      await this.removeContainer(containerName);
+      cleanupFailed = !(await this.removeContainer(containerName));
       throw error;
     } finally {
-      activeContainers.delete(containerName);
+      if (!cleanupFailed) {
+        activeContainers.delete(containerName);
+      }
     }
   }
 
@@ -185,14 +201,23 @@ export class DockerShellExecutor implements ShellExecutor {
     return { packageRoots, maskedFiles, maskedDirectories };
   }
 
-  private async removeContainer(containerName: string): Promise<void> {
-    await this.executor.run({
-      command: "docker",
-      args: ["rm", "--force", containerName],
-      cwd: this.workspace.root,
-      timeoutMs: 10_000,
-      maxOutputChars: 5_000,
-    });
+  private async removeContainer(containerName: string): Promise<boolean> {
+    try {
+      const result = await this.executor.run({
+        command: "docker",
+        args: ["rm", "--force", containerName],
+        cwd: this.workspace.root,
+        timeoutMs: 10_000,
+        maxOutputChars: 5_000,
+      });
+      return (
+        result.ok ||
+        /no such container/i.test(`${result.stdout}\n${result.stderr}`)
+      );
+    } catch {
+      // Container cleanup is best effort and must not replace the run result.
+      return false;
+    }
   }
 }
 

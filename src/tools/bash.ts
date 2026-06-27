@@ -1,6 +1,10 @@
 import type { ShellExecutor } from "../runtime/shellExecutor.js";
 import type { Workspace } from "../runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
 
 export class BashTool implements Tool {
   name = "Bash";
@@ -23,7 +27,10 @@ export class BashTool implements Tool {
     private readonly maxOutputChars = 12_000,
   ) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
     if (typeof args.command !== "string") {
       return { ok: false, content: "command must be a string." };
     }
@@ -41,6 +48,7 @@ export class BashTool implements Tool {
       cwd,
       timeoutMs,
       maxOutputChars: this.maxOutputChars,
+      signal: context?.signal,
     });
 
     let output = "";
@@ -64,6 +72,23 @@ export class BashTool implements Tool {
       truncated = true;
     }
 
+    if (result.cancelled) {
+      return {
+        ok: false,
+        content: `Command cancelled.\n\n${output}`,
+        data: {
+          code: "cancelled",
+          retryable: false,
+          command: args.command,
+          exitCode: result.exitCode,
+          timedOut: false,
+          cancelled: true,
+          cleanupFailed: result.cleanupFailed ?? false,
+          truncated,
+        },
+      };
+    }
+
     if (result.timedOut) {
       return {
         ok: false,
@@ -72,6 +97,8 @@ export class BashTool implements Tool {
           command: args.command,
           exitCode: null,
           timedOut: true,
+          cancelled: false,
+          cleanupFailed: result.cleanupFailed ?? false,
           truncated,
         },
       };
@@ -84,6 +111,8 @@ export class BashTool implements Tool {
         command: args.command,
         exitCode: result.exitCode,
         timedOut: false,
+        cancelled: false,
+        cleanupFailed: result.cleanupFailed ?? false,
         truncated,
       },
     };

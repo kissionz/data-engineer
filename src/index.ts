@@ -4,6 +4,7 @@ import { Command } from "commander";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { AgentLoop } from "./agent/loop.js";
+import { CANCELLED_TEXT } from "./agent/cancellation.js";
 import { ContextBuilder } from "./agent/context.js";
 import { SessionCompactor } from "./agent/compaction.js";
 import {
@@ -203,7 +204,7 @@ async function main(): Promise<void> {
 
     console.log(`Session: ${runtime.session.id}`);
     try {
-      await runTask(runtime.agent, opts.task);
+      await runSingleTask(runtime.agent, opts.task);
     } finally {
       await runtime.session.release();
     }
@@ -339,8 +340,10 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     sessionStore,
     options.maxTurns,
     options.interactivePrompt
-      ? restoreInputAfterApproval(askUserApproval, () =>
-          options.interactivePrompt?.resumeInput(),
+      ? restoreInputAfterApproval(
+          askUserApproval,
+          () => options.interactivePrompt?.resumeInput(),
+          () => options.interactivePrompt?.pauseInput(),
         )
       : askUserApproval,
     new ConsoleReporter(),
@@ -349,8 +352,39 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
   );
 }
 
-async function runTask(agent: AgentLoop, task: string): Promise<void> {
-  await agent.run(task);
+async function runTask(
+  agent: AgentLoop,
+  task: string,
+  signal?: AbortSignal,
+): Promise<string> {
+  return agent.run(task, signal);
+}
+
+async function runSingleTask(agent: AgentLoop, task: string): Promise<void> {
+  const controller = new AbortController();
+  let cancellationRequested = false;
+  const handleInterrupt = () => {
+    if (cancellationRequested) {
+      process.exit(130);
+    }
+
+    cancellationRequested = true;
+    console.error(
+      "\nCancelling task gracefully. Press Ctrl+C again to exit immediately.",
+    );
+    controller.abort();
+  };
+  process.on("SIGINT", handleInterrupt);
+
+  try {
+    const result = await runTask(agent, task, controller.signal);
+
+    if (result === CANCELLED_TEXT) {
+      process.exitCode = 130;
+    }
+  } finally {
+    process.off("SIGINT", handleInterrupt);
+  }
 }
 
 async function runInteractiveSession(
@@ -366,10 +400,21 @@ async function runInteractiveSession(
   try {
     while (true) {
       const task = await prompt.question("You ");
+      const terminationDecision = prompt.handleTerminationAnswer(task);
 
-      if (prompt.shouldExitFromAnswer(task)) {
+      if (terminationDecision === "exit") {
         console.log("Bye.");
         return;
+      }
+
+      if (terminationDecision === "continue") {
+        console.log("Continuing session.");
+        continue;
+      }
+
+      if (terminationDecision === "pending") {
+        console.log("Please type y to exit or n to continue.");
+        continue;
       }
 
       const trimmed = task.trim();
@@ -428,7 +473,20 @@ async function runInteractiveSession(
         continue;
       }
 
-      await runTask(runtime.agent, trimmed);
+      const controller = prompt.beginTask();
+      let result: string | undefined;
+
+      try {
+        result = await runTask(runtime.agent, trimmed, controller.signal);
+      } catch (error: unknown) {
+        console.error(`Task failed: ${errorMessage(error)}`);
+      } finally {
+        prompt.endTask(controller);
+      }
+
+      if (result === CANCELLED_TEXT) {
+        prompt.markTaskCancelled();
+      }
     }
   } finally {
     try {
@@ -503,26 +561,13 @@ function parsePositiveInteger(value: string, optionName: string): number {
 }
 
 class InteractivePrompt {
-  private readonly rl = createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: true,
-  });
-
+  private rl: ReturnType<typeof createInterface>;
   private terminationPending = false;
+  private activeTask?: AbortController;
+  private inputSuspended = false;
 
   constructor() {
-    this.rl.on("SIGINT", () => {
-      if (this.terminationPending) {
-        this.close();
-        process.exit(130);
-      }
-
-      this.terminationPending = true;
-      this.rl.write(
-        "\nTerminate session? Type y to exit, n to continue. Press Ctrl+C again to exit immediately.\n",
-      );
-    });
+    this.rl = this.createReadline();
   }
 
   async question(prompt: string): Promise<string> {
@@ -530,37 +575,107 @@ class InteractivePrompt {
   }
 
   resumeInput(): void {
+    if (this.inputSuspended) {
+      this.rl = this.createReadline();
+      this.inputSuspended = false;
+      return;
+    }
+
     this.rl.resume();
   }
 
-  shouldExitFromAnswer(answer: string): boolean {
+  pauseInput(): void {
+    if (this.inputSuspended) {
+      return;
+    }
+
+    this.rl.close();
+    this.inputSuspended = true;
+  }
+
+  beginTask(): AbortController {
+    const controller = new AbortController();
+    this.activeTask = controller;
+    return controller;
+  }
+
+  endTask(controller: AbortController): void {
+    if (this.activeTask === controller) {
+      this.activeTask = undefined;
+    }
+    this.resumeInput();
+  }
+
+  markTaskCancelled(): void {
+    if (this.terminationPending) {
+      return;
+    }
+
+    this.terminationPending = true;
+    this.rl.write(
+      "\nTask cancelled. Type y to terminate the session or n to continue. Press Ctrl+C again to exit immediately.\n",
+    );
+  }
+
+  handleTerminationAnswer(
+    answer: string,
+  ): "none" | "exit" | "continue" | "pending" {
     if (!this.terminationPending) {
-      return false;
+      return "none";
     }
 
     const normalized = answer.trim().toLowerCase();
 
     if (["y", "yes"].includes(normalized)) {
-      return true;
+      return "exit";
     }
 
-    if (normalized === "") {
-      return false;
+    if (["n", "no"].includes(normalized)) {
+      this.terminationPending = false;
+      return "continue";
     }
 
-    this.terminationPending = false;
-    return false;
+    return "pending";
   }
 
   close(): void {
     this.rl.close();
   }
+
+  private createReadline(): ReturnType<typeof createInterface> {
+    const rl = createInterface({
+      input: process.stdin,
+      output: process.stdout,
+      terminal: true,
+    });
+
+    rl.on("SIGINT", () => {
+      if (this.activeTask && !this.activeTask.signal.aborted) {
+        this.terminationPending = true;
+        this.activeTask.abort();
+        rl.write(
+          "\nCancelling current task. Type y to terminate the session after cleanup, n to continue. Press Ctrl+C again to exit immediately.\n",
+        );
+        return;
+      }
+
+      if (this.terminationPending) {
+        this.close();
+        process.exit(130);
+      }
+
+      this.terminationPending = true;
+      rl.write(
+        "\nTerminate session? Type y to exit, n to continue. Press Ctrl+C again to exit immediately.\n",
+      );
+    });
+
+    return rl;
+  }
 }
 
-try {
-  await main();
-} catch (error: unknown) {
+void main().catch((error: unknown) => {
   const message = error instanceof Error ? error.message : String(error);
   console.error(`Error: ${message}`);
   process.exitCode = 1;
-}
+});

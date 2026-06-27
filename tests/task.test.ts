@@ -102,6 +102,60 @@ describe("TaskTool", () => {
       data: { reason: "invalid_subagent_task" },
     });
   });
+
+  it("passes the parent task cancellation signal to the reviewer", async () => {
+    const root = await makeRoot();
+    const model = new SignalRecordingModel();
+    const controller = new AbortController();
+    const tool = new TaskTool(
+      model,
+      new Workspace(root),
+      unusedExecutor(),
+      "parent-session",
+    );
+
+    await tool.execute(
+      {
+        subagent: "code-reviewer",
+        task: "Review cancellation propagation",
+      },
+      {
+        toolCallId: "task-call",
+        signal: controller.signal,
+      },
+    );
+
+    expect(model.signal).toBe(controller.signal);
+  });
+
+  it("returns a structured cancelled result for a cancelled reviewer", async () => {
+    const root = await makeRoot();
+    const controller = new AbortController();
+    controller.abort();
+    const result = await new TaskTool(
+      new SignalRecordingModel(),
+      new Workspace(root),
+      unusedExecutor(),
+      "parent-session",
+    ).execute(
+      {
+        subagent: "code-reviewer",
+        task: "Review cancellation propagation",
+      },
+      {
+        toolCallId: "task-call",
+        signal: controller.signal,
+      },
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      data: {
+        code: "cancelled",
+        retryable: false,
+      },
+    });
+  });
 });
 
 class ReviewerModel implements ModelClient {
@@ -147,6 +201,15 @@ class ReviewerModel implements ModelClient {
           };
     }
 
+    return { finalText: "No findings." };
+  }
+}
+
+class SignalRecordingModel implements ModelClient {
+  signal?: AbortSignal;
+
+  async complete(options: { signal?: AbortSignal }): Promise<AgentResponse> {
+    this.signal = options.signal;
     return { finalText: "No findings." };
   }
 }

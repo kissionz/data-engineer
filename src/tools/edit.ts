@@ -1,6 +1,11 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
+import { throwIfCancelled } from "../agent/cancellation.js";
 import type { Workspace } from "../runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
 
 function unifiedDiff(oldText: string, newText: string, filePath: string): string {
   const oldLines = oldText.split(/\r?\n/);
@@ -36,7 +41,11 @@ export class EditTool implements Tool {
 
   constructor(private readonly workspace: Workspace) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    throwIfCancelled(context?.signal);
     if (
       typeof args.file_path !== "string" ||
       typeof args.old_string !== "string" ||
@@ -82,6 +91,7 @@ export class EditTool implements Tool {
     }
 
     const newContent = content.replace(args.old_string, args.new_string);
+    throwIfCancelled(context?.signal);
     await writeFile(absPath, newContent, "utf8");
 
     const diff = unifiedDiff(content, newContent, filePath);

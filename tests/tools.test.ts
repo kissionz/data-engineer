@@ -76,6 +76,38 @@ describe("P0 tools", () => {
     );
   });
 
+  it("does not write or edit after task cancellation", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const existingPath = path.join(root, "existing.txt");
+    await writeFile(existingPath, "before", "utf8");
+    const controller = new AbortController();
+    controller.abort();
+    const context = {
+      toolCallId: "cancelled-call",
+      signal: controller.signal,
+    };
+
+    await expect(
+      new WriteTool(new Workspace(root)).execute(
+        { file_path: "new.txt", content: "new" },
+        context,
+      ),
+    ).rejects.toMatchObject({ name: "AgentCancelledError" });
+    await expect(
+      new EditTool(new Workspace(root)).execute(
+        {
+          file_path: "existing.txt",
+          old_string: "before",
+          new_string: "after",
+        },
+        context,
+      ),
+    ).rejects.toMatchObject({ name: "AgentCancelledError" });
+
+    await expect(readFile(path.join(root, "new.txt"), "utf8")).rejects.toThrow();
+    expect(await readFile(existingPath, "utf8")).toBe("before");
+  });
+
   it("rejects non-unique edit strings", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
     await writeFile(path.join(root, "sample.txt"), "x x", "utf8");
@@ -102,6 +134,7 @@ describe("P0 tools", () => {
           stdout: "ok",
           stderr: "",
           timedOut: false,
+          cancelled: false,
         };
       },
     };
@@ -116,6 +149,41 @@ describe("P0 tools", () => {
     expect(calls[0]?.script).toBe("echo ok");
   });
 
+  it("passes tool cancellation to bash and returns a structured result", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const controller = new AbortController();
+    const calls: ShellOptions[] = [];
+    const executor: ShellExecutor = {
+      async runScript(options) {
+        calls.push(options);
+        return {
+          ok: false,
+          exitCode: null,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          cancelled: true,
+        };
+      },
+    };
+
+    const result = await new BashTool(new Workspace(root), executor).execute(
+      { command: "sleep 100" },
+      { toolCallId: "call-1", signal: controller.signal },
+    );
+
+    expect(calls[0]?.signal).toBe(controller.signal);
+    expect(result).toMatchObject({
+      ok: false,
+      data: {
+        code: "cancelled",
+        retryable: false,
+        timedOut: false,
+        cancelled: true,
+      },
+    });
+  });
+
   it("runs grep through ripgrep with workspace constrained path", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
     const calls: CommandOptions[] = [];
@@ -128,6 +196,7 @@ describe("P0 tools", () => {
           stdout: "sample.txt:1:AgentLoop",
           stderr: "",
           timedOut: false,
+          cancelled: false,
         };
       },
     };
@@ -160,6 +229,7 @@ describe("P0 tools", () => {
           ].join("\n"),
           stderr: "",
           timedOut: false,
+          cancelled: false,
         };
       },
     };
@@ -191,6 +261,7 @@ describe("P0 tools", () => {
           stdout: " M src/index.ts",
           stderr: "",
           timedOut: false,
+          cancelled: false,
         };
       },
     };

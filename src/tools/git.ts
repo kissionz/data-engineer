@@ -1,6 +1,10 @@
 import type { CommandExecutor } from "../runtime/commandExecutor.js";
 import type { Workspace } from "../runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
 
 abstract class GitReadTool implements Tool {
   abstract name: string;
@@ -13,12 +17,16 @@ abstract class GitReadTool implements Tool {
     private readonly maxOutputChars = 20_000,
   ) {}
 
-  protected async run(args: string[]): Promise<ToolExecutionResult> {
+  protected async run(
+    args: string[],
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
     const result = await this.executor.run({
       command: "git",
       args,
       cwd: this.workspace.root,
       timeoutMs: 20_000,
+      signal: context?.signal,
     });
     const rawOutput = result.stdout || result.stderr || "[No changes]";
     const truncated = rawOutput.length > this.maxOutputChars;
@@ -35,7 +43,10 @@ abstract class GitReadTool implements Tool {
     };
   }
 
-  abstract execute(args: Record<string, unknown>): Promise<ToolExecutionResult>;
+  abstract execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult>;
 }
 
 export class GitStatusTool extends GitReadTool {
@@ -47,8 +58,11 @@ export class GitStatusTool extends GitReadTool {
     additionalProperties: false,
   };
 
-  async execute(): Promise<ToolExecutionResult> {
-    return this.run(["status", "--short"]);
+  async execute(
+    _args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    return this.run(["status", "--short"], context);
   }
 }
 
@@ -63,16 +77,22 @@ export class GitDiffTool extends GitReadTool {
     additionalProperties: false,
   };
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
     const diffArgs = args.staged === true ? ["diff", "--cached"] : ["diff"];
 
-    return this.run([
-      ...diffArgs,
-      "--",
-      ".",
-      ":(exclude)**/.env",
-      ":(exclude)**/.env.*",
-      ":(exclude)**/node_modules/**",
-    ]);
+    return this.run(
+      [
+        ...diffArgs,
+        "--",
+        ".",
+        ":(exclude)**/.env",
+        ":(exclude)**/.env.*",
+        ":(exclude)**/node_modules/**",
+      ],
+      context,
+    );
   }
 }

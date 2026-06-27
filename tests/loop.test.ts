@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentLoop } from "../src/agent/loop.js";
+import { CANCELLED_TEXT } from "../src/agent/cancellation.js";
 import { ContextBuilder } from "../src/agent/context.js";
 import type { AgentReporter, ToolStatus } from "../src/agent/reporter.js";
 import { SessionStore } from "../src/agent/session.js";
@@ -231,6 +232,64 @@ class CountingFinalModel implements ModelClient {
   }
 }
 
+class AbortableModel implements ModelClient {
+  async complete(options: { signal?: AbortSignal }): Promise<AgentResponse> {
+    return new Promise((_resolve, reject) => {
+      const abort = () =>
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+
+      if (options.signal?.aborted) {
+        abort();
+        return;
+      }
+
+      options.signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+}
+
+class FailingModel implements ModelClient {
+  async complete(): Promise<AgentResponse> {
+    throw new Error("temporary network failure");
+  }
+}
+
+class TwoToolCallsModel implements ModelClient {
+  async complete(): Promise<AgentResponse> {
+    return {
+      toolCalls: [
+        { id: "call-read", name: "Read", args: {} },
+        { id: "call-grep", name: "Grep", args: {} },
+      ],
+    };
+  }
+}
+
+class CancellingReadTool implements Tool {
+  name = "Read";
+  description = "Cancel the parent task during execution.";
+  inputSchema = { type: "object", properties: {} };
+
+  constructor(private readonly controller: AbortController) {}
+
+  async execute(): Promise<ToolExecutionResult> {
+    this.controller.abort();
+    return { ok: true, content: "read completed" };
+  }
+}
+
+class CountingGrepTool implements Tool {
+  name = "Grep";
+  description = "Count executions after cancellation.";
+  inputSchema = { type: "object", properties: {} };
+  executions = 0;
+
+  async execute(): Promise<ToolExecutionResult> {
+    this.executions += 1;
+    return { ok: true, content: "grep completed" };
+  }
+}
+
 class RecordingReporter implements AgentReporter {
   text = "";
   statuses: ToolStatus[] = [];
@@ -415,6 +474,11 @@ describe("AgentLoop", () => {
     tools.register(new CountingWriteTool());
     const hooks = new HookManager();
     let editEvents = 0;
+    let toolEvents = 0;
+    hooks.register("AfterToolUse", () => {
+      toolEvents += 1;
+      return null;
+    });
     hooks.register("AfterEdit", () => {
       editEvents += 1;
       return null;
@@ -434,6 +498,7 @@ describe("AgentLoop", () => {
     );
 
     await expect(loop.run("write")).resolves.toBe("done");
+    expect(toolEvents).toBe(1);
     expect(editEvents).toBe(1);
   });
 
@@ -469,6 +534,80 @@ describe("AgentLoop", () => {
     expect(reporter.text).toBe("done");
     expect(await readFile(sessionPath, "utf8")).toContain(
       '"kind":"stop_block"',
+    );
+  });
+
+  it("cancels an in-flight model request and records recoverable state", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const controller = new AbortController();
+    const loop = new AgentLoop(
+      new AbortableModel(),
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+    );
+
+    const running = loop.run("wait for the model", controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controller.abort();
+
+    await expect(running).resolves.toBe(CANCELLED_TEXT);
+    expect(await readFile(sessionPath, "utf8")).toContain(
+      '"type":"session_cancelled"',
+    );
+  });
+
+  it("records model failures without converting them to final answers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const loop = new AgentLoop(
+      new FailingModel(),
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+    );
+
+    await expect(loop.run("make a request")).rejects.toThrow(
+      "temporary network failure",
+    );
+    const sessionText = await readFile(sessionPath, "utf8");
+    expect(sessionText).toContain('"type":"session_failed"');
+    expect(sessionText).not.toContain('"type":"assistant_final"');
+  });
+
+  it("records cancelled outputs for unexecuted calls in a multi-tool turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const controller = new AbortController();
+    const grep = new CountingGrepTool();
+    const tools = new ToolRegistry();
+    tools.register(new CancellingReadTool(controller));
+    tools.register(grep);
+    const loop = new AgentLoop(
+      new TwoToolCallsModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+    );
+
+    await expect(
+      loop.run("run two tools", controller.signal),
+    ).resolves.toBe(CANCELLED_TEXT);
+    expect(grep.executions).toBe(0);
+
+    const events = await new SessionStore(sessionPath).load();
+    const results = events.filter((event) => event.type === "tool_result");
+    expect(results).toHaveLength(2);
+    expect(results).toContainEqual(
+      expect.objectContaining({
+        toolCallId: "call-grep",
+        ok: false,
+        data: { code: "cancelled", retryable: false },
+      }),
     );
   });
 });

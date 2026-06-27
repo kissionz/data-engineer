@@ -28,6 +28,40 @@ describe("HookManager", () => {
     expect(manager.has("BeforeAgentStop")).toBe(true);
   });
 
+  it("cancels a hook that has not completed", async () => {
+    const manager = new HookManager();
+    const controller = new AbortController();
+    manager.register(
+      "BeforeAgentStop",
+      () => new Promise(() => undefined),
+    );
+
+    const running = manager.emit(
+      "BeforeAgentStop",
+      {},
+      controller.signal,
+    );
+    controller.abort();
+
+    await expect(running).rejects.toMatchObject({
+      name: "AgentCancelledError",
+    });
+  });
+
+  it("provides the cancellation signal to hook handlers", async () => {
+    const manager = new HookManager();
+    const controller = new AbortController();
+    let receivedSignal: unknown;
+    manager.register("AfterToolUse", (payload) => {
+      receivedSignal = payload.signal;
+      return null;
+    });
+
+    await manager.emit("AfterToolUse", {}, controller.signal);
+
+    expect(receivedSignal).toBe(controller.signal);
+  });
+
   it("blocks sensitive and oversized writes", () => {
     expect(
       protectSensitiveWrites({

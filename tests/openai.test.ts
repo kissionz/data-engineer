@@ -156,6 +156,30 @@ describe("OpenAIModel", () => {
     expect(requestUrl).toBe("https://gateway.example/v1/responses");
   });
 
+  it("passes the task AbortSignal to fetch", async () => {
+    const controller = new AbortController();
+    let requestSignal: AbortSignal | null | undefined;
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      requestSignal = init?.signal;
+      return new Response(JSON.stringify({ output_text: "done" }), {
+        status: 200,
+      });
+    };
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl,
+    });
+
+    await model.complete({
+      messages: [{ role: "user", content: "hello" }],
+      tools: [],
+      signal: controller.signal,
+    });
+
+    expect(requestSignal).toBe(controller.signal);
+  });
+
   it("streams text deltas while returning the complete text", async () => {
     const deltas: string[] = [];
     const fetchImpl: typeof fetch = async () =>

@@ -1,6 +1,10 @@
 import type { CommandExecutor } from "../runtime/commandExecutor.js";
 import type { Workspace } from "../runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
 
 export class GlobTool implements Tool {
   name = "Glob";
@@ -22,7 +26,10 @@ export class GlobTool implements Tool {
     private readonly defaultLimit = 300,
   ) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
     const pattern =
       typeof args.pattern === "string" && args.pattern ? args.pattern : "**/*";
     const searchPath = typeof args.path === "string" ? args.path : ".";
@@ -49,6 +56,7 @@ export class GlobTool implements Tool {
       ],
       cwd: this.workspace.root,
       timeoutMs: 20_000,
+      signal: context?.signal,
     });
 
     if (!result.ok && result.exitCode !== 1) {

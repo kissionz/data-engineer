@@ -5,6 +5,7 @@ export interface ShellOptions {
   cwd: string;
   timeoutMs: number;
   maxOutputChars?: number;
+  signal?: AbortSignal;
 }
 
 export interface ShellExecutor {

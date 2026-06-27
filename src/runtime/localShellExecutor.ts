@@ -11,6 +11,7 @@ export class LocalShellExecutor implements ShellExecutor {
       cwd: options.cwd,
       timeoutMs: options.timeoutMs,
       maxOutputChars: options.maxOutputChars,
+      signal: options.signal,
     });
   }
 }

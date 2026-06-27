@@ -161,6 +161,7 @@ describe("DockerShellExecutor", () => {
         stdout: "",
         stderr: "",
         timedOut: true,
+        cancelled: false,
       },
       ok("removed"),
     ]);
@@ -178,6 +179,40 @@ describe("DockerShellExecutor", () => {
     });
 
     expect(executor.calls[1]?.args.slice(0, 2)).toEqual(["rm", "--force"]);
+  });
+
+  it("passes cancellation to docker run and cleans up without that signal", async () => {
+    const root = await makeRoot();
+    const controller = new AbortController();
+    const executor = new ScriptedExecutor([
+      {
+        ok: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        cancelled: true,
+      },
+      ok("removed"),
+    ]);
+    const shell = new DockerShellExecutor(
+      executor,
+      new Workspace(root),
+      "session-cancel",
+      config(),
+    );
+
+    const result = await shell.runScript({
+      script: "sleep 100",
+      cwd: root,
+      timeoutMs: 5_000,
+      signal: controller.signal,
+    });
+
+    expect(result.cancelled).toBe(true);
+    expect(executor.calls[0]?.signal).toBe(controller.signal);
+    expect(executor.calls[1]?.args.slice(0, 2)).toEqual(["rm", "--force"]);
+    expect(executor.calls[1]?.signal).toBeUndefined();
   });
 });
 
@@ -212,6 +247,7 @@ function ok(stdout: string): CommandResult {
     stdout,
     stderr: "",
     timedOut: false,
+    cancelled: false,
   };
 }
 
@@ -222,6 +258,7 @@ function failed(stderr: string): CommandResult {
     stdout: "",
     stderr,
     timedOut: false,
+    cancelled: false,
   };
 }
 

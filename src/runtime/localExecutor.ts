@@ -1,4 +1,8 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import {
+  spawn,
+  spawnSync,
+  type ChildProcess,
+} from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
 import type {
   CommandExecutor,
@@ -8,6 +12,9 @@ import type {
 
 const DEFAULT_MAX_OUTPUT_CHARS = 1_000_000;
 const TRUNCATION_MARKER = "\n...[output truncated]...\n";
+const TASKKILL_TIMEOUT_MS = 5_000;
+const activeChildren = new Set<ChildProcess>();
+let exitCleanupInstalled = false;
 
 export class LocalCommandExecutor implements CommandExecutor {
   constructor(
@@ -16,6 +23,18 @@ export class LocalCommandExecutor implements CommandExecutor {
   ) {}
 
   async run(options: CommandOptions): Promise<CommandResult> {
+    if (options.signal?.aborted) {
+      return {
+        ok: false,
+        exitCode: null,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        cancelled: true,
+        outputTruncated: false,
+      };
+    }
+
     return new Promise((resolve) => {
       const child = spawn(options.command, options.args, {
         cwd: options.cwd,
@@ -24,26 +43,42 @@ export class LocalCommandExecutor implements CommandExecutor {
         env: buildSafeEnv(),
         windowsHide: true,
       });
+      installExitCleanup();
+      activeChildren.add(child);
       const maxOutputChars = normalizeOutputLimit(
         options.maxOutputChars,
         this.defaultMaxOutputChars,
       );
       const stdout = new BoundedText(maxOutputChars);
       const stderr = new BoundedText(maxOutputChars);
-      let timedOut = false;
+      let terminationCause: "timeout" | "cancelled" | undefined;
       let spawnError: Error | undefined;
       let settled = false;
+      let childClosed = false;
+      let closeCode: number | null = null;
+      let forceKillSent = false;
+      let timeout: NodeJS.Timeout | undefined;
       let forceKillTimer: NodeJS.Timeout | undefined;
-      let forceFinishTimer: NodeJS.Timeout | undefined;
 
-      const timeout = setTimeout(() => {
-        timedOut = true;
-        terminateProcessTree(child, "SIGTERM");
+      const requestTermination = (cause: "timeout" | "cancelled") => {
+        if (settled || terminationCause) {
+          return;
+        }
+
+        terminationCause = cause;
+        void terminateProcessTree(child, "SIGTERM");
         forceKillTimer = setTimeout(() => {
-          terminateProcessTree(child, "SIGKILL");
-          forceFinishTimer = setTimeout(() => finish(null), this.killGraceMs);
+          void terminateProcessTree(child, "SIGKILL").then(() => {
+            forceKillSent = true;
+
+            if (childClosed) {
+              finish(closeCode);
+            }
+          });
         }, this.killGraceMs);
-      }, Math.max(1, options.timeoutMs));
+      };
+
+      const onAbort = () => requestTermination("cancelled");
 
       const finish = (exitCode: number | null) => {
         if (settled) {
@@ -51,16 +86,17 @@ export class LocalCommandExecutor implements CommandExecutor {
         }
 
         settled = true;
-        clearTimeout(timeout);
+        activeChildren.delete(child);
+
+        if (timeout) {
+          clearTimeout(timeout);
+        }
 
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
         }
 
-        if (forceFinishTimer) {
-          clearTimeout(forceFinishTimer);
-        }
-
+        options.signal?.removeEventListener("abort", onAbort);
         stdout.end();
         stderr.end();
 
@@ -69,11 +105,12 @@ export class LocalCommandExecutor implements CommandExecutor {
         }
 
         resolve({
-          ok: !timedOut && !spawnError && exitCode === 0,
+          ok: !terminationCause && !spawnError && exitCode === 0,
           exitCode,
           stdout: stdout.value(),
           stderr: stderr.value(),
-          timedOut,
+          timedOut: terminationCause === "timeout",
+          cancelled: terminationCause === "cancelled",
           outputTruncated: stdout.truncated || stderr.truncated,
         });
       };
@@ -83,7 +120,24 @@ export class LocalCommandExecutor implements CommandExecutor {
       child.on("error", (error) => {
         spawnError = error;
       });
-      child.on("close", (code) => finish(code));
+      child.on("close", (code) => {
+        childClosed = true;
+        closeCode = code;
+
+        if (!terminationCause || forceKillSent) {
+          finish(code);
+        }
+      });
+
+      timeout = setTimeout(
+        () => requestTermination("timeout"),
+        Math.max(1, options.timeoutMs),
+      );
+      options.signal?.addEventListener("abort", onAbort, { once: true });
+
+      if (options.signal?.aborted) {
+        onAbort();
+      }
     });
   }
 }
@@ -193,9 +247,9 @@ function normalizeOutputLimit(value: number | undefined, fallback: number): numb
 function terminateProcessTree(
   child: ChildProcess,
   signal: NodeJS.Signals,
-): void {
+): Promise<void> {
   if (!child.pid) {
-    return;
+    return Promise.resolve();
   }
 
   try {
@@ -206,19 +260,83 @@ function terminateProcessTree(
         args.push("/f");
       }
 
-      const killer = spawn("taskkill.exe", args, {
-        shell: false,
-        stdio: "ignore",
-        windowsHide: true,
+      return new Promise((resolve) => {
+        const killer = spawn("taskkill.exe", args, {
+          shell: false,
+          stdio: "ignore",
+          windowsHide: true,
+        });
+        let settled = false;
+        const finish = () => {
+          if (settled) {
+            return;
+          }
+
+          settled = true;
+          clearTimeout(timeout);
+          resolve();
+        };
+        const timeout = setTimeout(() => {
+          try {
+            killer.kill("SIGKILL");
+          } catch {
+            // The taskkill process already exited.
+          }
+          finish();
+        }, TASKKILL_TIMEOUT_MS);
+        killer.once("error", finish);
+        killer.once("close", finish);
       });
-      killer.unref();
-      return;
     }
 
     process.kill(-child.pid, signal);
+    return Promise.resolve();
   } catch {
     try {
       child.kill(signal);
+    } catch {
+      // The process already exited.
+    }
+    return Promise.resolve();
+  }
+}
+
+function installExitCleanup(): void {
+  if (exitCleanupInstalled) {
+    return;
+  }
+
+  exitCleanupInstalled = true;
+  process.once("exit", () => {
+    for (const child of activeChildren) {
+      forceKillProcessTreeSync(child);
+    }
+  });
+}
+
+function forceKillProcessTreeSync(child: ChildProcess): void {
+  if (!child.pid) {
+    return;
+  }
+
+  try {
+    if (process.platform === "win32") {
+      spawnSync(
+        "taskkill.exe",
+        ["/pid", String(child.pid), "/t", "/f"],
+        {
+          stdio: "ignore",
+          windowsHide: true,
+          timeout: 3_000,
+        },
+      );
+      return;
+    }
+
+    process.kill(-child.pid, "SIGKILL");
+  } catch {
+    try {
+      child.kill("SIGKILL");
     } catch {
       // The process already exited.
     }

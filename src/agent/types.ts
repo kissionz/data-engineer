@@ -58,6 +58,16 @@ export type SessionEvent =
       text: string;
     }
   | {
+      type: "session_cancelled";
+      ts: string;
+      reason: string;
+    }
+  | {
+      type: "session_failed";
+      ts: string;
+      message: string;
+    }
+  | {
       type: "summary";
       ts: string;
       text: string;
@@ -88,6 +98,14 @@ export type SessionEventInput =
       type: "harness_message";
       kind: "git_diff_review" | "stop_block";
       text: string;
+    }
+  | {
+      type: "session_cancelled";
+      reason: string;
+    }
+  | {
+      type: "session_failed";
+      message: string;
     }
   | {
       type: "summary";

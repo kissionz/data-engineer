@@ -1,4 +1,8 @@
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
 import { validateSchema, type SchemaValidationResult } from "./schemaValidator.js";
 
 export type ToolValidationResult =
@@ -55,6 +59,7 @@ export class ToolRegistry {
   async execute(
     name: string,
     args: Record<string, unknown>,
+    context?: ToolExecutionContext,
   ): Promise<ToolExecutionResult> {
     const validation = this.validate(name, args);
 
@@ -72,6 +77,6 @@ export class ToolRegistry {
       };
     }
 
-    return this.get(name).execute(args);
+    return this.get(name).execute(args, context);
   }
 }

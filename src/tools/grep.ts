@@ -1,6 +1,10 @@
 import type { CommandExecutor } from "../runtime/commandExecutor.js";
 import type { Workspace } from "../runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
 
 export class GrepTool implements Tool {
   name = "Grep";
@@ -22,7 +26,10 @@ export class GrepTool implements Tool {
     private readonly maxOutputChars = 12_000,
   ) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
     if (typeof args.pattern !== "string" || !args.pattern) {
       return { ok: false, content: "pattern must be a non-empty string." };
     }
@@ -50,6 +57,7 @@ export class GrepTool implements Tool {
       ],
       cwd: this.workspace.root,
       timeoutMs: 20_000,
+      signal: context?.signal,
     });
 
     const rawOutput = result.stdout || result.stderr || "[No matches]";

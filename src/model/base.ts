@@ -5,5 +5,6 @@ export interface ModelClient {
     messages: AgentMessage[];
     tools: Array<Record<string, unknown>>;
     onTextDelta?: (delta: string) => void;
+    signal?: AbortSignal;
   }): Promise<AgentResponse>;
 }

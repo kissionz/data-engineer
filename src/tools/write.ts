@@ -1,7 +1,12 @@
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { throwIfCancelled } from "../agent/cancellation.js";
 import type { Workspace } from "../runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "./base.js";
 
 export class WriteTool implements Tool {
   name = "Write";
@@ -19,7 +24,11 @@ export class WriteTool implements Tool {
 
   constructor(private readonly workspace: Workspace) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    throwIfCancelled(context?.signal);
     if (typeof args.file_path !== "string" || typeof args.content !== "string") {
       return {
         ok: false,
@@ -43,7 +52,9 @@ export class WriteTool implements Tool {
     }
 
     await this.workspace.assertCreatablePathWithin(absPath);
+    throwIfCancelled(context?.signal);
     await mkdir(path.dirname(absPath), { recursive: true });
+    throwIfCancelled(context?.signal);
     await writeFile(absPath, args.content, { encoding: "utf8", flag: "wx" });
 
     return {
