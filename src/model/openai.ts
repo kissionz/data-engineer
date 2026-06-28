@@ -50,6 +50,9 @@ interface OpenAIResponseBody {
   output_text?: string;
   output?: OpenAIResponseOutputItem[];
   status?: string;
+  incomplete_details?: {
+    reason?: string;
+  };
   error?: {
     message?: string;
     type?: string;
@@ -321,6 +324,13 @@ async function parseStreamingResponse(
         arguments: boundedToolArguments(event.item.arguments ?? ""),
       });
       onStreamEvent?.({ type: "tool_call_start", toolCallId: toolId, name: toolName });
+      if (event.item.arguments) {
+        onStreamEvent?.({
+          type: "tool_call_args_delta",
+          toolCallId: toolId,
+          delta: event.item.arguments,
+        });
+      }
       continue;
     }
 
@@ -378,7 +388,11 @@ async function parseStreamingResponse(
       continue;
     }
 
-    if (event.type === "response.completed" && event.response) {
+    if (
+      (event.type === "response.completed" ||
+        event.type === "response.incomplete") &&
+      event.response
+    ) {
       finalBody = event.response;
       onStreamEvent?.({ type: "stop", stopReason: mapResponsesStopReason(event.response) });
       continue;
@@ -445,7 +459,14 @@ function mapResponsesStopReason(
     );
     return hasToolCalls ? "tool_use" : "end_turn";
   }
-  if (status === "incomplete") return "max_tokens";
+  if (status === "incomplete") {
+    if (body?.incomplete_details?.reason === "max_output_tokens") {
+      return "max_tokens";
+    }
+    if (body?.incomplete_details?.reason === "content_filter") {
+      return "content_filter";
+    }
+  }
   return "unknown";
 }
 
@@ -1039,6 +1060,13 @@ async function parseChatStreamingResponse(
             arguments: tc.function?.arguments ?? "",
           });
           onStreamEvent?.({ type: "tool_call_start", toolCallId: toolId, name: toolName });
+          if (tc.function?.arguments) {
+            onStreamEvent?.({
+              type: "tool_call_args_delta",
+              toolCallId: toolId,
+              delta: tc.function.arguments,
+            });
+          }
         } else {
           if (tc.id) existing.id = tc.id;
           if (tc.function?.name) existing.name += tc.function.name;

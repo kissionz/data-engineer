@@ -8,7 +8,7 @@ export type NetworkPolicy = "unrestricted" | "restricted";
  *
  * - On macOS: uses `sandbox-exec` with a deny-network profile.
  * - On Linux: uses `unshare --net` to create a network namespace without connectivity.
- * - Fallback: logs a warning and runs unrestricted if neither is available.
+ * - Other platforms: fails closed without running the command.
  */
 export class LocalShellExecutor implements ShellExecutor {
   private readonly networkPolicy: NetworkPolicy;
@@ -16,12 +16,13 @@ export class LocalShellExecutor implements ShellExecutor {
   constructor(
     private readonly executor: CommandExecutor,
     networkPolicy: NetworkPolicy = "unrestricted",
+    private readonly platform: NodeJS.Platform = process.platform,
   ) {
     this.networkPolicy = networkPolicy;
   }
 
   runScript(options: ShellOptions) {
-    const shell = process.platform === "win32" ? "bash.exe" : "/bin/bash";
+    const shell = this.platform === "win32" ? "bash.exe" : "/bin/bash";
 
     if (this.networkPolicy === "restricted") {
       return this.runRestricted(shell, options);
@@ -38,22 +39,24 @@ export class LocalShellExecutor implements ShellExecutor {
   }
 
   private runRestricted(shell: string, options: ShellOptions) {
-    if (process.platform === "darwin") {
+    if (this.platform === "darwin") {
       return this.runDarwinSandbox(shell, options);
     }
 
-    if (process.platform === "linux") {
+    if (this.platform === "linux") {
       return this.runLinuxUnshare(shell, options);
     }
 
-    // Fallback: run unrestricted on unsupported platforms
-    return this.executor.run({
-      command: shell,
-      args: ["--noprofile", "--norc", "-lc", options.script],
-      cwd: options.cwd,
-      timeoutMs: options.timeoutMs,
-      maxOutputChars: options.maxOutputChars,
-      signal: options.signal,
+    return Promise.resolve({
+      ok: false,
+      exitCode: null,
+      stdout: "",
+      stderr:
+        `Network-restricted host execution is unsupported on ${this.platform}; ` +
+        "the command was not run.",
+      timedOut: false,
+      cancelled: false,
+      outputTruncated: false,
     });
   }
 

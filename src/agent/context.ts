@@ -114,6 +114,8 @@ export class ContextBuilder {
         messages.push({ role: "user", content: event.text });
       } else if (event.type === "assistant_final") {
         messages.push({ role: "assistant", content: event.text });
+      } else if (event.type === "assistant_partial") {
+        messages.push({ role: "assistant", content: event.text });
       } else if (event.type === "assistant_tool_calls") {
         messages.push({
           role: "assistant",

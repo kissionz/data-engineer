@@ -12,7 +12,12 @@ interface Edit {
   type: "equal" | "insert" | "delete";
   oldIndex: number;
   newIndex: number;
-  line: string;
+  line: DiffLine;
+}
+
+interface DiffLine {
+  text: string;
+  hasNewline: boolean;
 }
 
 /**
@@ -25,9 +30,9 @@ export function unifiedDiff(
   filePath: string,
   options: DiffOptions = {},
 ): string {
-  const contextLines = options.context ?? 3;
-  const oldLines = oldText.split("\n");
-  const newLines = newText.split("\n");
+  const contextLines = Math.max(0, Math.floor(options.context ?? 3));
+  const oldLines = splitLines(oldText);
+  const newLines = splitLines(newText);
 
   const edits = myersDiff(oldLines, newLines);
 
@@ -45,13 +50,13 @@ export function unifiedDiff(
     for (const edit of hunk.edits) {
       switch (edit.type) {
         case "equal":
-          output.push(` ${edit.line}`);
+          appendDiffLine(output, " ", edit.line);
           break;
         case "delete":
-          output.push(`-${edit.line}`);
+          appendDiffLine(output, "-", edit.line);
           break;
         case "insert":
-          output.push(`+${edit.line}`);
+          appendDiffLine(output, "+", edit.line);
           break;
       }
     }
@@ -69,7 +74,51 @@ interface Hunk {
 }
 
 function formatHunkHeader(hunk: Hunk): string {
-  return `@@ -${hunk.oldStart + 1},${hunk.oldCount} +${hunk.newStart + 1},${hunk.newCount} @@`;
+  return (
+    `@@ -${formatRange(hunk.oldStart, hunk.oldCount)} ` +
+    `+${formatRange(hunk.newStart, hunk.newCount)} @@`
+  );
+}
+
+function formatRange(start: number, count: number): string {
+  return count === 0 ? `${start},0` : `${start + 1},${count}`;
+}
+
+function appendDiffLine(
+  output: string[],
+  prefix: " " | "-" | "+",
+  line: DiffLine,
+): void {
+  output.push(`${prefix}${line.text}`);
+  if (!line.hasNewline) {
+    output.push("\\ No newline at end of file");
+  }
+}
+
+function splitLines(text: string): DiffLine[] {
+  if (text.length === 0) {
+    return [];
+  }
+
+  const lines: DiffLine[] = [];
+  let start = 0;
+  for (let index = 0; index < text.length; index += 1) {
+    if (text[index] !== "\n") {
+      continue;
+    }
+    lines.push({
+      text: text.slice(start, index),
+      hasNewline: true,
+    });
+    start = index + 1;
+  }
+  if (start < text.length) {
+    lines.push({
+      text: text.slice(start),
+      hasNewline: false,
+    });
+  }
+  return lines;
 }
 
 function buildHunks(edits: Edit[], context: number): Hunk[] {
@@ -136,10 +185,10 @@ function buildHunks(edits: Edit[], context: number): Hunk[] {
 }
 
 /**
- * Myers diff algorithm (linear space, O(ND) time).
+ * Myers diff algorithm (O(ND) time, retaining a trace for backtracking).
  * Returns a sequence of Edit operations.
  */
-function myersDiff(oldLines: string[], newLines: string[]): Edit[] {
+function myersDiff(oldLines: DiffLine[], newLines: DiffLine[]): Edit[] {
   const N = oldLines.length;
   const M = newLines.length;
   const MAX = N + M;
@@ -149,7 +198,7 @@ function myersDiff(oldLines: string[], newLines: string[]): Edit[] {
   }
 
   // Shortcut: identical
-  if (N === M && oldLines.every((line, i) => line === newLines[i])) {
+  if (N === M && oldLines.every((line, i) => sameLine(line, newLines[i]))) {
     return oldLines.map((line, i) => ({
       type: "equal" as const,
       oldIndex: i,
@@ -179,7 +228,7 @@ function myersDiff(oldLines: string[], newLines: string[]): Edit[] {
       let y = x - k;
 
       // Follow diagonal (equal lines)
-      while (x < N && y < M && oldLines[x] === newLines[y]) {
+      while (x < N && y < M && sameLine(oldLines[x], newLines[y])) {
         x += 1;
         y += 1;
       }
@@ -238,4 +287,12 @@ function myersDiff(oldLines: string[], newLines: string[]): Edit[] {
   }
 
   return edits;
+}
+
+function sameLine(left: DiffLine, right: DiffLine | undefined): boolean {
+  return (
+    right !== undefined &&
+    left.text === right.text &&
+    left.hasNewline === right.hasNewline
+  );
 }

@@ -1,7 +1,12 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { throwIfCancelled } from "../agent/cancellation.js";
 import type { AgentMessage, AgentResponse } from "../agent/types.js";
-import { isRetryableModelError, ModelRequestError, type ModelClient } from "./base.js";
+import {
+  isRetryableModelError,
+  ModelRequestError,
+  type ModelClient,
+  type ModelStreamHandler,
+} from "./base.js";
 
 export interface RetryPolicy {
   /** Maximum number of retries before giving up. Default: 5. */
@@ -55,6 +60,7 @@ export async function completeWithRetry(
     tools: Array<Record<string, unknown>>;
     maxOutputTokens?: number;
     onTextDelta?: (delta: string) => void;
+    onStreamEvent?: ModelStreamHandler;
     signal?: AbortSignal;
   },
   policy: Partial<RetryPolicy> = {},

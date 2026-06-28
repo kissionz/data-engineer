@@ -149,6 +149,32 @@ describe("OpenAIModel", () => {
     expect(result.finalText).toBe("done");
   });
 
+  it("does not treat content-filtered Responses output as max_tokens", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            output_text: "partial",
+            status: "incomplete",
+            incomplete_details: { reason: "content_filter" },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).resolves.toMatchObject({
+      finalText: "partial",
+      stopReason: "content_filter",
+    });
+  });
+
   it("uses a custom base URL and trims trailing slashes", async () => {
     let requestUrl = "";
     const fetchImpl: typeof fetch = async (input) => {
@@ -336,7 +362,46 @@ describe("OpenAIModel", () => {
     });
   });
 
+  it("maps a streamed incomplete response to max_tokens", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      sseResponse([
+        {
+          type: "response.output_text.delta",
+          delta: "partial",
+        },
+        {
+          type: "response.incomplete",
+          response: {
+            id: "resp_incomplete",
+            status: "incomplete",
+            incomplete_details: { reason: "max_output_tokens" },
+            usage: {
+              input_tokens: 3,
+              output_tokens: 2,
+            },
+          },
+        },
+      ]);
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl,
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).resolves.toMatchObject({
+      finalText: "partial",
+      stopReason: "max_tokens",
+      requestId: "resp_incomplete",
+    });
+  });
+
   it("assembles streamed function call arguments", async () => {
+    const streamEvents: unknown[] = [];
     const fetchImpl: typeof fetch = async () =>
       sseResponse([
         {
@@ -346,18 +411,8 @@ describe("OpenAIModel", () => {
             type: "function_call",
             call_id: "call_streamed",
             name: "Read",
-            arguments: "",
+            arguments: '{"file_path":"README.md"}',
           },
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          delta: '{"file_path":',
-        },
-        {
-          type: "response.function_call_arguments.delta",
-          output_index: 0,
-          delta: '"README.md"}',
         },
         {
           type: "response.function_call_arguments.done",
@@ -375,6 +430,7 @@ describe("OpenAIModel", () => {
     const result = await model.complete({
       messages: [{ role: "user", content: "read README" }],
       tools: [],
+      onStreamEvent: (event) => streamEvents.push(event),
     });
 
     expect(result.toolCalls).toEqual([
@@ -384,6 +440,11 @@ describe("OpenAIModel", () => {
         args: { file_path: "README.md" },
       },
     ]);
+    expect(streamEvents).toContainEqual({
+      type: "tool_call_args_delta",
+      toolCallId: "call_streamed",
+      delta: '{"file_path":"README.md"}',
+    });
   });
 });
 

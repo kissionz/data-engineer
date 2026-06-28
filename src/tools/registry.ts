@@ -95,25 +95,32 @@ export class ToolRegistry {
   ): Promise<ToolExecutionResult> {
     const controller = new AbortController();
     const parentSignal = context?.signal;
+    const timedOut = Symbol("tool-timeout");
 
     // Link parent signal to child
-    const onParentAbort = () => controller.abort();
+    const onParentAbort = () => controller.abort(parentSignal?.reason);
     parentSignal?.addEventListener("abort", onParentAbort, { once: true });
 
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<typeof timedOut>((resolve) => {
+      timer = setTimeout(() => {
+        controller.abort(
+          new DOMException(
+            `Tool ${tool.name} timed out after ${timeoutMs}ms.`,
+            "TimeoutError",
+          ),
+        );
+        resolve(timedOut);
+      }, timeoutMs);
+    });
 
     try {
-      const result = await tool.execute(args, {
+      const execution = tool.execute(args, {
         ...(context ?? { toolCallId: "" }),
         signal: controller.signal,
       });
-      return result;
-    } catch (error: unknown) {
-      if (
-        controller.signal.aborted &&
-        !parentSignal?.aborted
-      ) {
-        // Tool-specific timeout triggered (not parent cancellation)
+      const outcome = await Promise.race([execution, timeout]);
+      if (outcome === timedOut) {
         return {
           ok: false,
           content: `Tool ${tool.name} timed out after ${timeoutMs}ms.`,
@@ -124,9 +131,11 @@ export class ToolRegistry {
           },
         };
       }
-      throw error;
+      return outcome;
     } finally {
-      clearTimeout(timer);
+      if (timer) {
+        clearTimeout(timer);
+      }
       parentSignal?.removeEventListener("abort", onParentAbort);
     }
   }

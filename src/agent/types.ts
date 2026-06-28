@@ -80,6 +80,10 @@ export type SessionEvent = SessionEventEnvelope &
       text: string;
     }
   | {
+      type: "assistant_partial";
+      text: string;
+    }
+  | {
       type: "model_request_started";
     }
   | {
@@ -152,6 +156,10 @@ export type SessionEventInput =
     }
   | {
       type: "assistant_final";
+      text: string;
+    }
+  | {
+      type: "assistant_partial";
       text: string;
     }
   | {
