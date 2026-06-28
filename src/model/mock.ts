@@ -22,10 +22,11 @@ export class MockModel implements ModelClient {
             args: { file_path: this.filePath },
           },
         ],
+        stopReason: "tool_use",
       };
     }
 
     _options.onTextDelta?.("Done.");
-    return { finalText: "Done." };
+    return { finalText: "Done.", stopReason: "end_turn" };
   }
 }

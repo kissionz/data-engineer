@@ -193,6 +193,7 @@ export class AgentLoop {
           type: "model_response_received",
           hasFinalText: Boolean(response.finalText),
           toolCallCount: response.toolCalls?.length ?? 0,
+          stopReason: response.stopReason,
           usage: response.usage,
           requestId: response.requestId,
         });
@@ -210,6 +211,20 @@ export class AgentLoop {
         const toolCalls = response.toolCalls ?? [];
 
         if (toolCalls.length === 0 && response.finalText) {
+          // If model hit max_tokens and didn't produce tool calls, inject a
+          // continuation prompt so it can finish rather than stopping abruptly.
+          if (response.stopReason === "max_tokens") {
+            const truncationNotice =
+              "[System: Your response was truncated due to output token limits. " +
+              "Please continue where you left off or summarize the remaining work.]";
+            await this.session.append({
+              type: "harness_message",
+              kind: "max_tokens_continuation",
+              text: truncationNotice,
+            });
+            continue;
+          }
+
           const stopBlock = await this.beforeAgentStop(
             response.finalText,
             events,

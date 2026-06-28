@@ -1,5 +1,5 @@
-import type { AgentMessage, AgentResponse, ToolCall } from "../agent/types.js";
-import { ModelRequestError, type ModelClient } from "./base.js";
+import type { AgentMessage, AgentResponse, StopReason, ToolCall } from "../agent/types.js";
+import { ModelRequestError, type ModelCapabilities, type ModelClient } from "./base.js";
 
 const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_STREAM_BYTES = 64 * 1024 * 1024;
@@ -49,6 +49,7 @@ interface OpenAIResponseBody {
   id?: string;
   output_text?: string;
   output?: OpenAIResponseOutputItem[];
+  status?: string;
   error?: {
     message?: string;
     type?: string;
@@ -81,6 +82,8 @@ export class OpenAIModel implements ModelClient {
   private readonly apiStyle: ApiStyle;
   private readonly fetchImpl: typeof fetch;
 
+  readonly capabilities: ModelCapabilities;
+
   constructor(private readonly options: OpenAIModelOptions) {
     if (!options.apiKey) {
       throw new Error("OPENAI_API_KEY is required for the OpenAI model.");
@@ -90,6 +93,14 @@ export class OpenAIModel implements ModelClient {
     this.fetchImpl = options.fetchImpl ?? fetch;
     // Auto-detect: use chat_completions for non-OpenAI endpoints
     this.apiStyle = options.apiStyle ?? inferApiStyle(this.baseUrl);
+
+    this.capabilities = {
+      contextWindow: 200_000,
+      maxOutputTokens: 16_384,
+      supportsStreaming: true,
+      supportsToolUse: true,
+      supportsImages: false,
+    };
   }
 
   async complete(options: {
@@ -380,9 +391,12 @@ async function parseStreamingResponse(
           }))
       : parseToolCalls(finalBody ?? {});
 
+  const stopReason = mapResponsesStopReason(finalBody);
+
   if (toolCalls.length > 0) {
     return {
       toolCalls,
+      stopReason,
       usage: parseUsage(finalBody),
       requestId: finalBody?.id,
     };
@@ -393,6 +407,7 @@ async function parseStreamingResponse(
   if (completedText) {
     return {
       finalText: completedText,
+      stopReason,
       usage: parseUsage(finalBody),
       requestId: finalBody?.id,
     };
@@ -400,9 +415,25 @@ async function parseStreamingResponse(
 
   return {
     finalText: "OpenAI returned no final text or tool calls.",
+    stopReason,
     usage: parseUsage(finalBody),
     requestId: finalBody?.id,
   };
+}
+
+function mapResponsesStopReason(
+  body: OpenAIResponseBody | undefined,
+): StopReason {
+  const status = body?.status;
+  if (!status) return "unknown";
+  if (status === "completed") {
+    const hasToolCalls = body?.output?.some(
+      (item) => item.type === "function_call",
+    );
+    return hasToolCalls ? "tool_use" : "end_turn";
+  }
+  if (status === "incomplete") return "max_tokens";
+  return "unknown";
 }
 
 function boundedToolArguments(value: string): string {
@@ -531,10 +562,12 @@ async function readJsonResponse(
 
 function parseResponseBody(body: OpenAIResponseBody): AgentResponse {
   const toolCalls = parseToolCalls(body);
+  const stopReason = mapResponsesStopReason(body);
 
   if (toolCalls.length > 0) {
     return {
       toolCalls,
+      stopReason,
       usage: parseUsage(body),
       requestId: body.id,
     };
@@ -545,6 +578,7 @@ function parseResponseBody(body: OpenAIResponseBody): AgentResponse {
   if (finalText) {
     return {
       finalText,
+      stopReason,
       usage: parseUsage(body),
       requestId: body.id,
     };
@@ -552,6 +586,7 @@ function parseResponseBody(body: OpenAIResponseBody): AgentResponse {
 
   return {
     finalText: "OpenAI returned no final text or tool calls.",
+    stopReason,
     usage: parseUsage(body),
     requestId: body.id,
   };
@@ -876,11 +911,13 @@ function parseChatResponseBody(
   if (!choice?.message) {
     return {
       finalText: "API returned no choices.",
+      stopReason: "unknown",
       usage: parseChatUsage(body),
       requestId: body.id,
     };
   }
 
+  const stopReason = mapChatFinishReason(choice.finish_reason);
   const toolCalls = choice.message.tool_calls;
   if (toolCalls && toolCalls.length > 0) {
     return {
@@ -892,6 +929,7 @@ function parseChatResponseBody(
         ),
         args: parseArguments(tc.function?.arguments ?? ""),
       })),
+      stopReason,
       usage: parseChatUsage(body),
       requestId: body.id,
     };
@@ -900,9 +938,19 @@ function parseChatResponseBody(
   const text = choice.message.content;
   return {
     finalText: text || "API returned no content.",
+    stopReason,
     usage: parseChatUsage(body),
     requestId: body.id,
   };
+}
+
+function mapChatFinishReason(reason: string | null | undefined): StopReason {
+  if (!reason) return "unknown";
+  if (reason === "stop") return "end_turn";
+  if (reason === "tool_calls") return "tool_use";
+  if (reason === "length") return "max_tokens";
+  if (reason === "content_filter") return "content_filter";
+  return "unknown";
 }
 
 function parseChatUsage(
@@ -943,10 +991,14 @@ async function parseChatStreamingResponse(
     { id: string; name: string; arguments: string }
   >();
   let lastBody: ChatCompletionsResponseBody | undefined;
+  let finishReason: string | null | undefined;
 
   for await (const event of parseChatSSEStream(response.body)) {
     lastBody = event;
     const choice = event.choices?.[0];
+    if (choice?.finish_reason) {
+      finishReason = choice.finish_reason;
+    }
     if (!choice?.delta) continue;
 
     // Text content delta
@@ -988,6 +1040,8 @@ async function parseChatStreamingResponse(
     }
   }
 
+  const stopReason = mapChatFinishReason(finishReason);
+
   if (streamedTools.size > 0) {
     return {
       toolCalls: [...streamedTools.entries()]
@@ -1000,6 +1054,7 @@ async function parseChatStreamingResponse(
           ),
           args: parseArguments(tool.arguments),
         })),
+      stopReason,
       usage: lastBody ? parseChatUsage(lastBody) : undefined,
       requestId: lastBody?.id,
     };
@@ -1008,6 +1063,7 @@ async function parseChatStreamingResponse(
   if (finalText) {
     return {
       finalText,
+      stopReason,
       usage: lastBody ? parseChatUsage(lastBody) : undefined,
       requestId: lastBody?.id,
     };
@@ -1015,6 +1071,7 @@ async function parseChatStreamingResponse(
 
   return {
     finalText: "API returned no final text or tool calls.",
+    stopReason,
     usage: lastBody ? parseChatUsage(lastBody) : undefined,
     requestId: lastBody?.id,
   };
