@@ -56,6 +56,7 @@ const EVENT_KEYS: Record<TelemetryEvent["type"], readonly string[]> = {
     "inputTokens",
     "outputTokens",
     "cacheReadTokens",
+    "estimatedCostUsd",
     "stopReason",
     "errorCode",
   ],
@@ -167,6 +168,10 @@ export function sanitizeTelemetryEvent(value: unknown): TelemetryEvent {
         inputTokens: optionalCount(event.inputTokens, "inputTokens"),
         outputTokens: optionalCount(event.outputTokens, "outputTokens"),
         cacheReadTokens: optionalCount(event.cacheReadTokens, "cacheReadTokens"),
+        estimatedCostUsd: optionalNonNegativeFinite(
+          event.estimatedCostUsd,
+          "estimatedCostUsd",
+        ),
         stopReason: optionalText(event.stopReason, "stopReason", MAX_CODE_LENGTH),
         errorCode: optionalText(event.errorCode, "errorCode", MAX_CODE_LENGTH),
       });
@@ -351,6 +356,19 @@ function count(value: unknown, name: string): number {
 
 function optionalCount(value: unknown, name: string): number | undefined {
   return value === undefined ? undefined : count(value, name);
+}
+
+function optionalNonNegativeFinite(
+  value: unknown,
+  name: string,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    throw new Error(`${name} must be a non-negative finite number.`);
+  }
+  return value;
 }
 
 function requireEnum<const T extends readonly string[]>(

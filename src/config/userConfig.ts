@@ -5,6 +5,8 @@ import { z } from "zod";
 
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
+const positiveFiniteNumber = z.number().finite().positive();
+const nonNegativeFiniteNumber = z.number().finite().nonnegative();
 const environmentName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 
 const stdioTransportSchema = z
@@ -50,6 +52,7 @@ const budgetSchema = z
     maxOutputTokens: positiveInteger.optional(),
     maxToolCalls: nonNegativeInteger.optional(),
     maxModelRetries: nonNegativeInteger.optional(),
+    maxEstimatedCostUsd: positiveFiniteNumber.optional(),
   })
   .strict();
 
@@ -61,6 +64,15 @@ export const userConfigSchema = z
         provider: z.enum(["openai", "mock"]).optional(),
         name: z.string().min(1).max(200).optional(),
         baseUrl: z.string().url().optional(),
+        pricing: z
+          .object({
+            inputPerMillionTokens: nonNegativeFiniteNumber,
+            outputPerMillionTokens: nonNegativeFiniteNumber,
+            cacheReadPerMillionTokens:
+              nonNegativeFiniteNumber.optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
@@ -79,7 +91,25 @@ export const userConfigSchema = z
       .optional(),
     mcpServers: z.array(mcpServerSchema).max(32).default([]),
   })
-  .strict();
+  .strict()
+  .superRefine((config, context) => {
+    if (config.budget?.maxEstimatedCostUsd === undefined) {
+      return;
+    }
+    const pricing = config.model?.pricing;
+    if (
+      !pricing ||
+      (pricing.inputPerMillionTokens === 0 &&
+        pricing.outputPerMillionTokens === 0)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["budget", "maxEstimatedCostUsd"],
+        message:
+          "maxEstimatedCostUsd requires non-zero model pricing.",
+      });
+    }
+  });
 
 export type UserConfig = z.infer<typeof userConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;

@@ -40,6 +40,7 @@ export interface ModelUsage {
   inputTokens: number;
   outputTokens: number;
   cacheReadTokens?: number;
+  estimatedCostUsd?: number;
 }
 
 export interface SessionEventEnvelope {

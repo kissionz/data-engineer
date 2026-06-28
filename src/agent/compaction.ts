@@ -4,6 +4,7 @@ import type { SessionStore } from "./session.js";
 export interface CompactionCheckOptions {
   events?: SessionEvent[];
   tokenThreshold?: number;
+  beforeCompact?: (events: SessionEvent[]) => Promise<boolean> | boolean;
 }
 
 export class SessionCompactor {
@@ -29,6 +30,12 @@ export class SessionCompactor {
       estimateSessionEventTokens(eventsSinceSummary) < tokenThreshold
     ) {
       return false;
+    }
+    if (options.beforeCompact) {
+      const proceed = await options.beforeCompact(eventsSinceSummary);
+      if (!proceed) {
+        return false;
+      }
     }
 
     await this.session.append({

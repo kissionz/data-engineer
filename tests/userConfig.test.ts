@@ -31,10 +31,16 @@ describe("user config", () => {
           provider: "openai",
           name: "production-model",
           baseUrl: "https://gateway.example/v1",
+          pricing: {
+            inputPerMillionTokens: 1.5,
+            outputPerMillionTokens: 6,
+            cacheReadPerMillionTokens: 0.75,
+          },
         },
         budget: {
           maxTurns: 25,
           maxToolCalls: 40,
+          maxEstimatedCostUsd: 2,
         },
         memory: { enabled: false },
         mcpServers: [
@@ -62,8 +68,15 @@ describe("user config", () => {
     );
 
     await expect(loadUserConfig(configPath)).resolves.toMatchObject({
-      model: { name: "production-model" },
-      budget: { maxTurns: 25, maxToolCalls: 40 },
+      model: {
+        name: "production-model",
+        pricing: { inputPerMillionTokens: 1.5 },
+      },
+      budget: {
+        maxTurns: 25,
+        maxToolCalls: 40,
+        maxEstimatedCostUsd: 2,
+      },
       memory: { enabled: false },
       mcpServers: [
         {
@@ -79,6 +92,12 @@ describe("user config", () => {
 
   it.each([
     [{ extra: true }, "Unrecognized key"],
+    [
+      {
+        budget: { maxEstimatedCostUsd: 1 },
+      },
+      "requires non-zero model pricing",
+    ],
     [
       {
         mcpServers: [

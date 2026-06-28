@@ -321,6 +321,21 @@ class CountingFinalModel implements ModelClient {
   }
 }
 
+class CostedFinalModel implements ModelClient {
+  async complete(): Promise<AgentResponse> {
+    return {
+      finalText: "expensive answer",
+      stopReason: "end_turn",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+        estimatedCostUsd: 0.2,
+      },
+      requestId: "costed-final",
+    };
+  }
+}
+
 class TruncatedThenFinalModel implements ModelClient {
   calls = 0;
   sawPartialAssistantMessage = false;
@@ -926,6 +941,28 @@ describe("AgentLoop", () => {
       "Stopped: token budget reached.",
     );
     expect(model.calls).toBe(0);
+  });
+
+  it("enforces estimated cost after a final model response", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const loop = new AgentLoop(
+      new CostedFinalModel(),
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxEstimatedCostUsd: 0.1 },
+    );
+
+    await expect(loop.run("respect the cost cap")).resolves.toBe(
+      "Stopped: estimated-cost budget reached.",
+    );
   });
 
   it("preserves truncated output and supplies it to the continuation turn", async () => {

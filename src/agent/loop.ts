@@ -36,6 +36,7 @@ import {
 
 export class AgentLoop {
   private readonly sessionApprovals = new Set<string>();
+  private sessionStartEmitted = false;
 
   constructor(
     private readonly model: ModelClient,
@@ -92,6 +93,19 @@ export class AgentLoop {
       await this.restoreSessionApprovals();
       await this.recoverPendingApprovals(signal, budget);
       await this.recordStatus("running");
+      if (!this.sessionStartEmitted) {
+        const startResult = await this.hooks?.emit(
+          "SessionStart",
+          { userTask },
+          signal,
+        );
+        if (startResult?.decision === "block") {
+          throw new Error(
+            startResult.reason ?? "SessionStart hook blocked the session.",
+          );
+        }
+        this.sessionStartEmitted = true;
+      }
       await this.recoverInterruptedToolCalls();
       await this.session.append({
         type: "user_message",
@@ -128,6 +142,18 @@ export class AgentLoop {
           await this.compactor?.compactIfNeeded({
             events,
             tokenThreshold: compactionTokenThreshold,
+            beforeCompact: async (eventsToCompact) => {
+              const result = await this.hooks?.emit(
+                "PreCompact",
+                {
+                  eventCount: eventsToCompact.length,
+                  estimatedTokens:
+                    estimateTokens(eventsToCompact),
+                },
+                signal,
+              );
+              return result?.decision !== "block";
+            },
           })
         ) {
           events = await this.session.load();
@@ -267,6 +293,9 @@ export class AgentLoop {
             continue;
           }
 
+          if (usageRecord?.exhaustion) {
+            return this.finishForBudget(usageRecord.exhaustion);
+          }
           const completedFinalText =
             accumulatedFinalText + response.finalText;
           const stopBlock = await this.beforeAgentStop(

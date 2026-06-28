@@ -18,7 +18,7 @@ import {
 } from "./agent/sessionManager.js";
 import { HookManager } from "./hooks/manager.js";
 import { protectSensitiveWrites } from "./hooks/defaults.js";
-import type { ModelClient } from "./model/base.js";
+import type { ModelClient, ModelPricing } from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
 import { MockModel } from "./model/mock.js";
 import { OpenAIModel, type ApiStyle } from "./model/openai.js";
@@ -37,6 +37,10 @@ import { DockerAvailabilityChecker } from "./runtime/dockerAvailability.js";
 import { DockerShellExecutor } from "./runtime/dockerShellExecutor.js";
 import { LocalCommandExecutor } from "./runtime/localExecutor.js";
 import { LocalShellExecutor, type NetworkPolicy } from "./runtime/localShellExecutor.js";
+import {
+  discoverRuntimeCapabilities,
+  type RuntimeCapabilities,
+} from "./runtime/capabilities.js";
 import {
   parseSandboxConfig,
   type SandboxConfig,
@@ -171,14 +175,6 @@ async function main(): Promise<void> {
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
   if (opts.envFile) {
     await loadEnvFile(path.resolve(sourceWorkspaceRoot, opts.envFile));
-  } else {
-    // Auto-detect .env in workspace root when --env-file is not specified
-    const defaultEnvPath = path.resolve(sourceWorkspaceRoot, ".env");
-    try {
-      await loadEnvFile(defaultEnvPath);
-    } catch {
-      // Silently ignore if .env does not exist
-    }
   }
   const userConfig = await loadUserConfig(
     opts.config ?? process.env.HARNESS_CONFIG ?? defaultUserConfigPath(),
@@ -212,6 +208,10 @@ async function main(): Promise<void> {
 
   const workspaceRoot = worktree?.path ?? sourceWorkspaceRoot;
   const workspace = new Workspace(workspaceRoot);
+  const runtimeCapabilities = await discoverRuntimeCapabilities(
+    executor,
+    workspaceRoot,
+  );
   const memory =
     userConfig.memory?.enabled === false
       ? undefined
@@ -364,6 +364,12 @@ async function main(): Promise<void> {
       ),
       "--max-model-retries",
     ),
+    ...(userConfig.budget?.maxEstimatedCostUsd !== undefined
+      ? {
+          maxEstimatedCostUsd:
+            userConfig.budget.maxEstimatedCostUsd,
+        }
+      : {}),
   };
   console.log(
     [
@@ -373,6 +379,8 @@ async function main(): Promise<void> {
       `memory=${memory ? "on" : "off"}`,
       `telemetry=${telemetry === noopTelemetrySink ? "off" : "on"}`,
       `mcpTools=${mcpManager.tools.length}`,
+      `git=${runtimeCapabilities.gitRepository ? "repository" : runtimeCapabilities.git ? "available" : "unavailable"}`,
+      `rg=${runtimeCapabilities.ripgrep ? "available" : "unavailable"}`,
       `budget(turns=${budget.maxTurns}, tools=${budget.maxToolCalls}, wallMs=${budget.maxWallTimeMs})`,
     ].join(" "),
   );
@@ -390,12 +398,14 @@ async function main(): Promise<void> {
       modelName,
       baseUrl,
       apiStyle,
+      modelPricing: userConfig.model?.pricing,
       maxTurns,
       budget,
       memory,
       mcpTools: mcpManager.tools,
       telemetry,
       interactivePrompt,
+      runtimeCapabilities,
     }),
   });
   const runtime = createRuntime(initialSession);
@@ -484,12 +494,14 @@ interface CreateAgentOptions {
   modelName: string;
   baseUrl?: string;
   apiStyle?: ApiStyle;
+  modelPricing?: ModelPricing;
   maxTurns: number;
   budget: AgentBudget;
   memory?: MemoryService;
   mcpTools: readonly McpToolAdapter[];
   telemetry: TelemetrySink;
   interactivePrompt?: InteractivePrompt;
+  runtimeCapabilities: RuntimeCapabilities;
 }
 
 async function createShellExecutorFactory(
@@ -542,6 +554,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     options.modelName,
     options.baseUrl,
     options.apiStyle,
+    options.modelPricing,
   );
   const todoStore = new TodoStore(options.session.todoPath);
   const telemetry = new SessionTelemetryObserver(options.telemetry, {
@@ -561,15 +574,22 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
   hooks.register("BeforeToolUse", protectSensitiveWrites);
 
   tools.register(new ReadTool(options.workspace));
-  tools.register(new GrepTool(options.workspace, options.executor));
-  tools.register(new GlobTool(options.workspace, options.executor));
+  if (options.runtimeCapabilities.ripgrep) {
+    tools.register(new GrepTool(options.workspace, options.executor));
+    tools.register(new GlobTool(options.workspace, options.executor));
+  }
   tools.register(new WriteTool(options.workspace));
   tools.register(new EditTool(options.workspace));
   if (options.shellExecutor) {
     tools.register(new BashTool(options.workspace, options.shellExecutor));
   }
-  tools.register(new GitStatusTool(options.workspace, options.executor));
-  tools.register(new GitDiffTool(options.workspace, options.executor));
+  if (
+    options.runtimeCapabilities.git &&
+    options.runtimeCapabilities.gitRepository
+  ) {
+    tools.register(new GitStatusTool(options.workspace, options.executor));
+    tools.register(new GitDiffTool(options.workspace, options.executor));
+  }
   tools.register(new TodoReadTool(todoStore));
   tools.register(new TodoWriteTool(todoStore));
   tools.register(new SkillListTool(skillLoader));
@@ -601,6 +621,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
         provider: options.provider,
         model: options.modelName,
       },
+      options.runtimeCapabilities,
     ),
   );
 
@@ -827,6 +848,7 @@ function createModel(
   model: string,
   baseUrl: string | undefined,
   apiStyle?: ApiStyle,
+  pricing?: ModelPricing,
 ): ModelClient {
   assertModelConfiguration(provider);
 
@@ -839,6 +861,7 @@ function createModel(
     model,
     baseUrl,
     apiStyle,
+    pricing,
   });
 }
 

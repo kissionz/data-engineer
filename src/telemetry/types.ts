@@ -60,6 +60,7 @@ export type TelemetryEvent =
       inputTokens?: number;
       outputTokens?: number;
       cacheReadTokens?: number;
+      estimatedCostUsd?: number;
       stopReason?: string;
       errorCode?: string;
     }

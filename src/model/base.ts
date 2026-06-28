@@ -1,5 +1,11 @@
 import type { AgentMessage, AgentResponse, StopReason } from "../agent/types.js";
 
+export interface ModelPricing {
+  inputPerMillionTokens: number;
+  outputPerMillionTokens: number;
+  cacheReadPerMillionTokens?: number;
+}
+
 /**
  * Declares the capabilities of a model provider to inform runtime decisions
  * (e.g., whether streaming is supported, context window size for compaction).

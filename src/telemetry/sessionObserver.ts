@@ -114,6 +114,7 @@ export class SessionTelemetryObserver {
           inputTokens: event.usage?.inputTokens,
           outputTokens: event.usage?.outputTokens,
           cacheReadTokens: event.usage?.cacheReadTokens,
+          estimatedCostUsd: event.usage?.estimatedCostUsd,
         });
       } else if (event.type === "tool_execution_started") {
         this.toolCallCount += 1;

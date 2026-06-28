@@ -149,6 +149,88 @@ describe("OpenAIModel", () => {
     expect(result.finalText).toBe("done");
   });
 
+  it("calculates configured cost with cached Responses input", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "priced-model",
+      pricing: {
+        inputPerMillionTokens: 10,
+        outputPerMillionTokens: 20,
+        cacheReadPerMillionTokens: 2,
+      },
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            output_text: "done",
+            usage: {
+              input_tokens: 120,
+              output_tokens: 18,
+              input_tokens_details: { cached_tokens: 40 },
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).resolves.toMatchObject({
+      usage: {
+        inputTokens: 120,
+        outputTokens: 18,
+        cacheReadTokens: 40,
+        estimatedCostUsd: 0.00124,
+      },
+    });
+  });
+
+  it("calculates compatible chat cost with cached prompt tokens", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "priced-compatible-model",
+      baseUrl: "https://compatible.example/v1",
+      pricing: {
+        inputPerMillionTokens: 10,
+        outputPerMillionTokens: 20,
+        cacheReadPerMillionTokens: 2,
+      },
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: { role: "assistant", content: "done" },
+                finish_reason: "stop",
+              },
+            ],
+            usage: {
+              prompt_tokens: 100,
+              completion_tokens: 10,
+              prompt_tokens_details: { cached_tokens: 25 },
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).resolves.toMatchObject({
+      usage: {
+        inputTokens: 100,
+        outputTokens: 10,
+        cacheReadTokens: 25,
+        estimatedCostUsd: 0.001,
+      },
+    });
+  });
+
   it("does not treat content-filtered Responses output as max_tokens", async () => {
     const model = new OpenAIModel({
       apiKey: "test-key",

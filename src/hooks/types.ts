@@ -1,7 +1,9 @@
 export type HookEventName =
+  | "SessionStart"
   | "BeforeToolUse"
   | "AfterToolUse"
   | "AfterEdit"
+  | "PreCompact"
   | "BeforeAgentStop";
 export type HookDecision = "allow" | "block";
 

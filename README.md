@@ -244,6 +244,25 @@ npm run dev -- --max-turns 100 --max-tool-calls 300 \
 
 Budget 会在模型请求和工具调用前检查。provider token 用量按 request ID 记录，重试会计入重试上限；达到 wall-time 上限时，正在进行的工作会通过同一取消链终止。
 
+费用预算不会猜测或在线获取模型价格。需要在可信用户配置中同时设置价格和上限：
+
+```json
+{
+  "model": {
+    "pricing": {
+      "inputPerMillionTokens": 1.5,
+      "outputPerMillionTokens": 6,
+      "cacheReadPerMillionTokens": 0.75
+    }
+  },
+  "budget": {
+    "maxEstimatedCostUsd": 2
+  }
+}
+```
+
+价格单位为每百万 token 的美元费用，应按实际 provider 合同维护。配置费用上限但缺少非零价格时，启动会失败，避免产生“已经限费”的错误安全感。
+
 Windows PowerShell 不使用 Bash 的行尾 `\` 续行语法。请把上面的多行命令写成一行，或改用 PowerShell 的反引号续行。
 
 ## 长期记忆（Memory）
@@ -392,6 +411,8 @@ npm start -- --sandbox-network bridge
 已完成的 `toolCallId` 可从日志恢复。已经开始但被中断的执行会标记为 `unknown_outcome`，不会自动再次运行。该状态用于任务恢复，不等同于长期 Memory。
 
 长会话始终保留完整的 append-only event log。当新增事件达到阈值后，运行时会追加一份有界的事实摘要，并结合近期事件构建模型上下文。`BeforeToolUse`、`AfterToolUse`、`AfterEdit` 和 `BeforeAgentStop` hooks 提供确定性的拦截和观察点；默认写入 hook 会阻止敏感路径和过大的单文件写入。
+
+启动时会探测 Git、当前 Git repository 和 ripgrep。缺失 Git 时不注册 GitStatus/GitDiff，缺失 ripgrep 时不注册 Grep/Glob；Read 和文件编辑能力仍可使用。生命周期还提供 `SessionStart` 与 `PreCompact` hook 事件点。
 
 ## 遥测（Telemetry）
 

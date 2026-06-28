@@ -8,6 +8,7 @@ import type { ModelClient } from "../model/base.js";
 import type { PermissionPolicy } from "../permissions/policy.js";
 import { PermissionGate } from "../permissions/gate.js";
 import type { CommandExecutor } from "../runtime/commandExecutor.js";
+import type { RuntimeCapabilities } from "../runtime/capabilities.js";
 import type { Workspace } from "../runtime/workspace.js";
 import { SkillLoader } from "../skills/loader.js";
 import { CODE_REVIEWER_SPEC } from "../subagents/spec.js";
@@ -55,6 +56,11 @@ export class TaskTool implements Tool {
       provider: string;
       model: string;
     },
+    private readonly runtimeCapabilities: RuntimeCapabilities = {
+      git: true,
+      ripgrep: true,
+      gitRepository: true,
+    },
   ) {}
 
   async execute(
@@ -73,7 +79,11 @@ export class TaskTool implements Tool {
       };
     }
 
-    const tools = createReviewerTools(this.workspace, this.executor);
+    const tools = createReviewerTools(
+      this.workspace,
+      this.executor,
+      this.runtimeCapabilities,
+    );
     const childSessionId = createChildSessionId(
       this.parentSessionId,
       CODE_REVIEWER_SPEC.name,
@@ -144,14 +154,19 @@ export class TaskTool implements Tool {
 function createReviewerTools(
   workspace: Workspace,
   executor: CommandExecutor,
+  capabilities: RuntimeCapabilities,
 ): ToolRegistry {
   const tools = new ToolRegistry();
   const skills = new SkillLoader(workspace);
   tools.register(new ReadTool(workspace));
-  tools.register(new GrepTool(workspace, executor));
-  tools.register(new GlobTool(workspace, executor));
-  tools.register(new GitStatusTool(workspace, executor));
-  tools.register(new GitDiffTool(workspace, executor));
+  if (capabilities.ripgrep) {
+    tools.register(new GrepTool(workspace, executor));
+    tools.register(new GlobTool(workspace, executor));
+  }
+  if (capabilities.git && capabilities.gitRepository) {
+    tools.register(new GitStatusTool(workspace, executor));
+    tools.register(new GitDiffTool(workspace, executor));
+  }
   tools.register(new SkillListTool(skills));
   tools.register(new SkillLoadTool(skills));
   return tools;

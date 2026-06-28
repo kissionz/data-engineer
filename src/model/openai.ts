@@ -1,5 +1,11 @@
 import type { AgentMessage, AgentResponse, StopReason, ToolCall } from "../agent/types.js";
-import { ModelRequestError, type ModelCapabilities, type ModelClient, type ModelStreamHandler } from "./base.js";
+import {
+  ModelRequestError,
+  type ModelCapabilities,
+  type ModelClient,
+  type ModelPricing,
+  type ModelStreamHandler,
+} from "./base.js";
 
 const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_STREAM_BYTES = 64 * 1024 * 1024;
@@ -13,6 +19,7 @@ export interface OpenAIModelOptions {
   model: string;
   baseUrl?: string;
   apiStyle?: ApiStyle;
+  pricing?: ModelPricing;
   fetchImpl?: typeof fetch;
 }
 
@@ -114,10 +121,11 @@ export class OpenAIModel implements ModelClient {
     onStreamEvent?: ModelStreamHandler;
     signal?: AbortSignal;
   }): Promise<AgentResponse> {
-    if (this.apiStyle === "chat_completions") {
-      return this.completeChatCompletions(options);
-    }
-    return this.completeResponses(options);
+    const response =
+      this.apiStyle === "chat_completions"
+        ? await this.completeChatCompletions(options)
+        : await this.completeResponses(options);
+    return applyPricing(response, this.options.pricing);
   }
 
   private async completeResponses(options: {
@@ -844,6 +852,9 @@ interface ChatCompletionsResponseBody {
   usage?: {
     prompt_tokens?: number;
     completion_tokens?: number;
+    prompt_tokens_details?: {
+      cached_tokens?: number;
+    };
   };
   error?: {
     message?: string;
@@ -1011,6 +1022,47 @@ function parseChatUsage(
   return {
     inputTokens: inputTokens as number,
     outputTokens: outputTokens as number,
+    ...(Number.isSafeInteger(
+      body.usage?.prompt_tokens_details?.cached_tokens,
+    ) &&
+    (body.usage?.prompt_tokens_details?.cached_tokens ?? -1) >= 0
+      ? {
+          cacheReadTokens:
+            body.usage?.prompt_tokens_details?.cached_tokens,
+        }
+      : {}),
+  };
+}
+
+function applyPricing(
+  response: AgentResponse,
+  pricing: ModelPricing | undefined,
+): AgentResponse {
+  if (!response.usage || !pricing) {
+    return response;
+  }
+
+  const cacheReadTokens = Math.min(
+    response.usage.inputTokens,
+    response.usage.cacheReadTokens ?? 0,
+  );
+  const uncachedInputTokens =
+    response.usage.inputTokens - cacheReadTokens;
+  const cacheReadRate =
+    pricing.cacheReadPerMillionTokens ??
+    pricing.inputPerMillionTokens;
+  const estimatedCostUsd =
+    (uncachedInputTokens * pricing.inputPerMillionTokens +
+      cacheReadTokens * cacheReadRate +
+      response.usage.outputTokens * pricing.outputPerMillionTokens) /
+    1_000_000;
+
+  return {
+    ...response,
+    usage: {
+      ...response.usage,
+      estimatedCostUsd,
+    },
   };
 }
 
