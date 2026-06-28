@@ -39,6 +39,38 @@ npm run dev -- --provider mock --task "Inspect README.md"
 
 `npm start` 运行已构建的 `dist/index.js`；修改源码后应重新执行 `npm run build`。开发时可使用 `npm run dev` 直接运行 TypeScript 源码。
 
+## 从 GitHub 更新
+
+每次拉取新版本后都应同步依赖并重新构建，不能直接复用旧
+`node_modules`：
+
+```bash
+git pull origin main
+npm install
+npm run build
+```
+
+如果 `npm install` 后仍出现依赖版本错乱，可重建本机依赖。不要删除仓库中的
+`package-lock.json`，它用于锁定生产依赖版本。
+
+macOS / Linux：
+
+```bash
+rm -rf node_modules
+npm ci
+```
+
+Windows PowerShell：
+
+```powershell
+Remove-Item -Recurse -Force node_modules
+npm ci
+```
+
+出现 `Cannot find module '@modelcontextprotocol/sdk/...'`、`ajv`、`undici`
+或 `yaml` 时，说明当前依赖没有按最新 `package-lock.json` 安装，重新执行
+`npm install` 或 `npm ci`，而不是逐个手工安装缺失包。
+
 ## 基本用法
 
 ### 单次任务

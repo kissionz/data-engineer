@@ -20,7 +20,7 @@ const stdioTransportSchema = z
 const httpTransportSchema = z
   .object({
     type: z.literal("http"),
-    url: z.url(),
+    url: z.string().url(),
     allowedHosts: z.array(z.string().min(1).max(253)).min(1).max(32),
     tokenEnv: environmentName.optional(),
     allowLocalhost: z.boolean().default(false),
@@ -60,7 +60,7 @@ export const userConfigSchema = z
       .object({
         provider: z.enum(["openai", "mock"]).optional(),
         name: z.string().min(1).max(200).optional(),
-        baseUrl: z.url().optional(),
+        baseUrl: z.string().url().optional(),
       })
       .strict()
       .optional(),
