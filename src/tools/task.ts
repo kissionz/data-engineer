@@ -11,6 +11,10 @@ import type { CommandExecutor } from "../runtime/commandExecutor.js";
 import type { Workspace } from "../runtime/workspace.js";
 import { SkillLoader } from "../skills/loader.js";
 import { CODE_REVIEWER_SPEC } from "../subagents/spec.js";
+import {
+  SessionTelemetryObserver,
+  type TelemetrySink,
+} from "../telemetry/index.js";
 import type {
   Tool,
   ToolExecutionContext,
@@ -46,6 +50,11 @@ export class TaskTool implements Tool {
     private readonly executor: CommandExecutor,
     private readonly parentSessionId: string,
     private readonly maxResultChars = 20_000,
+    private readonly telemetry?: {
+      sink: TelemetrySink;
+      provider: string;
+      model: string;
+    },
   ) {}
 
   async execute(
@@ -75,6 +84,13 @@ export class TaskTool implements Tool {
       "sessions",
       `${childSessionId}.jsonl`,
     );
+    const telemetry = this.telemetry
+      ? new SessionTelemetryObserver(this.telemetry.sink, {
+          provider: this.telemetry.provider,
+          model: this.telemetry.model,
+          trigger: "subagent",
+        })
+      : undefined;
     const result = await new AgentLoop(
       this.model,
       tools,
@@ -84,7 +100,15 @@ export class TaskTool implements Tool {
         30,
         CODE_REVIEWER_SPEC.systemPrompt,
       ),
-      new SessionStore(childSessionPath),
+      new SessionStore(
+        childSessionPath,
+        childSessionId,
+        telemetry
+          ? async (event) => {
+              void telemetry.observe(event);
+            }
+          : undefined,
+      ),
       CODE_REVIEWER_SPEC.maxTurns,
       async () => "reject",
     ).run(args.task.trim(), context?.signal, context?.budget);

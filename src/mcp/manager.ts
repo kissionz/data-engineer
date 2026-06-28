@@ -14,6 +14,7 @@ import {
   McpToolAdapter,
   type McpToolCaller,
 } from "./toolAdapter.js";
+import { discoverContentAdapters } from "./contentAdapters.js";
 
 interface McpConnection {
   config: McpServerConfig;
@@ -97,7 +98,11 @@ async function connectServer(config: McpServerConfig): Promise<McpConnection> {
   }
 
   try {
-    const tools = await discoverTools(client, config);
+    const capabilities = client.getServerCapabilities();
+    const tools = capabilities?.tools
+      ? await discoverTools(client, config)
+      : [];
+    const contentAdapters = await discoverContentAdapters(client, config);
     const caller: McpToolCaller = {
       callTool: async (name, args, options) =>
         client.callTool(
@@ -113,16 +118,19 @@ async function connectServer(config: McpServerConfig): Promise<McpConnection> {
       config,
       client,
       cleanup,
-      tools: tools.map(
-        (tool) =>
-          new McpToolAdapter({
-            serverId: config.id,
-            remoteName: tool.name,
-            inputSchema: tool.inputSchema,
-            timeoutMs: config.timeoutMs,
-            caller,
-          }),
-      ),
+      tools: [
+        ...tools.map(
+          (tool) =>
+            new McpToolAdapter({
+              serverId: config.id,
+              remoteName: tool.name,
+              inputSchema: tool.inputSchema,
+              timeoutMs: config.timeoutMs,
+              caller,
+            }),
+        ),
+        ...contentAdapters,
+      ],
     };
   } catch (error: unknown) {
     await client.close().catch(() => undefined);

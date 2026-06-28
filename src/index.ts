@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { Command } from "commander";
+import { homedir } from "node:os";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { AgentLoop } from "./agent/loop.js";
@@ -65,6 +66,13 @@ import {
   defaultUserConfigPath,
   loadUserConfig,
 } from "./config/userConfig.js";
+import {
+  createTelemetrySink,
+  flushSessionTelemetryObservers,
+  noopTelemetrySink,
+  SessionTelemetryObserver,
+  type TelemetrySink,
+} from "./telemetry/index.js";
 
 interface CliOptions {
   task?: string;
@@ -93,6 +101,7 @@ interface CliOptions {
 }
 
 let activeMcpManager: McpManager | undefined;
+let activeTelemetrySink: TelemetrySink = noopTelemetrySink;
 
 async function main(): Promise<void> {
   const program = new Command();
@@ -194,6 +203,13 @@ async function main(): Promise<void> {
     userConfig.memory?.enabled === false
       ? undefined
       : new MemoryService(memoryPathsForWorkspace(workspaceRoot));
+  const telemetry =
+    userConfig.telemetry?.enabled === false
+      ? noopTelemetrySink
+      : createTelemetrySink(
+          path.join(homedir(), ".harness", "telemetry"),
+        );
+  activeTelemetrySink = telemetry;
   const sandboxConfig = parseSandboxConfig({
     mode: optionOrEnv(
       program,
@@ -331,6 +347,7 @@ async function main(): Promise<void> {
       `model=${modelName}`,
       `endpoint=${baseUrl ? "custom" : "default"}`,
       `memory=${memory ? "on" : "off"}`,
+      `telemetry=${telemetry === noopTelemetrySink ? "off" : "on"}`,
       `mcpTools=${mcpManager.tools.length}`,
       `budget(turns=${budget.maxTurns}, tools=${budget.maxToolCalls}, wallMs=${budget.maxWallTimeMs})`,
     ].join(" "),
@@ -352,6 +369,7 @@ async function main(): Promise<void> {
       budget,
       memory,
       mcpTools: mcpManager.tools,
+      telemetry,
       interactivePrompt,
     }),
   });
@@ -444,6 +462,7 @@ interface CreateAgentOptions {
   budget: AgentBudget;
   memory?: MemoryService;
   mcpTools: readonly McpToolAdapter[];
+  telemetry: TelemetrySink;
   interactivePrompt?: InteractivePrompt;
 }
 
@@ -497,11 +516,17 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     options.baseUrl,
   );
   const todoStore = new TodoStore(options.session.todoPath);
+  const telemetry = new SessionTelemetryObserver(options.telemetry, {
+    provider: options.provider,
+    model: options.modelName,
+  });
   const sessionStore = new SessionStore(
     options.session.sessionPath,
     options.session.id,
-    (event) =>
-      options.session.updateLastSequence(event.sequence).then(() => undefined),
+    async (event) => {
+      void telemetry.observe(event);
+      await options.session.updateLastSequence(event.sequence);
+    },
   );
   const hooks = new HookManager();
   const skillLoader = new SkillLoader(options.workspace);
@@ -542,13 +567,26 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
       options.workspace,
       options.executor,
       options.session.id,
+      undefined,
+      {
+        sink: options.telemetry,
+        provider: options.provider,
+        model: options.modelName,
+      },
     ),
   );
+
+  const permissionPolicy = defaultPolicy();
+  for (const tool of options.mcpTools) {
+    if (tool.effect === "readonly") {
+      permissionPolicy.allowedTools.add(tool.name);
+    }
+  }
 
   return new AgentLoop(
     model,
     tools,
-    new PermissionGate(defaultPolicy()),
+    new PermissionGate(permissionPolicy),
     new ContextBuilder(
       options.workspaceRoot,
       undefined,
@@ -938,4 +976,6 @@ void main()
   })
   .finally(async () => {
     await activeMcpManager?.closeAll();
+    await flushSessionTelemetryObservers();
+    await activeTelemetrySink.close();
   });

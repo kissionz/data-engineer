@@ -1,62 +1,69 @@
 # harness-ts
 
-A TypeScript / Node.js local coding agent harness runtime.
+`harness-ts` 是一个基于 TypeScript / Node.js 的本地编程 Agent 运行时。它可以在指定工作区中读取和修改代码、执行受控命令、调用 OpenAI Responses API，并把会话、工具调用和恢复信息持久化到本地。
 
-## Requirements
+## 环境要求
 
-- Node.js 22.12 or newer
-- Git for `GitStatus` and `GitDiff`
-- ripgrep (`rg`) for `Grep` and `Glob`
-- Docker with Linux containers for sandboxed Bash, or Bash installed locally
-  when explicitly using host mode
+- Node.js 22.12 或更高版本
+- Git：供 `GitStatus`、`GitDiff` 和 worktree 隔离模式使用
+- ripgrep (`rg`)：供 `Grep` 和 `Glob` 使用
+- Docker（Linux 容器模式）：用于隔离执行 Bash
+- 如果明确使用 host 模式，则本机需要安装 Bash
 
-This P0 implementation includes:
+Windows 用户如需使用 host 模式，必须确保 `bash.exe` 已加入 `PATH`，例如安装 Git for Windows。macOS 和 Linux 通常已有 Bash，但默认的 `auto` 模式仍优先检查 Docker，不会自动退回 host 模式。
 
-- Agent loop with model tool-call continuation
-- Append-only session event log
-- Durable session metadata, lifecycle state, and tool-call deduplication
-- Per-task wall-time, token, turn, tool-call, and retry budgets
-- Explicit, searchable cross-session user and project memory
-- MCP tool discovery and execution over stdio or Streamable HTTP
-- Workspace path boundary checks
-- Atomic UTF-8 file writes with SHA-256 conflict detection
-- Read, Grep, Glob, Write, Edit, Bash, Git status/diff, and Todo tools
-- Explicit, read-only project Skill discovery and loading
-- Tool registry
-- Permission gate with allow / ask / deny decisions
-- Real OpenAI Responses API model client by default
-- Streaming model output with concise tool status lines
-- End-to-end task cancellation across model requests and child processes
-- Append-only context compaction and deterministic tool lifecycle hooks
-- Automatic post-edit Git diff review
-- Docker-isolated Bash with explicit host/off modes
-- Bounded, read-only code-reviewer subagent
-- Explicit isolated Git worktree mode
-- Mock model only for explicit local loop testing
+## 安装与首次运行
 
-## Usage
+在项目目录中安装依赖并构建：
 
 ```bash
 npm install
 npm run build
+```
+
+复制环境变量示例，填入真实 API Key，然后显式加载该文件：
+
+```bash
+cp .env.example .env
+# 编辑 .env 后运行：
 npm start -- --env-file .env --task "Inspect this project"
 ```
 
-Without `--task`, the CLI starts an interactive session and keeps accepting user messages until `/exit` or `/quit`:
+`harness-ts` **不会自动加载工作区中的 `.env`**。只有在确认文件可信时，才应使用 `--env-file`。相对路径以 `--cwd` 指定的工作区为基准；也可以直接传入绝对路径。
+
+默认使用真实的 OpenAI provider，必须提供 `OPENAI_API_KEY`。只想测试 Agent 循环而不发起 API 请求时，需要明确启用 mock provider：
+
+```bash
+npm run dev -- --provider mock --task "Inspect README.md"
+```
+
+`npm start` 运行已构建的 `dist/index.js`；修改源码后应重新执行 `npm run build`。开发时可使用 `npm run dev` 直接运行 TypeScript 源码。
+
+## 基本用法
+
+### 单次任务
+
+通过 `--task` 提交任务，任务完成后进程退出：
+
+```bash
+npm start -- --env-file .env --task "Inspect this project"
+```
+
+可以通过 `--cwd` 指定工作区：
+
+```bash
+npm start -- --cwd /path/to/project --env-file .env --task "Inspect this project"
+```
+
+### 交互会话
+
+不传 `--task` 时，CLI 会进入交互模式，并持续接收消息，直到使用 `/exit`、`/quit` 或确认终止：
 
 ```bash
 npm start
 ```
 
-Each process starts a new isolated session by default. Resume the most recently
-selected session or a specific session explicitly:
-
-```bash
-npm start -- --resume latest
-npm start -- --resume 20260627-120000-a1b2c3
-```
-
-Interactive session commands:
+交互命令：
 
 ```text
 /new
@@ -67,29 +74,42 @@ Interactive session commands:
 /exit
 ```
 
-While a task is running, press `Ctrl+C` once to cancel it gracefully. After
-cleanup, type `y` to terminate the session or `n` to continue. Press `Ctrl+C`
-again while cancellation is pending to exit immediately. In one-shot
-`--task` mode, a graceful cancellation exits with status 130.
+- `/new`：创建并切换到新会话。
+- `/resume <session-id|latest>`：恢复指定会话或最近选择的会话。
+- `/session`：显示当前会话 ID、状态和模型。
+- `/sessions`：列出已有会话。
+- `/inspect [session-id|latest]`：查看会话元数据；省略参数时查看当前会话。
+- `/exit`：退出交互模式；`/quit` 也可用。
 
-## Environment Setup
-
-Secrets are read from the shell environment. A workspace `.env` is never loaded
-implicitly; opt in explicitly when you trust it:
+每次启动默认创建独立会话。也可以在启动时恢复会话：
 
 ```bash
-cp .env.example .env
-# edit .env, then:
-npm start -- --env-file .env
+npm start -- --resume latest
+npm start -- --resume 20260627-120000-a1b2c3
 ```
 
-Non-secret user settings live in `~/.harness/config.json`. Start from
-`config.example.json`; this is also where trusted MCP server definitions live.
-The user config supports model, Base URL, Budget, Memory, and MCP settings.
-API keys and MCP tokens must remain environment-variable values, never config
-values.
-On macOS and Linux, the config must be owned by the current user and cannot be
-group- or world-writable.
+### 使用 `Ctrl+C` 取消
+
+在单次 `--task` 模式中：
+
+- 第一次按 `Ctrl+C` 会请求优雅取消，并清理模型请求和子进程。
+- 清理尚未完成时再次按 `Ctrl+C` 会立即退出。
+- 优雅取消完成后，进程以状态码 130 退出。
+
+在交互模式中：
+
+- 任务运行时第一次按 `Ctrl+C` 会取消当前任务。
+- 清理后输入 `y` 终止整个会话，输入 `n` 继续使用当前会话。
+- 没有任务运行时按 `Ctrl+C`，也会要求输入 `y` 或 `n`。
+- 等待确认时再次按 `Ctrl+C` 会立即以状态码 130 退出。
+
+同一个 `AbortSignal` 会传递给模型请求、工具注册表、命令工具、只读子代理以及本地或 Docker 执行器。本地命令会先获得宽限期，再清理完整进程树。模型或传输错误只结束当前交互轮次，不会直接终止整个交互会话。
+
+## 用户配置、Base URL 与环境变量
+
+### 用户配置文件
+
+非敏感配置默认放在 `~/.harness/config.json`。可从 `config.example.json` 开始配置；模型、Base URL、Budget、Memory 和可信 MCP server 都在这里定义。
 
 ```json
 {
@@ -99,12 +119,31 @@ group- or world-writable.
     "name": "gpt-4.1",
     "baseUrl": "https://api.openai.com/v1"
   },
-  "memory": { "enabled": true },
+  "budget": {
+    "maxTurns": 50,
+    "maxWallTimeMs": 1800000,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 250000,
+    "maxToolCalls": 200,
+    "maxModelRetries": 3
+  },
+  "memory": {
+    "enabled": true
+  },
+  "telemetry": {
+    "enabled": true
+  },
   "mcpServers": []
 }
 ```
 
-Shell or explicit env-file values:
+可通过 `--config <path>` 或 `HARNESS_CONFIG` 改用其他可信配置文件。API Key 和 MCP token 不得写入 JSON 配置，必须通过环境变量提供。
+
+在 macOS 和 Linux 上，配置文件必须由当前用户拥有，并且不能对 group 或 others 开放写权限。Windows 不执行 Unix 文件所有者和 mode 检查，但仍应使用仅当前用户可访问的位置保存配置。
+
+### 显式 env-file
+
+`.env.example` 使用以下变量：
 
 ```bash
 OPENAI_API_KEY=sk-your-real-key
@@ -112,82 +151,96 @@ OPENAI_MODEL=gpt-4.1
 OPENAI_BASE_URL=https://api.openai.com/v1
 ```
 
-`OPENAI_API_KEY` is required for the default provider. CLI values override
-environment variables, which override user config.
+显式加载方式：
 
-The CLI reads:
+```bash
+npm start -- --env-file .env
+```
 
-- `OPENAI_API_KEY`: required for the default OpenAI provider
-- `OPENAI_PROVIDER`: `openai` or the explicit test-only `mock` provider
-- `OPENAI_MODEL`: optional model override, defaults to `gpt-4.1`
-- `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL, defaults to `https://api.openai.com/v1`
-- `HARNESS_CONFIG`: optional trusted user config path
-- `HARNESS_BASH_SANDBOX`: `auto`, `docker`, `host`, or `off`
-- `HARNESS_SANDBOX_IMAGE`: Docker image used for Bash
-- `HARNESS_SANDBOX_PULL`: `never` or `missing`
-- `HARNESS_SANDBOX_NETWORK`: `none` or `bridge`
-- `HARNESS_MAX_TURNS`, `HARNESS_MAX_WALL_TIME_MS`
-- `HARNESS_MAX_INPUT_TOKENS`, `HARNESS_MAX_OUTPUT_TOKENS`
-- `HARNESS_MAX_TOOL_CALLS`, `HARNESS_MAX_MODEL_RETRIES`
+env-file 只负责把值加入进程环境，不会把它变成用户配置。不要提交含有真实密钥的 `.env`，也不要加载不可信仓库提供的 env-file。
 
-You can also pass the model explicitly:
+### 配置优先级
+
+对可覆盖的运行参数，CLI 参数优先于环境变量，环境变量优先于 `~/.harness/config.json`。未设置时使用程序默认值。
+
+常用环境变量：
+
+- `OPENAI_API_KEY`：默认 OpenAI provider 必需。
+- `OPENAI_PROVIDER`：`openai`，或仅供显式本地循环测试的 `mock`。
+- `OPENAI_MODEL`：覆盖模型名，默认 `gpt-4.1`。
+- `OPENAI_BASE_URL`：OpenAI-compatible API Base URL，默认 `https://api.openai.com/v1`。
+- `HARNESS_CONFIG`：可信用户配置文件路径。
+- `HARNESS_BASH_SANDBOX`：`auto`、`docker`、`host` 或 `off`。
+- `HARNESS_SANDBOX_IMAGE`：Bash 使用的 Docker image。
+- `HARNESS_SANDBOX_PULL`：`never` 或 `missing`。
+- `HARNESS_SANDBOX_NETWORK`：`none` 或 `bridge`。
+- `HARNESS_MAX_TURNS`、`HARNESS_MAX_WALL_TIME_MS`。
+- `HARNESS_MAX_INPUT_TOKENS`、`HARNESS_MAX_OUTPUT_TOKENS`。
+- `HARNESS_MAX_TOOL_CALLS`、`HARNESS_MAX_MODEL_RETRIES`。
+
+也可以直接通过 CLI 指定模型：
 
 ```bash
 npm run dev -- --model gpt-4.1 --task "Find the main agent loop"
 ```
 
-For an OpenAI-compatible gateway or proxy:
+使用 OpenAI-compatible gateway 或代理时：
 
 ```bash
 npm run dev -- --base-url https://your-gateway.example/v1 --task "Inspect README.md"
 ```
 
-Remote model endpoints must use HTTPS. Plain HTTP is accepted only for an
-explicit localhost Base URL.
+远程模型端点必须使用 HTTPS。只有明确指向 localhost 的 Base URL 才允许使用普通 HTTP。
 
-For harness loop development without an API call, opt into the mock provider explicitly:
+## 预算（Budget）
 
-```bash
-npm run dev -- --provider mock --task "Inspect README.md"
-```
+Budget 按每条用户消息限制 Agent 循环，避免任务无限运行或消耗失控。可在用户配置、环境变量或 CLI 中设置：
 
-For longer tasks, adjust the per-message agent loop budget:
+- `maxTurns` / `--max-turns`：最大 Agent 轮数。
+- `maxWallTimeMs` / `--max-wall-time-ms`：最大运行时间，单位为毫秒。
+- `maxInputTokens` / `--max-input-tokens`：provider 输入 token 上限。
+- `maxOutputTokens` / `--max-output-tokens`：provider 输出 token 上限。
+- `maxToolCalls` / `--max-tool-calls`：工具调用上限。
+- `maxModelRetries` / `--max-model-retries`：模型重试上限。
+
+长任务示例：
 
 ```bash
 npm run dev -- --max-turns 100 --max-tool-calls 300 \
   --max-wall-time-ms 3600000
 ```
 
-Budget checks run before model requests and tool calls. Provider token usage is
-recorded by request ID, retry attempts count toward the retry limit, and an
-expired wall-time budget aborts in-flight work through the same cancellation
-chain.
+Budget 会在模型请求和工具调用前检查。provider token 用量按 request ID 记录，重试会计入重试上限；达到 wall-time 上限时，正在进行的工作会通过同一取消链终止。
 
-## Long-Term Memory
+Windows PowerShell 不使用 Bash 的行尾 `\` 续行语法。请把上面的多行命令写成一行，或改用 PowerShell 的反引号续行。
 
-`MemorySearch` is read-only. `MemoryWrite` and `MemoryDelete` require explicit
-user approval and cannot choose storage paths. Memories reject likely secrets,
-credentials, and prompt-injection text; tagged conflicts are returned for user
-resolution instead of being silently overwritten.
+## 长期记忆（Memory）
 
-User memory is stored at `~/.harness/memory/user.jsonl`. Project memory is also
-stored under the user directory, partitioned by a hash of the workspace path, so
-an untrusted repository cannot edit durable memory directly. Only relevant,
-active, unexpired records are injected, as stale untrusted context, with a
-maximum of ten records.
+在用户配置中使用 `"memory": { "enabled": true }` 启用长期记忆。启用后提供：
 
-## MCP Tools
+- `MemorySearch`：只读搜索。
+- `MemoryWrite`：写入记忆，要求用户明确提出并批准。
+- `MemoryDelete`：删除记忆，要求用户明确提出并批准。
 
-MCP servers can only be defined in the trusted user config. All discovered tools
-receive stable provider-safe names, use full JSON Schema validation, retain the
-normal hooks/permission/Budget path, and default to approval-required. Server
-descriptions and schema annotations are not injected as instructions.
-Stdio servers start from the user home directory unless an absolute `cwd` is
-configured, so an untrusted workspace cannot influence executable lookup
-through the current directory.
-Setting an MCP server to `enabled` in this private user config is the persistent
-authorization to start that server; individual MCP tool calls still pass the
-normal permission prompt.
+工具不能自行选择存储路径。Memory 会拒绝疑似 secret、credential 和 prompt-injection 文本；带标签的冲突会交给用户处理，不会静默覆盖。
+
+用户记忆保存在 `~/.harness/memory/user.jsonl`。项目记忆也保存在用户目录中，并按工作区路径的 hash 分区，因此不可信仓库不能直接修改长期记忆。注入模型上下文的内容最多为十条，只包含相关、有效且未过期的记录，并按不可信的历史上下文处理。
+
+Memory 与会话恢复不是同一机制：Memory 用于跨会话保留明确的信息；`.harness/sessions/` 中的事件日志用于当前任务的连续性和恢复。
+
+## MCP 集成
+
+### 当前支持范围
+
+当前稳定支持通过 stdio 或 Streamable HTTP 使用 **MCP Tools、静态 Resources
+和 Prompts**。当 server 声明相应 capability 时，Resources 与 Prompts 会转换成
+有界的只读工具：Resource 只有在实际调用时才读取，Prompt 参数必须通过严格
+schema 校验；返回内容始终带有 server 来源和不可信标记，不会自动注入 Agent
+上下文，也不会冒充 system instruction。
+
+MCP server 只能定义在可信用户配置中。将 server 设置为 `enabled`，表示允许运行时持久启动该 server；每次 MCP tool 调用仍会经过普通的 hooks、权限确认和 Budget 检查。
+
+### stdio 服务
 
 ```json
 {
@@ -202,138 +255,144 @@ normal permission prompt.
         "envAllowlist": ["DOCS_TOKEN"]
       },
       "timeoutMs": 30000,
-      "maxTools": 64
+      "maxTools": 64,
+      "maxResources": 64,
+      "maxPrompts": 64
     }
   ]
 }
 ```
 
-Remote servers use Streamable HTTP, require an exact host allowlist, use HTTPS
-unless localhost is explicitly enabled, reject private-network resolution, and
-read bearer tokens only through `tokenEnv`. MCP results are untrusted and
-bounded; transport failures after dispatch are recorded as `unknown_outcome`
-and never automatically replayed. This batch supports MCP Tools; Resources and
-Prompts remain disabled until their separate untrusted-context path is complete.
+stdio server 默认从用户 home 目录启动；只有配置绝对 `cwd` 时才会改用该目录。这样可避免不可信工作区通过当前目录影响 executable lookup。server 只能收到 `envAllowlist` 中明确列出的环境变量。
 
-## Safety Model
+Windows 的绝对路径可使用 JSON 转义形式，例如 `"C:\\path\\to\\server.js"`；macOS 和 Linux 使用 `/absolute/path/to/server.js`。
 
-Tool names and arguments are validated against the same JSON Schemas sent to the model before hooks or permissions run. Unknown tools and malformed calls are returned to the model as recoverable failures without prompting for approval.
+### Streamable HTTP 服务
 
-Permissions follow resource operations. `Read` and `Grep` are allowed by default. `Write` may create new files without approval but cannot overwrite an existing file. Updating files through `Edit` requires approval. Clearly readonly shell commands are allowed, while commands that may change state require approval. Dangerous shell fragments and sensitive paths such as `.git`, `.env`, and `node_modules` are denied before tool execution.
+远程 server 必须：
 
-When approval is required, you can choose:
+- 配置精确的 `allowedHosts`，不支持通配符。
+- 使用 HTTPS；只有同时明确允许 localhost 时才能使用 HTTP。
+- 通过 `tokenEnv` 从环境变量读取 bearer token，不能把 token 写入配置。
+- 通过目标地址检查；非 localhost 的 private-network resolution 会被拒绝。
+
+MCP tool 会获得稳定且符合 provider 要求的名称，并使用完整 JSON Schema 验证参数。server 描述和 schema annotation 不会被当作指令注入。调用结果按不可信、有限大小的数据处理；请求发出后的传输失败会记录为 `unknown_outcome`，不会自动重放。
+
+## 安全模型
+
+### 工具与权限
+
+模型可用的内置工具包括 `Read`、`Grep`、`Glob`、`Write`、`Edit`、`Bash`（按 sandbox 配置决定是否注册）、`GitStatus`、`GitDiff`、Todo、Memory、Project Skills 和只读 `Task` 子代理。
+
+工具名和参数会先按照发送给模型的同一份 JSON Schema 校验，再进入 hooks 和权限流程。未知工具或格式错误的调用会作为可恢复失败返回给模型，不会弹出授权请求。
+
+默认权限规则：
+
+- `Read` 和 `Grep` 默认允许。
+- `Write` 可以无批准创建新文件，但不能覆盖已有文件。
+- 使用 `Edit` 更新文件需要批准。
+- 明确只读的 shell 命令默认允许；可能改变状态的命令需要批准。
+- 危险 shell 片段以及 `.git`、`.env`、`node_modules` 等敏感路径会在执行前拒绝。
+- 有副作用的 MCP tool 默认需要批准；MCP Resource 与 Prompt 适配器是只读的，
+  可在已启用的可信 server 上直接读取。
+
+需要批准时，可以选择：
 
 - Allow once
 - Allow for this session
 - Reject
 
-Session approvals are recorded in the session log. An `allow_session` decision is
-reused only for the same tool and normalized concrete arguments; changed
-arguments are checked again. Dangerous commands and denied paths are still
-blocked before approval.
+`allow_session` 只会对同一工具和规范化后的相同具体参数复用；参数变化后会重新检查。危险命令和被拒绝的路径不会因为会话授权而放行。所有授权决定都会写入会话日志。
 
-Model text is streamed to the terminal as it arrives. Tool calls show only a compact action summary and execution status; complete arguments and results remain in the session log for model continuity and diagnostics.
+模型文本会实时输出到终端。工具调用只显示简短动作摘要和执行状态；完整参数与结果保留在会话日志中，供模型连续执行和诊断使用。
 
-`Read` reports the full file SHA-256, byte size, UTF-8 BOM, line-ending style,
-and mode even when the displayed lines are paginated. `Edit` accepts that hash
-as `expected_hash`; stale hashes, concurrent changes, binary files, invalid
-UTF-8, oversized files, and symlink write targets fail without replacing the
-target. `Edit` preserves BOM, line endings, and ordinary permission bits through
-a same-folder temporary file and atomic rename; setuid/setgid/sticky bits are
-intentionally not restored. Create-only `Write` publishes a complete temporary
-file with an atomic no-overwrite hard link and requires its parent directory to
-already exist.
+### 文件一致性
 
-The runtime rechecks file identity and content immediately before publishing,
-but portable Node.js does not expose an atomic compare-and-swap rename against
-non-cooperating external writers. Avoid editing the same file concurrently from
-another process; use `--worktree` for isolated high-risk work.
+`Read` 即使只展示分页内容，也会报告完整文件的 SHA-256、byte size、UTF-8 BOM、line-ending style 和 mode。`Edit` 可通过 `expected_hash` 检测并发修改；hash 过期、文件已变化、二进制文件、无效 UTF-8、超大文件和 symlink 写入目标都会失败，不会替换原文件。
 
-Session logs, metadata, and task todos are persisted under
-`.harness/sessions/` and `.harness/todos/`. New events carry a session ID,
-unique event ID, monotonic sequence, and timestamp. Metadata exposes the model
-and lifecycle state. Completed `toolCallId` values are replayed from the log,
-while executions interrupted after they started are marked with an unknown
-outcome and are not run again automatically. This state is for task recovery,
-not long-term user memory. Internal `rg` and `git` tools use argument-based
-process execution for Windows and Unix compatibility; only the explicit
-`Bash` tool invokes a shell.
+`Edit` 使用同目录临时文件和 atomic rename，并保留 BOM、换行风格及普通 permission bits；setuid/setgid/sticky bits 不会恢复。只允许创建的 `Write` 使用 atomic no-overwrite hard link 发布完整临时文件，并要求父目录已经存在。
 
-The same task `AbortSignal` is passed through the model request, tool registry,
-command-backed tools, review subagent, and local or Docker executors. Local
-commands terminate the complete process tree with a grace period before forced
-cleanup. Cancellation and task failures are recorded separately in the session;
-a model or transport error ends only the current interactive turn.
+运行时会在发布前再次检查文件身份和内容，但 Node.js 无法跨平台提供针对外部非协作写入者的原子 compare-and-swap rename。不要让多个进程同时编辑同一文件；高风险任务可使用 `--worktree` 隔离。
 
-Long sessions retain the full append-only event log. Once enough new events accumulate, a bounded factual summary is appended and used with recent events for model context. `BeforeToolUse`, `AfterToolUse`, `AfterEdit`, and `BeforeAgentStop` hooks provide deterministic interception and observation; the default write hook blocks sensitive paths and oversized single-file writes.
+成功执行 `Write` 或 `Edit` 后，运行时会确保下一轮模型调用前执行 `GitDiff`。如果模型已经在最近一次编辑后运行过 `GitDiff`，则不会重复执行。自动 diff 作为不可信 observation 写入日志，不会提升为系统指令。
 
-After a successful `Write` or `Edit`, the runtime ensures `GitDiff` runs before
-the next model turn. If the model already ran `GitDiff` after the latest edit,
-the runtime does not repeat it. Automatic diff output is persisted as untrusted
-observation data rather than elevated system instructions.
+## Bash 沙箱
 
-## Bash Sandbox
+默认 `auto` 模式只有在 Docker daemon、Linux container mode、本地 Docker context、sandbox image 和 workspace mount 全部通过检查时才注册 Bash。任何一项失败，Bash 都不可用；运行时不会静默改用 host 执行。
 
-The default `auto` mode uses Docker only when the daemon, Linux container mode,
-local Docker context, sandbox image, and workspace mount all pass readiness
-checks. If any check fails, the Bash tool is not registered. It never silently
-falls back to host execution.
-
-Fetch the default image when missing:
+缺少默认 image 时允许拉取：
 
 ```bash
 npm start -- --sandbox-pull missing
 ```
 
-Require Docker or disable Bash explicitly:
+强制要求 Docker，或明确关闭 Bash：
 
 ```bash
 npm start -- --bash-sandbox docker
 npm start -- --bash-sandbox off
 ```
 
-Host Bash is an explicit compatibility choice and has no OS isolation:
+host 模式是明确的兼容选项，不提供操作系统级隔离：
 
 ```bash
 npm start -- --bash-sandbox host
 ```
 
-On Windows, host mode requires `bash.exe` on `PATH`, such as Git for Windows.
-Docker mode runs Bash with no network by default, a read-only container root,
-dropped capabilities, process/memory/CPU limits, a hidden `.harness`, masked
-`.env*` files, read-only `.git`, and per-session Linux `node_modules`. Enable
-network access only for tasks that require it:
+Docker 模式默认禁用网络，并使用只读 container root、移除 capabilities、限制 process/memory/CPU、隐藏 `.harness`、遮蔽 `.env*`、只读挂载 `.git`，同时为每个会话使用独立的 Linux `node_modules`。只有任务确实需要联网时才开启：
 
 ```bash
 npm start -- --sandbox-network bridge
 ```
 
-## Project Skills
+跨平台注意事项：
 
-Project skills live under `.harness/skills/<name>/SKILL.md` and may be committed
-with the repository. Each file uses YAML frontmatter:
+- Windows 需要 Docker Desktop 运行 Linux containers；host 模式需要 `bash.exe`。
+- macOS 的 Docker 同样运行 Linux 容器，容器中的依赖与宿主机依赖可能不同。
+- Linux 需要当前用户能够访问 Docker daemon 和挂载工作区。
+- `auto` 检查失败时应修复 Docker 条件、改用明确的 `host`，或使用 `off`，不要假定 Bash 仍可调用。
+- 内部 `rg` 和 `git` 工具使用参数数组启动进程，兼容 Windows 与 Unix；只有显式的 `Bash` 工具会调用 shell。
+
+## 会话、日志与上下文压缩
+
+会话日志、元数据和任务 Todo 分别持久化在 `.harness/sessions/` 和 `.harness/todos/`。新事件包含 session ID、唯一 event ID、单调递增 sequence 和 timestamp；元数据记录模型及 lifecycle state。
+
+已完成的 `toolCallId` 可从日志恢复。已经开始但被中断的执行会标记为 `unknown_outcome`，不会自动再次运行。该状态用于任务恢复，不等同于长期 Memory。
+
+长会话始终保留完整的 append-only event log。当新增事件达到阈值后，运行时会追加一份有界的事实摘要，并结合近期事件构建模型上下文。`BeforeToolUse`、`AfterToolUse`、`AfterEdit` 和 `BeforeAgentStop` hooks 提供确定性的拦截和观察点；默认写入 hook 会阻止敏感路径和过大的单文件写入。
+
+## 遥测（Telemetry）
+
+Telemetry 默认写入 `~/.harness/telemetry/telemetry.jsonl`，可通过用户配置
+`"telemetry": { "enabled": false }` 完全关闭。它与 session event log 分离，
+只记录任务、模型请求、工具、权限、压缩和取消的结构化指标，例如耗时、token
+数量、工具名、结果码和 request ID。
+
+Telemetry 不记录完整用户消息、模型回答、文件内容、命令参数或工具输出。字段
+采用严格白名单，字符串会限长并进行 credential 脱敏；文件使用 `0600`、
+append-only、跨进程锁、损坏尾恢复和 16 MiB 默认上限。Telemetry 写入失败采用
+fail-open，不会导致 Agent 任务失败。
+
+## 项目技能（Project Skills）
+
+项目 Skill 位于 `.harness/skills/<name>/SKILL.md`，可以随仓库提交。文件使用 YAML frontmatter：
 
 ```md
 ---
 name: typescript-testing
-description: Test and verify TypeScript changes.
+description: 测试并验证 TypeScript 改动。
 ---
 
-# TypeScript Testing
+# TypeScript 测试
 
-Run targeted tests before the full suite.
+先运行定向测试，再运行完整测试套件。
 ```
 
-The model uses `SkillList` to discover metadata and `SkillLoad` to load one
-relevant instruction file explicitly. Skill names must match their directory,
-files are limited to 64KB, and paths cannot escape the workspace. Files under a
-skill's `scripts/` directory are never executed automatically.
+模型通过 `SkillList` 读取元数据，再用 `SkillLoad` 显式加载一个相关指令文件。Skill 名称必须与目录名一致，单个文件最大 64KB，路径不能逃逸工作区。`scripts/` 目录中的文件不会自动执行。Project Skills 来自项目，应按不可信仓库内容审查后再使用。
 
-## Read-Only Subagent
+## 只读代码审查子代理
 
-The `Task` tool can run the built-in `code-reviewer` as a separate AgentLoop.
-It has its own hidden append-only audit log and a maximum of 20 turns. Its tool
-registry contains only:
+`Task` 工具可以把内置 `code-reviewer` 作为独立 AgentLoop 运行。它有单独、隐藏的 append-only audit log，最多运行 20 轮，只能使用：
 
 ```text
 Read
@@ -345,31 +404,26 @@ SkillList
 SkillLoad
 ```
 
-It cannot access `Write`, `Edit`, `Bash`, `TodoWrite`, or `Task`, so it cannot
-modify files or recursively create more subagents. The parent receives only the
-bounded final review result.
+它不能访问 `Write`、`Edit`、`Bash`、`TodoWrite` 或 `Task`，因此不能修改文件，也不能递归创建更多子代理。父 Agent 只会收到有长度限制的最终审查结果。
 
-## Worktree Isolation
+## Git Worktree 隔离
 
-Run a task on a clean repository in a new branch and sibling worktree:
+在干净 Git repository 中创建新分支和相邻 worktree 后执行任务：
 
 ```bash
 npm start -- --worktree --task "Refactor the parser and run tests"
 npm start -- --worktree --worktree-base main
 ```
 
-The harness prints the generated `harness/<id>` branch and worktree path. The
-agent's Workspace, Session, Todo, Skills, and sandbox state are all rooted in
-that worktree. The source repository must be clean so uncommitted local changes
-cannot be silently omitted.
+运行时会打印生成的 `harness/<id>` branch 和 worktree path。Agent 的 Workspace、Session、Todo、Skills 和 sandbox 状态都会以该 worktree 为根目录。源 repository 必须保持 clean，避免未提交改动被静默遗漏。
 
-Worktrees are retained after exit. Resume directly from the printed path:
+退出后 worktree 会保留。使用打印出的路径继续：
 
 ```bash
 npm start -- --cwd /path/to/worktree --resume latest
 ```
 
-Review and merge explicitly from the source repository:
+在源 repository 中明确审查并合并：
 
 ```bash
 git -C /path/to/worktree status
@@ -379,5 +433,26 @@ git worktree remove /path/to/worktree
 git branch -d harness/<id>
 ```
 
-The harness never merges or removes a worktree automatically. `--worktree`
-cannot be combined with `--resume`; use `--cwd` to continue an existing one.
+运行时不会自动 merge 或删除 worktree。`--worktree` 不能与 `--resume` 同时使用；继续已有 worktree 时应通过 `--cwd` 进入对应路径，再使用 `--resume`。
+
+## 当前实现概览
+
+- 支持模型 tool-call continuation 的 Agent loop
+- append-only session event log 与持久化 session metadata
+- session lifecycle、tool-call deduplication 和恢复
+- 每条消息独立的 wall-time、token、turn、tool-call 与 retry Budget
+- 可搜索、跨会话的用户与项目 Memory
+- 基于 stdio 或 Streamable HTTP 的 MCP Tools，以及只读 Resources/Prompts
+- workspace path boundary checks
+- 带 SHA-256 冲突检测的 atomic UTF-8 file writes
+- Read、Grep、Glob、Write、Edit、Bash、Git status/diff 和 Todo tools
+- 只读 Project Skill discovery 与显式加载
+- allow / ask / deny permission gate
+- 默认使用真实 OpenAI Responses API，并支持流式输出
+- 模型请求与子进程的端到端取消
+- append-only context compaction 与确定性 tool lifecycle hooks
+- 编辑后的自动 Git diff review
+- Docker-isolated Bash，以及显式 host/off 模式
+- 有界、只读的 `code-reviewer` 子代理
+- 显式 Git worktree 隔离模式
+- 仅供明确本地循环测试的 mock model

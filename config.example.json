@@ -16,5 +16,8 @@
   "memory": {
     "enabled": true
   },
+  "telemetry": {
+    "enabled": true
+  },
   "mcpServers": []
 }

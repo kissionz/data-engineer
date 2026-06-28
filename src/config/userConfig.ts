@@ -37,6 +37,8 @@ const mcpServerSchema = z
     ]),
     timeoutMs: positiveInteger.max(300_000).default(30_000),
     maxTools: positiveInteger.max(128).default(64),
+    maxResources: positiveInteger.max(256).default(64),
+    maxPrompts: positiveInteger.max(128).default(64),
   })
   .strict();
 
@@ -64,6 +66,12 @@ export const userConfigSchema = z
       .optional(),
     budget: budgetSchema.optional(),
     memory: z
+      .object({
+        enabled: z.boolean().default(true),
+      })
+      .strict()
+      .optional(),
+    telemetry: z
       .object({
         enabled: z.boolean().default(true),
       })
