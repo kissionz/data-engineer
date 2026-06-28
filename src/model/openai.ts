@@ -6,10 +6,13 @@ const MAX_STREAM_BYTES = 64 * 1024 * 1024;
 const MAX_STREAM_EVENT_BYTES = 4 * 1024 * 1024;
 const MAX_TOOL_ARGUMENT_CHARS = 1024 * 1024;
 
+export type ApiStyle = "responses" | "chat_completions";
+
 export interface OpenAIModelOptions {
   apiKey: string;
   model: string;
   baseUrl?: string;
+  apiStyle?: ApiStyle;
   fetchImpl?: typeof fetch;
 }
 
@@ -75,6 +78,7 @@ interface OpenAIStreamEvent {
 
 export class OpenAIModel implements ModelClient {
   private readonly baseUrl: string;
+  private readonly apiStyle: ApiStyle;
   private readonly fetchImpl: typeof fetch;
 
   constructor(private readonly options: OpenAIModelOptions) {
@@ -84,9 +88,24 @@ export class OpenAIModel implements ModelClient {
 
     this.baseUrl = normalizeBaseUrl(options.baseUrl ?? "https://api.openai.com/v1");
     this.fetchImpl = options.fetchImpl ?? fetch;
+    // Auto-detect: use chat_completions for non-OpenAI endpoints
+    this.apiStyle = options.apiStyle ?? inferApiStyle(this.baseUrl);
   }
 
   async complete(options: {
+    messages: AgentMessage[];
+    tools: Array<Record<string, unknown>>;
+    maxOutputTokens?: number;
+    onTextDelta?: (delta: string) => void;
+    signal?: AbortSignal;
+  }): Promise<AgentResponse> {
+    if (this.apiStyle === "chat_completions") {
+      return this.completeChatCompletions(options);
+    }
+    return this.completeResponses(options);
+  }
+
+  private async completeResponses(options: {
     messages: AgentMessage[];
     tools: Array<Record<string, unknown>>;
     maxOutputTokens?: number;
@@ -152,6 +171,74 @@ export class OpenAIModel implements ModelClient {
     }
 
     return parseResponseBody(body);
+  }
+
+  private async completeChatCompletions(options: {
+    messages: AgentMessage[];
+    tools: Array<Record<string, unknown>>;
+    maxOutputTokens?: number;
+    onTextDelta?: (delta: string) => void;
+    signal?: AbortSignal;
+  }): Promise<AgentResponse> {
+    const chatMessages = toChatCompletionsMessages(options.messages);
+    const chatTools = options.tools.map(toChatCompletionsTool);
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.options.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.options.model,
+          messages: chatMessages,
+          ...(chatTools.length > 0 ? { tools: chatTools } : {}),
+          ...(options.maxOutputTokens !== undefined
+            ? { max_tokens: options.maxOutputTokens }
+            : {}),
+          stream: true,
+        }),
+        signal: options.signal,
+      });
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw error;
+      }
+      throw new ModelRequestError(
+        error instanceof Error ? error.message : "Model network request failed.",
+        true,
+      );
+    }
+
+    if (!response.ok) {
+      const body = await readChatJsonResponse(response);
+      const message =
+        body?.error?.message ??
+        `API request failed with status ${response.status}`;
+      throw new ModelRequestError(
+        message,
+        response.status === 408 ||
+          response.status === 429 ||
+          response.status >= 500,
+        response.status,
+        parseRetryAfter(response.headers.get("retry-after")),
+      );
+    }
+
+    if (response.headers.get("content-type")?.includes("text/event-stream")) {
+      return parseChatStreamingResponse(
+        response,
+        options.onTextDelta,
+        options.maxOutputTokens,
+      );
+    }
+
+    const body = await readChatJsonResponse(response);
+    if (!body) {
+      throw new Error("API returned an empty or invalid JSON response.");
+    }
+    return parseChatResponseBody(body);
   }
 }
 
@@ -622,4 +709,377 @@ function normalizeBaseUrl(value: string): string {
     );
   }
   return url.toString().replace(/\/+$/, "");
+}
+
+function inferApiStyle(baseUrl: string): ApiStyle {
+  try {
+    const url = new URL(baseUrl);
+    if (
+      url.hostname === "api.openai.com" ||
+      url.hostname.endsWith(".openai.com")
+    ) {
+      return "responses";
+    }
+  } catch {
+    // fall through
+  }
+  return "chat_completions";
+}
+
+// ─── Chat Completions types and helpers ───────────────────────────────────────
+
+interface ChatCompletionsMessage {
+  role: "system" | "user" | "assistant" | "tool";
+  content?: string | null;
+  tool_calls?: Array<{
+    id: string;
+    type: "function";
+    function: { name: string; arguments: string };
+  }>;
+  tool_call_id?: string;
+}
+
+interface ChatCompletionsResponseBody {
+  id?: string;
+  choices?: Array<{
+    index?: number;
+    message?: {
+      role?: string;
+      content?: string | null;
+      tool_calls?: Array<{
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+    delta?: {
+      role?: string;
+      content?: string | null;
+      tool_calls?: Array<{
+        index?: number;
+        id?: string;
+        type?: string;
+        function?: { name?: string; arguments?: string };
+      }>;
+    };
+    finish_reason?: string | null;
+  }>;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+  };
+  error?: {
+    message?: string;
+    type?: string;
+  };
+}
+
+function toChatCompletionsMessages(
+  messages: AgentMessage[],
+): ChatCompletionsMessage[] {
+  const result: ChatCompletionsMessage[] = [];
+
+  for (const msg of messages) {
+    if (msg.toolCalls) {
+      result.push({
+        role: "assistant",
+        content: null,
+        tool_calls: msg.toolCalls.map((call) => ({
+          id: call.id,
+          type: "function" as const,
+          function: {
+            name: call.name,
+            arguments: JSON.stringify(call.args),
+          },
+        })),
+      });
+      continue;
+    }
+
+    if (msg.toolResult) {
+      result.push({
+        role: "tool",
+        content: msg.content,
+        tool_call_id: msg.toolResult.toolCallId,
+      });
+      continue;
+    }
+
+    if (msg.role === "tool") {
+      result.push({ role: "user", content: msg.content });
+      continue;
+    }
+
+    result.push({ role: msg.role, content: msg.content });
+  }
+
+  return result;
+}
+
+function toChatCompletionsTool(
+  tool: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    type: "function",
+    function: {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.input_schema,
+    },
+  };
+}
+
+async function readChatJsonResponse(
+  response: Response,
+): Promise<ChatCompletionsResponseBody | null> {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > MAX_JSON_RESPONSE_BYTES
+  ) {
+    throw new Error("API JSON response exceeded the 16 MiB safety limit.");
+  }
+  if (!response.body) {
+    return null;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+      bytes += value.byteLength;
+      if (bytes > MAX_JSON_RESPONSE_BYTES) {
+        throw new Error("API JSON response exceeded the 16 MiB safety limit.");
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    return JSON.parse(text) as ChatCompletionsResponseBody;
+  } catch {
+    return null;
+  }
+}
+
+function parseChatResponseBody(
+  body: ChatCompletionsResponseBody,
+): AgentResponse {
+  const choice = body.choices?.[0];
+  if (!choice?.message) {
+    return {
+      finalText: "API returned no choices.",
+      usage: parseChatUsage(body),
+      requestId: body.id,
+    };
+  }
+
+  const toolCalls = choice.message.tool_calls;
+  if (toolCalls && toolCalls.length > 0) {
+    return {
+      toolCalls: toolCalls.map((tc, i) => ({
+        id: tc.id ?? `call_${i + 1}`,
+        name: requiredString(
+          tc.function?.name,
+          "Chat completions tool call missing function name.",
+        ),
+        args: parseArguments(tc.function?.arguments ?? ""),
+      })),
+      usage: parseChatUsage(body),
+      requestId: body.id,
+    };
+  }
+
+  const text = choice.message.content;
+  return {
+    finalText: text || "API returned no content.",
+    usage: parseChatUsage(body),
+    requestId: body.id,
+  };
+}
+
+function parseChatUsage(
+  body: ChatCompletionsResponseBody,
+): AgentResponse["usage"] {
+  const inputTokens = body.usage?.prompt_tokens;
+  const outputTokens = body.usage?.completion_tokens;
+  if (
+    !Number.isSafeInteger(inputTokens) ||
+    (inputTokens ?? -1) < 0 ||
+    !Number.isSafeInteger(outputTokens) ||
+    (outputTokens ?? -1) < 0
+  ) {
+    return undefined;
+  }
+  return {
+    inputTokens: inputTokens as number,
+    outputTokens: outputTokens as number,
+  };
+}
+
+async function parseChatStreamingResponse(
+  response: Response,
+  onTextDelta?: (delta: string) => void,
+  maxOutputTokens?: number,
+): Promise<AgentResponse> {
+  if (!response.body) {
+    throw new Error("Chat completions streaming response did not include a body.");
+  }
+
+  let finalText = "";
+  const maxTextChars = Math.min(
+    16 * 1024 * 1024,
+    Math.max(8_192, (maxOutputTokens ?? 250_000) * 8),
+  );
+  const streamedTools = new Map<
+    number,
+    { id: string; name: string; arguments: string }
+  >();
+  let lastBody: ChatCompletionsResponseBody | undefined;
+
+  for await (const event of parseChatSSEStream(response.body)) {
+    lastBody = event;
+    const choice = event.choices?.[0];
+    if (!choice?.delta) continue;
+
+    // Text content delta
+    if (choice.delta.content) {
+      if (finalText.length + choice.delta.content.length > maxTextChars) {
+        throw new Error("Chat streaming text exceeded the safety limit.");
+      }
+      finalText += choice.delta.content;
+      onTextDelta?.(choice.delta.content);
+    }
+
+    // Tool call deltas
+    if (choice.delta.tool_calls) {
+      for (const tc of choice.delta.tool_calls) {
+        const idx = tc.index ?? 0;
+        const existing = streamedTools.get(idx);
+        if (!existing) {
+          streamedTools.set(idx, {
+            id: tc.id ?? `call_${idx + 1}`,
+            name: tc.function?.name ?? "",
+            arguments: tc.function?.arguments ?? "",
+          });
+        } else {
+          if (tc.id) existing.id = tc.id;
+          if (tc.function?.name) existing.name += tc.function.name;
+          if (tc.function?.arguments) {
+            if (
+              existing.arguments.length + tc.function.arguments.length >
+              MAX_TOOL_ARGUMENT_CHARS
+            ) {
+              throw new Error(
+                "Chat streaming tool arguments exceeded the safety limit.",
+              );
+            }
+            existing.arguments += tc.function.arguments;
+          }
+        }
+      }
+    }
+  }
+
+  if (streamedTools.size > 0) {
+    return {
+      toolCalls: [...streamedTools.entries()]
+        .sort(([a], [b]) => a - b)
+        .map(([, tool]) => ({
+          id: tool.id,
+          name: requiredString(
+            tool.name,
+            "Chat streaming tool call missing function name.",
+          ),
+          args: parseArguments(tool.arguments),
+        })),
+      usage: lastBody ? parseChatUsage(lastBody) : undefined,
+      requestId: lastBody?.id,
+    };
+  }
+
+  if (finalText) {
+    return {
+      finalText,
+      usage: lastBody ? parseChatUsage(lastBody) : undefined,
+      requestId: lastBody?.id,
+    };
+  }
+
+  return {
+    finalText: "API returned no final text or tool calls.",
+    usage: lastBody ? parseChatUsage(lastBody) : undefined,
+    requestId: lastBody?.id,
+  };
+}
+
+async function* parseChatSSEStream(
+  stream: ReadableStream<Uint8Array>,
+): AsyncGenerator<ChatCompletionsResponseBody> {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let receivedBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      receivedBytes += value?.byteLength ?? 0;
+      if (receivedBytes > MAX_STREAM_BYTES) {
+        throw new Error("Chat stream exceeded the 64 MiB safety limit.");
+      }
+      buffer += decoder.decode(value, { stream: !done });
+      buffer = buffer.replaceAll("\r\n", "\n");
+
+      let boundary = buffer.indexOf("\n\n");
+      while (boundary !== -1) {
+        const block = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+
+        const data = block
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+
+        if (data && data !== "[DONE]") {
+          try {
+            yield JSON.parse(data) as ChatCompletionsResponseBody;
+          } catch {
+            throw new Error("API returned an invalid streaming event.");
+          }
+        }
+
+        boundary = buffer.indexOf("\n\n");
+      }
+
+      if (done) {
+        // Handle remaining buffer
+        if (buffer.trim()) {
+          const data = buffer
+            .split("\n")
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (data && data !== "[DONE]") {
+            try {
+              yield JSON.parse(data) as ChatCompletionsResponseBody;
+            } catch {
+              // ignore trailing invalid data
+            }
+          }
+        }
+        return;
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
 }

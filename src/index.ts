@@ -21,7 +21,7 @@ import { protectSensitiveWrites } from "./hooks/defaults.js";
 import type { ModelClient } from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
 import { MockModel } from "./model/mock.js";
-import { OpenAIModel } from "./model/openai.js";
+import { OpenAIModel, type ApiStyle } from "./model/openai.js";
 import { memoryPathsForWorkspace } from "./memory/paths.js";
 import { MemoryService } from "./memory/service.js";
 import { McpManager } from "./mcp/manager.js";
@@ -82,6 +82,7 @@ interface CliOptions {
   provider: string;
   model?: string;
   baseUrl?: string;
+  apiStyle?: string;
   maxTurns: string;
   maxWallTimeMs: string;
   maxInputTokens: string;
@@ -116,6 +117,10 @@ async function main(): Promise<void> {
     .option("--provider <provider>", "Model provider: openai or mock", "openai")
     .option("--model <model>", "Model name")
     .option("--base-url <baseUrl>", "OpenAI-compatible API base URL")
+    .option(
+      "--api-style <style>",
+      "API style: responses (OpenAI native) or chat_completions (compatible)",
+    )
     .option("--max-turns <turns>", "Maximum agent turns per user message", "50")
     .option(
       "--max-wall-time-ms <milliseconds>",
@@ -166,6 +171,14 @@ async function main(): Promise<void> {
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
   if (opts.envFile) {
     await loadEnvFile(path.resolve(sourceWorkspaceRoot, opts.envFile));
+  } else {
+    // Auto-detect .env in workspace root when --env-file is not specified
+    const defaultEnvPath = path.resolve(sourceWorkspaceRoot, ".env");
+    try {
+      await loadEnvFile(defaultEnvPath);
+    } catch {
+      // Silently ignore if .env does not exist
+    }
   }
   const userConfig = await loadUserConfig(
     opts.config ?? process.env.HARNESS_CONFIG ?? defaultUserConfigPath(),
@@ -278,6 +291,17 @@ async function main(): Promise<void> {
     "OPENAI_BASE_URL",
     userConfig.model?.baseUrl,
   );
+  const apiStyleRaw = resolveOptionalStringOption(
+    program,
+    "apiStyle",
+    opts.apiStyle,
+    "OPENAI_API_STYLE",
+    undefined,
+  );
+  const apiStyle: ApiStyle | undefined =
+    apiStyleRaw === "responses" || apiStyleRaw === "chat_completions"
+      ? apiStyleRaw
+      : undefined;
   const maxTurns = parsePositiveInteger(
     resolveStringOption(
       program,
@@ -365,6 +389,7 @@ async function main(): Promise<void> {
       provider,
       modelName,
       baseUrl,
+      apiStyle,
       maxTurns,
       budget,
       memory,
@@ -458,6 +483,7 @@ interface CreateAgentOptions {
   provider: string;
   modelName: string;
   baseUrl?: string;
+  apiStyle?: ApiStyle;
   maxTurns: number;
   budget: AgentBudget;
   memory?: MemoryService;
@@ -514,6 +540,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     options.provider,
     options.modelName,
     options.baseUrl,
+    options.apiStyle,
   );
   const todoStore = new TodoStore(options.session.todoPath);
   const telemetry = new SessionTelemetryObserver(options.telemetry, {
@@ -798,6 +825,7 @@ function createModel(
   provider: string,
   model: string,
   baseUrl: string | undefined,
+  apiStyle?: ApiStyle,
 ): ModelClient {
   assertModelConfiguration(provider);
 
@@ -809,6 +837,7 @@ function createModel(
     apiKey: process.env.OPENAI_API_KEY as string,
     model,
     baseUrl,
+    apiStyle,
   });
 }
 

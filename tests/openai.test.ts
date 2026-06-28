@@ -33,6 +33,7 @@ describe("OpenAIModel", () => {
       apiKey: "test-key",
       model: "test-model",
       baseUrl: "https://example.test/v1",
+      apiStyle: "responses",
       fetchImpl,
     });
 
@@ -162,6 +163,7 @@ describe("OpenAIModel", () => {
       apiKey: "test-key",
       model: "test-model",
       baseUrl: "https://gateway.example/v1/",
+      apiStyle: "responses",
       fetchImpl,
     });
 
