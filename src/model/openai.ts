@@ -1,5 +1,5 @@
 import type { AgentMessage, AgentResponse, StopReason, ToolCall } from "../agent/types.js";
-import { ModelRequestError, type ModelCapabilities, type ModelClient } from "./base.js";
+import { ModelRequestError, type ModelCapabilities, type ModelClient, type ModelStreamHandler } from "./base.js";
 
 const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_STREAM_BYTES = 64 * 1024 * 1024;
@@ -108,6 +108,7 @@ export class OpenAIModel implements ModelClient {
     tools: Array<Record<string, unknown>>;
     maxOutputTokens?: number;
     onTextDelta?: (delta: string) => void;
+    onStreamEvent?: ModelStreamHandler;
     signal?: AbortSignal;
   }): Promise<AgentResponse> {
     if (this.apiStyle === "chat_completions") {
@@ -121,6 +122,7 @@ export class OpenAIModel implements ModelClient {
     tools: Array<Record<string, unknown>>;
     maxOutputTokens?: number;
     onTextDelta?: (delta: string) => void;
+    onStreamEvent?: ModelStreamHandler;
     signal?: AbortSignal;
   }): Promise<AgentResponse> {
     let response: Response;
@@ -172,6 +174,7 @@ export class OpenAIModel implements ModelClient {
         response,
         options.onTextDelta,
         options.maxOutputTokens,
+        options.onStreamEvent,
       );
     }
 
@@ -189,6 +192,7 @@ export class OpenAIModel implements ModelClient {
     tools: Array<Record<string, unknown>>;
     maxOutputTokens?: number;
     onTextDelta?: (delta: string) => void;
+    onStreamEvent?: ModelStreamHandler;
     signal?: AbortSignal;
   }): Promise<AgentResponse> {
     const chatMessages = toChatCompletionsMessages(options.messages);
@@ -242,6 +246,7 @@ export class OpenAIModel implements ModelClient {
         response,
         options.onTextDelta,
         options.maxOutputTokens,
+        options.onStreamEvent,
       );
     }
 
@@ -272,6 +277,7 @@ async function parseStreamingResponse(
   response: Response,
   onTextDelta?: (delta: string) => void,
   maxOutputTokens?: number,
+  onStreamEvent?: ModelStreamHandler,
 ): Promise<AgentResponse> {
   if (!response.body) {
     throw new Error("OpenAI streaming response did not include a body.");
@@ -295,6 +301,7 @@ async function parseStreamingResponse(
       }
       finalText += event.delta;
       onTextDelta?.(event.delta);
+      onStreamEvent?.({ type: "text_delta", delta: event.delta });
       continue;
     }
 
@@ -303,14 +310,17 @@ async function parseStreamingResponse(
       event.item?.type === "function_call" &&
       typeof event.output_index === "number"
     ) {
+      const toolId = event.item.call_id ?? event.item.id ?? `call_${event.output_index + 1}`;
+      const toolName = requiredString(
+        event.item.name,
+        "OpenAI streamed function call missing name.",
+      );
       streamedTools.set(event.output_index, {
-        id: event.item.call_id ?? event.item.id ?? `call_${event.output_index + 1}`,
-        name: requiredString(
-          event.item.name,
-          "OpenAI streamed function call missing name.",
-        ),
+        id: toolId,
+        name: toolName,
         arguments: boundedToolArguments(event.item.arguments ?? ""),
       });
+      onStreamEvent?.({ type: "tool_call_start", toolCallId: toolId, name: toolName });
       continue;
     }
 
@@ -330,6 +340,7 @@ async function parseStreamingResponse(
           );
         }
         tool.arguments += event.delta ?? "";
+        onStreamEvent?.({ type: "tool_call_args_delta", toolCallId: tool.id, delta: event.delta ?? "" });
       }
       continue;
     }
@@ -346,6 +357,7 @@ async function parseStreamingResponse(
         );
         tool.name = event.name ?? tool.name;
         tool.id = event.call_id ?? tool.id;
+        onStreamEvent?.({ type: "tool_call_end", toolCallId: tool.id });
       }
       continue;
     }
@@ -368,6 +380,7 @@ async function parseStreamingResponse(
 
     if (event.type === "response.completed" && event.response) {
       finalBody = event.response;
+      onStreamEvent?.({ type: "stop", stopReason: mapResponsesStopReason(event.response) });
       continue;
     }
 
@@ -976,6 +989,7 @@ async function parseChatStreamingResponse(
   response: Response,
   onTextDelta?: (delta: string) => void,
   maxOutputTokens?: number,
+  onStreamEvent?: ModelStreamHandler,
 ): Promise<AgentResponse> {
   if (!response.body) {
     throw new Error("Chat completions streaming response did not include a body.");
@@ -1008,6 +1022,7 @@ async function parseChatStreamingResponse(
       }
       finalText += choice.delta.content;
       onTextDelta?.(choice.delta.content);
+      onStreamEvent?.({ type: "text_delta", delta: choice.delta.content });
     }
 
     // Tool call deltas
@@ -1016,11 +1031,14 @@ async function parseChatStreamingResponse(
         const idx = tc.index ?? 0;
         const existing = streamedTools.get(idx);
         if (!existing) {
+          const toolId = tc.id ?? `call_${idx + 1}`;
+          const toolName = tc.function?.name ?? "";
           streamedTools.set(idx, {
-            id: tc.id ?? `call_${idx + 1}`,
-            name: tc.function?.name ?? "",
+            id: toolId,
+            name: toolName,
             arguments: tc.function?.arguments ?? "",
           });
+          onStreamEvent?.({ type: "tool_call_start", toolCallId: toolId, name: toolName });
         } else {
           if (tc.id) existing.id = tc.id;
           if (tc.function?.name) existing.name += tc.function.name;
@@ -1034,6 +1052,7 @@ async function parseChatStreamingResponse(
               );
             }
             existing.arguments += tc.function.arguments;
+            onStreamEvent?.({ type: "tool_call_args_delta", toolCallId: existing.id, delta: tc.function.arguments });
           }
         }
       }
@@ -1041,6 +1060,12 @@ async function parseChatStreamingResponse(
   }
 
   const stopReason = mapChatFinishReason(finishReason);
+  onStreamEvent?.({ type: "stop", stopReason });
+
+  // Emit tool_call_end for all accumulated tool calls
+  for (const [, tool] of streamedTools) {
+    onStreamEvent?.({ type: "tool_call_end", toolCallId: tool.id });
+  }
 
   if (streamedTools.size > 0) {
     return {

@@ -1,4 +1,5 @@
 import { throwIfCancelled } from "../agent/cancellation.js";
+import { unifiedDiff } from "../runtime/diff.js";
 import {
   FileOperationError,
   atomicReplaceTextFile,
@@ -11,23 +12,6 @@ import type {
   ToolExecutionResult,
 } from "./base.js";
 import { fileOperationFailure } from "./fileErrors.js";
-
-function unifiedDiff(oldText: string, newText: string, filePath: string): string {
-  const oldLines = oldText.split(/\r?\n/);
-  const newLines = newText.split(/\r?\n/);
-
-  return [
-    `--- ${filePath}`,
-    `+++ ${filePath}`,
-    "@@ simplified @@",
-    ...oldLines
-      .map((line, index) => (line !== newLines[index] ? `- ${line}` : null))
-      .filter((line): line is string => line !== null),
-    ...newLines
-      .map((line, index) => (line !== oldLines[index] ? `+ ${line}` : null))
-      .filter((line): line is string => line !== null),
-  ].join("\n");
-}
 
 export class EditTool implements Tool {
   name = "Edit";

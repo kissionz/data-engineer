@@ -77,6 +77,57 @@ export class ToolRegistry {
       };
     }
 
-    return this.get(name).execute(args, context);
+    const tool = this.get(name);
+
+    // Apply per-tool timeout if defined
+    if (tool.timeoutMs && tool.timeoutMs > 0) {
+      return this.executeWithTimeout(tool, args, context, tool.timeoutMs);
+    }
+
+    return tool.execute(args, context);
+  }
+
+  private async executeWithTimeout(
+    tool: Tool,
+    args: Record<string, unknown>,
+    context: ToolExecutionContext | undefined,
+    timeoutMs: number,
+  ): Promise<ToolExecutionResult> {
+    const controller = new AbortController();
+    const parentSignal = context?.signal;
+
+    // Link parent signal to child
+    const onParentAbort = () => controller.abort();
+    parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const result = await tool.execute(args, {
+        ...(context ?? { toolCallId: "" }),
+        signal: controller.signal,
+      });
+      return result;
+    } catch (error: unknown) {
+      if (
+        controller.signal.aborted &&
+        !parentSignal?.aborted
+      ) {
+        // Tool-specific timeout triggered (not parent cancellation)
+        return {
+          ok: false,
+          content: `Tool ${tool.name} timed out after ${timeoutMs}ms.`,
+          data: {
+            code: "timeout",
+            retryable: true,
+            timeoutMs,
+          },
+        };
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+      parentSignal?.removeEventListener("abort", onParentAbort);
+    }
   }
 }

@@ -18,6 +18,8 @@ export interface Tool {
   description: string;
   inputSchema: Record<string, unknown>;
   effect?: "readonly" | "side_effect";
+  /** Optional per-tool timeout in milliseconds. Overrides the default budget wall time for this tool. */
+  timeoutMs?: number;
   source?: {
     type: "builtin" | "mcp";
     serverId?: string;
