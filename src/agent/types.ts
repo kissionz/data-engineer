@@ -21,9 +21,17 @@ export interface AgentMessage {
   toolResult?: ToolResult;
 }
 
+export type StopReason =
+  | "end_turn"
+  | "tool_use"
+  | "max_tokens"
+  | "content_filter"
+  | "unknown";
+
 export interface AgentResponse {
   finalText?: string;
   toolCalls?: ToolCall[];
+  stopReason: StopReason;
   usage?: ModelUsage;
   requestId?: string;
 }
@@ -72,12 +80,17 @@ export type SessionEvent = SessionEventEnvelope &
       text: string;
     }
   | {
+      type: "assistant_partial";
+      text: string;
+    }
+  | {
       type: "model_request_started";
     }
   | {
       type: "model_response_received";
       hasFinalText: boolean;
       toolCallCount: number;
+      stopReason?: StopReason;
       usage?: ModelUsage;
       requestId?: string;
     }
@@ -103,7 +116,7 @@ export type SessionEvent = SessionEventEnvelope &
     }
   | {
       type: "harness_message";
-      kind: "git_diff_review" | "stop_block" | "tool_replay";
+      kind: "git_diff_review" | "stop_block" | "tool_replay" | "max_tokens_continuation";
       text: string;
     }
   | {
@@ -146,12 +159,17 @@ export type SessionEventInput =
       text: string;
     }
   | {
+      type: "assistant_partial";
+      text: string;
+    }
+  | {
       type: "model_request_started";
     }
   | {
       type: "model_response_received";
       hasFinalText: boolean;
       toolCallCount: number;
+      stopReason?: StopReason;
       usage?: ModelUsage;
       requestId?: string;
     }
@@ -177,7 +195,7 @@ export type SessionEventInput =
     }
   | {
       type: "harness_message";
-      kind: "git_diff_review" | "stop_block" | "tool_replay";
+      kind: "git_diff_review" | "stop_block" | "tool_replay" | "max_tokens_continuation";
       text: string;
     }
   | {

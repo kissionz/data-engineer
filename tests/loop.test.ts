@@ -319,6 +319,36 @@ class CountingFinalModel implements ModelClient {
   }
 }
 
+class TruncatedThenFinalModel implements ModelClient {
+  calls = 0;
+  sawPartialAssistantMessage = false;
+
+  async complete(options: {
+    messages: AgentMessage[];
+  }): Promise<AgentResponse> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      return {
+        finalText: "part ",
+        stopReason: "max_tokens",
+        usage: { inputTokens: 1, outputTokens: 1 },
+        requestId: "truncated-1",
+      };
+    }
+
+    this.sawPartialAssistantMessage = options.messages.some(
+      (message) =>
+        message.role === "assistant" && message.content === "part ",
+    );
+    return {
+      finalText: "done",
+      stopReason: "end_turn",
+      usage: { inputTokens: 1, outputTokens: 1 },
+      requestId: "truncated-2",
+    };
+  }
+}
+
 class AbortableModel implements ModelClient {
   async complete(options: { signal?: AbortSignal }): Promise<AgentResponse> {
     return new Promise((_resolve, reject) => {
@@ -846,6 +876,38 @@ describe("AgentLoop", () => {
       "Stopped: token budget reached.",
     );
     expect(model.calls).toBe(0);
+  });
+
+  it("preserves truncated output and supplies it to the continuation turn", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const model = new TruncatedThenFinalModel();
+    const sessionPath = path.join(
+      root,
+      ".harness",
+      "sessions",
+      "test.jsonl",
+    );
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+      10,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxOutputTokens: 10 },
+    );
+
+    await expect(loop.run("finish the answer")).resolves.toBe("part done");
+    expect(model.calls).toBe(2);
+    expect(model.sawPartialAssistantMessage).toBe(true);
+    expect(await readFile(sessionPath, "utf8")).toContain(
+      '"type":"assistant_partial"',
+    );
   });
 
   it("retries transient model failures within the retry budget", async () => {

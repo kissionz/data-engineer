@@ -36,7 +36,7 @@ import { loadEnvFile } from "./runtime/env.js";
 import { DockerAvailabilityChecker } from "./runtime/dockerAvailability.js";
 import { DockerShellExecutor } from "./runtime/dockerShellExecutor.js";
 import { LocalCommandExecutor } from "./runtime/localExecutor.js";
-import { LocalShellExecutor } from "./runtime/localShellExecutor.js";
+import { LocalShellExecutor, type NetworkPolicy } from "./runtime/localShellExecutor.js";
 import {
   parseSandboxConfig,
   type SandboxConfig,
@@ -502,7 +502,8 @@ async function createShellExecutorFactory(
   }
 
   if (config.mode === "host") {
-    const local = new LocalShellExecutor(executor);
+    const networkPolicy: NetworkPolicy = config.network === "none" ? "restricted" : "unrestricted";
+    const local = new LocalShellExecutor(executor, networkPolicy);
     return () => local;
   }
 

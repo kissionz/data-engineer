@@ -85,6 +85,7 @@ export class AgentLoop {
       string,
       { id: string; name: string; args: Record<string, unknown> }
     >();
+    let accumulatedFinalText = "";
 
     try {
       throwIfCancelled(signal);
@@ -193,6 +194,7 @@ export class AgentLoop {
           type: "model_response_received",
           hasFinalText: Boolean(response.finalText),
           toolCallCount: response.toolCalls?.length ?? 0,
+          stopReason: response.stopReason,
           usage: response.usage,
           requestId: response.requestId,
         });
@@ -210,8 +212,39 @@ export class AgentLoop {
         const toolCalls = response.toolCalls ?? [];
 
         if (toolCalls.length === 0 && response.finalText) {
+          if (response.stopReason === "max_tokens") {
+            accumulatedFinalText += response.finalText;
+            await this.session.append({
+              type: "assistant_partial",
+              text: response.finalText,
+            });
+            if (deferStreaming) {
+              this.reporter.onTextDelta(
+                receivedText ? bufferedText : response.finalText,
+              );
+              this.reporter.onTextEnd();
+            } else if (!receivedText) {
+              this.reporter.onTextDelta(response.finalText);
+              this.reporter.onTextEnd();
+            }
+            if (usageRecord?.exhaustion) {
+              return this.finishForBudget(usageRecord.exhaustion);
+            }
+            const truncationNotice =
+              "Your previous assistant response was truncated by the output token limit. " +
+              "Continue exactly where it stopped without repeating it.";
+            await this.session.append({
+              type: "harness_message",
+              kind: "max_tokens_continuation",
+              text: truncationNotice,
+            });
+            continue;
+          }
+
+          const completedFinalText =
+            accumulatedFinalText + response.finalText;
           const stopBlock = await this.beforeAgentStop(
-            response.finalText,
+            completedFinalText,
             events,
             signal,
           );
@@ -238,11 +271,11 @@ export class AgentLoop {
 
           await this.session.append({
             type: "assistant_final",
-            text: response.finalText,
+            text: completedFinalText,
           });
           await this.recordStatus("completed");
 
-          return response.finalText;
+          return completedFinalText;
         }
 
         if (deferStreaming && bufferedText) {
