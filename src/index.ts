@@ -65,11 +65,17 @@ import {
   MemoryWriteTool,
 } from "./tools/memory.js";
 import { WriteTool } from "./tools/write.js";
+import { HttpFetchTool } from "./tools/httpFetch.js";
 import { ConsoleReporter } from "./ui/consoleReporter.js";
 import {
   defaultUserConfigPath,
   loadUserConfig,
+  type HttpFetchConfig,
 } from "./config/userConfig.js";
+import {
+  applyProjectRestrictions,
+  loadProjectConfig,
+} from "./config/projectConfig.js";
 import {
   createTelemetrySink,
   flushSessionTelemetryObservers,
@@ -173,9 +179,12 @@ async function main(): Promise<void> {
 
   const opts = program.opts<CliOptions>();
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
-  if (opts.envFile) {
-    await loadEnvFile(path.resolve(sourceWorkspaceRoot, opts.envFile));
-  }
+  await loadEnvFile(
+    opts.envFile
+      ? path.resolve(sourceWorkspaceRoot, opts.envFile)
+      : path.join(sourceWorkspaceRoot, ".env"),
+    { allowMissing: !opts.envFile },
+  );
   const userConfig = await loadUserConfig(
     opts.config ?? process.env.HARNESS_CONFIG ?? defaultUserConfigPath(),
   );
@@ -208,14 +217,17 @@ async function main(): Promise<void> {
 
   const workspaceRoot = worktree?.path ?? sourceWorkspaceRoot;
   const workspace = new Workspace(workspaceRoot);
+  const projectConfig = await loadProjectConfig(workspaceRoot);
   const runtimeCapabilities = await discoverRuntimeCapabilities(
     executor,
     workspaceRoot,
   );
-  const memory =
-    userConfig.memory?.enabled === false
-      ? undefined
-      : new MemoryService(memoryPathsForWorkspace(workspaceRoot));
+  const memoryEnabled =
+    userConfig.memory?.enabled !== false &&
+    projectConfig.memory?.enabled !== false;
+  const memory = memoryEnabled
+    ? new MemoryService(memoryPathsForWorkspace(workspaceRoot))
+    : undefined;
   const telemetry =
     userConfig.telemetry?.enabled === false
       ? noopTelemetrySink
@@ -312,7 +324,7 @@ async function main(): Promise<void> {
     ),
     "--max-turns",
   );
-  const budget: AgentBudget = {
+  const baseBudget: AgentBudget = {
     maxTurns,
     maxWallTimeMs: parsePositiveInteger(
       resolveStringOption(
@@ -371,6 +383,14 @@ async function main(): Promise<void> {
         }
       : {}),
   };
+  const { budget } = applyProjectRestrictions(
+    {
+      budget: baseBudget,
+      memoryEnabled,
+    },
+    projectConfig,
+    { pricing: userConfig.model?.pricing },
+  );
   console.log(
     [
       `Runtime: provider=${provider}`,
@@ -379,8 +399,10 @@ async function main(): Promise<void> {
       `memory=${memory ? "on" : "off"}`,
       `telemetry=${telemetry === noopTelemetrySink ? "off" : "on"}`,
       `mcpTools=${mcpManager.tools.length}`,
+      `httpFetch=${userConfig.httpFetch?.enabled ? "on" : "off"}`,
       `git=${runtimeCapabilities.gitRepository ? "repository" : runtimeCapabilities.git ? "available" : "unavailable"}`,
       `rg=${runtimeCapabilities.ripgrep ? "available" : "unavailable"}`,
+      `projectConfig=${projectConfig.budget || projectConfig.memory ? "restricted" : "none"}`,
       `budget(turns=${budget.maxTurns}, tools=${budget.maxToolCalls}, wallMs=${budget.maxWallTimeMs})`,
     ].join(" "),
   );
@@ -406,6 +428,7 @@ async function main(): Promise<void> {
       telemetry,
       interactivePrompt,
       runtimeCapabilities,
+      httpFetch: userConfig.httpFetch,
     }),
   });
   const runtime = createRuntime(initialSession);
@@ -502,6 +525,7 @@ interface CreateAgentOptions {
   telemetry: TelemetrySink;
   interactivePrompt?: InteractivePrompt;
   runtimeCapabilities: RuntimeCapabilities;
+  httpFetch?: HttpFetchConfig;
 }
 
 async function createShellExecutorFactory(
@@ -574,6 +598,19 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
   hooks.register("BeforeToolUse", protectSensitiveWrites);
 
   tools.register(new ReadTool(options.workspace));
+  if (options.httpFetch?.enabled) {
+    tools.register(
+      new HttpFetchTool({
+        allowedHosts: options.httpFetch.allowedHosts,
+        allowedPorts: options.httpFetch.allowedPorts,
+        allowHttpLocalhost:
+          options.httpFetch.allowHttpLocalhost,
+        maxRedirects: options.httpFetch.maxRedirects,
+        maxResponseBytes: options.httpFetch.maxResponseBytes,
+        timeoutMs: options.httpFetch.timeoutMs,
+      }),
+    );
+  }
   if (options.runtimeCapabilities.ripgrep) {
     tools.register(new GrepTool(options.workspace, options.executor));
     tools.register(new GlobTool(options.workspace, options.executor));

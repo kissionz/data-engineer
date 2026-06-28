@@ -43,6 +43,11 @@ describe("user config", () => {
           maxEstimatedCostUsd: 2,
         },
         memory: { enabled: false },
+        httpFetch: {
+          enabled: true,
+          allowedHosts: ["docs.example.com"],
+          allowedPorts: [443],
+        },
         mcpServers: [
           {
             id: "local_docs",
@@ -78,6 +83,12 @@ describe("user config", () => {
         maxEstimatedCostUsd: 2,
       },
       memory: { enabled: false },
+      httpFetch: {
+        enabled: true,
+        allowedHosts: ["docs.example.com"],
+        allowedPorts: [443],
+        maxRedirects: 3,
+      },
       mcpServers: [
         {
           id: "local_docs",
@@ -92,6 +103,34 @@ describe("user config", () => {
 
   it.each([
     [{ extra: true }, "Unrecognized key"],
+    [
+      {
+        httpFetch: {
+          enabled: true,
+          allowedHosts: [],
+        },
+      },
+      "requires at least one allowed host",
+    ],
+    [
+      {
+        httpFetch: {
+          enabled: true,
+          allowedHosts: ["*.example.com"],
+        },
+      },
+      "canonical hostname",
+    ],
+    [
+      {
+        httpFetch: {
+          enabled: true,
+          allowedHosts: ["example.com"],
+          allowHttpLocalhost: true,
+        },
+      },
+      "requires localhost",
+    ],
     [
       {
         budget: { maxEstimatedCostUsd: 1 },

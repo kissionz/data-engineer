@@ -2,12 +2,29 @@ import { lstat, open } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
+import { canonicalHostname } from "../runtime/httpSafety.js";
 
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
 const positiveFiniteNumber = z.number().finite().positive();
 const nonNegativeFiniteNumber = z.number().finite().nonnegative();
 const environmentName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
+const networkPort = z.number().int().min(1).max(65_535);
+const exactHostname = z.string().min(1).max(253).refine(
+  (host) => {
+    try {
+      return (
+        canonicalHostname(host) === host &&
+        !host.includes("*") &&
+        !host.includes(":") &&
+        !host.includes("/")
+      );
+    } catch {
+      return false;
+    }
+  },
+  "must be an exact lowercase canonical hostname",
+);
 
 const stdioTransportSchema = z
   .object({
@@ -43,6 +60,47 @@ const mcpServerSchema = z
     maxPrompts: positiveInteger.max(128).default(64),
   })
   .strict();
+
+const httpFetchSchema = z
+  .object({
+    enabled: z.boolean().default(false),
+    allowedHosts: z
+      .array(exactHostname)
+      .max(32)
+      .default([])
+      .refine(
+        (hosts) => new Set(hosts).size === hosts.length,
+        "allowedHosts must not contain duplicates",
+      ),
+    allowedPorts: z.array(networkPort).min(1).max(32).default([443]),
+    allowHttpLocalhost: z.boolean().default(false),
+    maxRedirects: nonNegativeInteger.max(10).default(3),
+    maxResponseBytes: positiveInteger
+      .max(4 * 1024 * 1024)
+      .default(1_000_000),
+    timeoutMs: positiveInteger.max(120_000).default(30_000),
+  })
+  .strict()
+  .superRefine((config, context) => {
+    if (config.enabled && config.allowedHosts.length === 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["allowedHosts"],
+        message: "enabled HttpFetch requires at least one allowed host",
+      });
+    }
+    if (
+      config.allowHttpLocalhost &&
+      !config.allowedHosts.includes("localhost")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["allowHttpLocalhost"],
+        message:
+          "allowHttpLocalhost requires localhost in allowedHosts",
+      });
+    }
+  });
 
 const budgetSchema = z
   .object({
@@ -89,6 +147,7 @@ export const userConfigSchema = z
       })
       .strict()
       .optional(),
+    httpFetch: httpFetchSchema.optional(),
     mcpServers: z.array(mcpServerSchema).max(32).default([]),
   })
   .strict()
@@ -113,6 +172,7 @@ export const userConfigSchema = z
 
 export type UserConfig = z.infer<typeof userConfigSchema>;
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
+export type HttpFetchConfig = z.infer<typeof httpFetchSchema>;
 
 export function defaultUserConfigPath(userHome = homedir()): string {
   return path.join(userHome, ".harness", "config.json");

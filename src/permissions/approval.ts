@@ -27,29 +27,38 @@ export const askUserApproval: ApprovalFunction = async (
     console.log(`Change: ${detail}`);
   }
   console.log(`Reason: ${reason}`);
+  const choices: Array<{
+    name: string;
+    value: ApprovalDecision;
+    description: string;
+  }> = [
+    {
+      name: "Allow once",
+      value: "allow_once",
+      description: "Approve only this tool call.",
+    },
+    ...(call.name === "HttpFetch"
+      ? []
+      : [
+          {
+            name: "Allow for this session",
+            value: "allow_session" as const,
+            description: sessionScopeDescription(call),
+          },
+        ]),
+    {
+      name: "Reject",
+      value: "reject",
+      description: "Do not run this tool call.",
+    },
+  ];
 
   try {
     return await select(
       {
         message: "Approve this tool call?",
         default: "reject" satisfies ApprovalDecision,
-        choices: [
-          {
-            name: "Allow once",
-            value: "allow_once" satisfies ApprovalDecision,
-            description: "Approve only this tool call.",
-          },
-          {
-            name: "Allow for this session",
-            value: "allow_session" satisfies ApprovalDecision,
-            description: sessionScopeDescription(call),
-          },
-          {
-            name: "Reject",
-            value: "reject" satisfies ApprovalDecision,
-            description: "Do not run this tool call.",
-          },
-        ],
+        choices,
       },
       { signal },
     );

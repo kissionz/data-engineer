@@ -41,4 +41,12 @@ describe("loadEnvFile", () => {
       loadEnvFile(path.join(root, "missing.env")),
     ).rejects.toMatchObject({ code: "ENOENT" });
   });
+
+  it("allows the default workspace env file to be absent", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-env-"));
+
+    await expect(
+      loadEnvFile(path.join(root, ".env"), { allowMissing: true }),
+    ).resolves.toBeUndefined();
+  });
 });

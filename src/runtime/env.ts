@@ -1,7 +1,22 @@
 import { readFile } from "node:fs/promises";
 
-export async function loadEnvFile(filePath: string): Promise<void> {
-  const text = await readFile(filePath, "utf8");
+export interface LoadEnvFileOptions {
+  allowMissing?: boolean;
+}
+
+export async function loadEnvFile(
+  filePath: string,
+  options: LoadEnvFileOptions = {},
+): Promise<void> {
+  let text: string;
+  try {
+    text = await readFile(filePath, "utf8");
+  } catch (error: unknown) {
+    if (options.allowMissing && hasCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
+  }
 
   for (const line of text.split(/\r?\n/)) {
     const parsed = parseEnvLine(line);
@@ -12,6 +27,14 @@ export async function loadEnvFile(filePath: string): Promise<void> {
 
     process.env[parsed.key] = parsed.value;
   }
+}
+
+function hasCode(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === code
+  );
 }
 
 function parseEnvLine(line: string): { key: string; value: string } | null {

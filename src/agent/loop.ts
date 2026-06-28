@@ -696,7 +696,10 @@ export class AgentLoop {
       };
     }
 
-    if (approval === "allow_session") {
+    if (
+      approval === "allow_session" &&
+      sessionApprovalAllowed(call)
+    ) {
       this.sessionApprovals.add(fingerprint);
     }
 
@@ -787,6 +790,9 @@ export class AgentLoop {
     name: string;
     args: Record<string, unknown>;
   }): boolean {
+    if (!sessionApprovalAllowed(call)) {
+      return false;
+    }
     return this.sessionApprovals.has(
       toolCallFingerprint({
         id: "",
@@ -810,7 +816,8 @@ export class AgentLoop {
         event.decision === "allow_session" &&
         event.scope === event.fingerprint &&
         record?.fingerprint === event.fingerprint &&
-        !record.collision
+        !record.collision &&
+        sessionApprovalAllowed(record.call)
       ) {
         this.sessionApprovals.add(event.scope);
       }
@@ -927,7 +934,10 @@ export class AgentLoop {
               data: { reason: "user_rejected" },
             };
           } else {
-            if (approval === "allow_session") {
+            if (
+              approval === "allow_session" &&
+              sessionApprovalAllowed(record.call)
+            ) {
               this.sessionApprovals.add(record.fingerprint);
             }
             this.reporter.onToolStatus(record.call, "running");
@@ -1210,9 +1220,16 @@ function toolEffect(name: string): "readonly" | "side_effect" {
     "TodoRead",
     "SkillList",
     "MemorySearch",
+    "HttpFetch",
   ].includes(name)
     ? "readonly"
     : "side_effect";
+}
+
+function sessionApprovalAllowed(call: {
+  name: string;
+}): boolean {
+  return call.name !== "HttpFetch";
 }
 
 function needsGitDiffReview(

@@ -52,6 +52,10 @@ export function summarizeToolCall(call: ToolCall): string {
     return `Bash ${compact(String(call.args.command ?? "command"), 100)}`;
   }
 
+  if (call.name === "HttpFetch") {
+    return `HTTP GET ${safeUrlSummary(call.args.url)}`;
+  }
+
   if (call.name === "MemoryWrite") {
     return `Memory write (${compact(String(call.args.scope ?? "scope"), 20)}/${compact(
       String(call.args.kind ?? "kind"),
@@ -85,11 +89,24 @@ export function summarizeApproval(call: ToolCall): string | null {
     return compact(String(call.args.reason ?? ""), 200);
   }
 
+  if (call.name === "HttpFetch") {
+    return safeUrlSummary(call.args.url);
+  }
+
   if (call.name.startsWith("mcp_")) {
     return compact(JSON.stringify(redactSensitiveValues(call.args)), 500);
   }
 
   return null;
+}
+
+function safeUrlSummary(value: unknown): string {
+  try {
+    const url = new URL(String(value));
+    return compact(`${url.protocol}//${url.host}${url.pathname}`, 200);
+  } catch {
+    return "[invalid URL]";
+  }
 }
 
 function compact(value: string, maxLength = 100): string {

@@ -19,5 +19,14 @@
   "telemetry": {
     "enabled": true
   },
+  "httpFetch": {
+    "enabled": false,
+    "allowedHosts": [],
+    "allowedPorts": [443],
+    "allowHttpLocalhost": false,
+    "maxRedirects": 3,
+    "maxResponseBytes": 1000000,
+    "timeoutMs": 30000
+  },
   "mcpServers": []
 }

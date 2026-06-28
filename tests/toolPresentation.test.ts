@@ -72,6 +72,23 @@ describe("summarizeToolCall", () => {
     expect(summary.length).toBeLessThan(140);
   });
 
+  it("summarizes HttpFetch without exposing query values", () => {
+    const call = {
+      id: "http",
+      name: "HttpFetch",
+      args: {
+        url: "https://docs.example.com/guide?token=do-not-display",
+      },
+    };
+
+    expect(summarizeToolCall(call)).toBe(
+      "HTTP GET https://docs.example.com/guide",
+    );
+    expect(summarizeApproval(call)).toBe(
+      "https://docs.example.com/guide",
+    );
+  });
+
   it("shows durable memory content and redacted MCP arguments for approval", () => {
     expect(
       summarizeApproval({

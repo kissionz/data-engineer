@@ -336,6 +336,45 @@ class CostedFinalModel implements ModelClient {
   }
 }
 
+class RepeatedHttpFetchModel implements ModelClient {
+  private step = 0;
+
+  async complete(): Promise<AgentResponse> {
+    this.step += 1;
+    if (this.step <= 2) {
+      return {
+        stopReason: "tool_use",
+        toolCalls: [
+          {
+            id: `http-${this.step}`,
+            name: "HttpFetch",
+            args: { url: "https://docs.example.com/guide" },
+          },
+        ],
+      };
+    }
+    return { finalText: "done", stopReason: "end_turn" };
+  }
+}
+
+class FakeHttpFetchTool implements Tool {
+  name = "HttpFetch";
+  description = "Test network approval behavior.";
+  effect = "readonly" as const;
+  inputSchema = {
+    type: "object",
+    properties: { url: { type: "string" } },
+    required: ["url"],
+    additionalProperties: false,
+  };
+  executions = 0;
+
+  async execute(): Promise<ToolExecutionResult> {
+    this.executions += 1;
+    return { ok: true, content: "fetched" };
+  }
+}
+
 class TruncatedThenFinalModel implements ModelClient {
   calls = 0;
   sawPartialAssistantMessage = false;
@@ -963,6 +1002,30 @@ describe("AgentLoop", () => {
     await expect(loop.run("respect the cost cap")).resolves.toBe(
       "Stopped: estimated-cost budget reached.",
     );
+  });
+
+  it("requires approval for every HttpFetch call", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const httpFetch = new FakeHttpFetchTool();
+    const tools = new ToolRegistry();
+    tools.register(httpFetch);
+    let approvals = 0;
+    const loop = new AgentLoop(
+      new RepeatedHttpFetchModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => {
+        approvals += 1;
+        return "allow_session";
+      },
+    );
+
+    await expect(loop.run("fetch docs twice")).resolves.toBe("done");
+    expect(approvals).toBe(2);
+    expect(httpFetch.executions).toBe(2);
   });
 
   it("preserves truncated output and supplies it to the continuation turn", async () => {
