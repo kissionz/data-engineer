@@ -182,6 +182,12 @@ export class OpenAIModel implements ModelClient {
   }): Promise<AgentResponse> {
     const chatMessages = toChatCompletionsMessages(options.messages);
     const chatTools = options.tools.map(toChatCompletionsTool);
+    // Cap max_tokens for third-party APIs; most support at most 4096-32768 per request.
+    // Don't send max_tokens if it exceeds a safe threshold — let the API use its own default.
+    const safeMaxTokens =
+      options.maxOutputTokens !== undefined && options.maxOutputTokens <= 32_768
+        ? options.maxOutputTokens
+        : undefined;
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}/chat/completions`, {
@@ -193,9 +199,11 @@ export class OpenAIModel implements ModelClient {
         body: JSON.stringify({
           model: this.options.model,
           messages: chatMessages,
-          ...(chatTools.length > 0 ? { tools: chatTools } : {}),
-          ...(options.maxOutputTokens !== undefined
-            ? { max_tokens: options.maxOutputTokens }
+          ...(chatTools.length > 0
+            ? { tools: chatTools, tool_choice: "auto" }
+            : {}),
+          ...(safeMaxTokens !== undefined
+            ? { max_tokens: safeMaxTokens }
             : {}),
           stream: true,
         }),
