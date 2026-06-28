@@ -15,6 +15,9 @@ This P0 implementation includes:
 - Agent loop with model tool-call continuation
 - Append-only session event log
 - Durable session metadata, lifecycle state, and tool-call deduplication
+- Per-task wall-time, token, turn, tool-call, and retry budgets
+- Explicit, searchable cross-session user and project memory
+- MCP tool discovery and execution over stdio or Streamable HTTP
 - Workspace path boundary checks
 - Atomic UTF-8 file writes with SHA-256 conflict detection
 - Read, Grep, Glob, Write, Edit, Bash, Git status/diff, and Todo tools
@@ -35,10 +38,8 @@ This P0 implementation includes:
 
 ```bash
 npm install
-cp .env.example .env
-# edit .env and set OPENAI_API_KEY
 npm run build
-npm start -- --task "Inspect this project and summarize what it does"
+npm start -- --env-file .env --task "Inspect this project"
 ```
 
 Without `--task`, the CLI starts an interactive session and keeps accepting user messages until `/exit` or `/quit`:
@@ -73,13 +74,37 @@ again while cancellation is pending to exit immediately. In one-shot
 
 ## Environment Setup
 
-Create a workspace-local `.env` file:
+Secrets are read from the shell environment. A workspace `.env` is never loaded
+implicitly; opt in explicitly when you trust it:
 
 ```bash
 cp .env.example .env
+# edit .env, then:
+npm start -- --env-file .env
 ```
 
-Then edit `.env`:
+Non-secret user settings live in `~/.harness/config.json`. Start from
+`config.example.json`; this is also where trusted MCP server definitions live.
+The user config supports model, Base URL, Budget, Memory, and MCP settings.
+API keys and MCP tokens must remain environment-variable values, never config
+values.
+On macOS and Linux, the config must be owned by the current user and cannot be
+group- or world-writable.
+
+```json
+{
+  "version": 1,
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4.1",
+    "baseUrl": "https://api.openai.com/v1"
+  },
+  "memory": { "enabled": true },
+  "mcpServers": []
+}
+```
+
+Shell or explicit env-file values:
 
 ```bash
 OPENAI_API_KEY=sk-your-real-key
@@ -87,17 +112,23 @@ OPENAI_MODEL=gpt-4.1
 OPENAI_BASE_URL=https://api.openai.com/v1
 ```
 
-`OPENAI_API_KEY` is required for the default provider. Shell environment variables take precedence over values in `.env`, so CI or a terminal export can override the file.
+`OPENAI_API_KEY` is required for the default provider. CLI values override
+environment variables, which override user config.
 
 The CLI reads:
 
 - `OPENAI_API_KEY`: required for the default OpenAI provider
+- `OPENAI_PROVIDER`: `openai` or the explicit test-only `mock` provider
 - `OPENAI_MODEL`: optional model override, defaults to `gpt-4.1`
 - `OPENAI_BASE_URL`: optional OpenAI-compatible API base URL, defaults to `https://api.openai.com/v1`
+- `HARNESS_CONFIG`: optional trusted user config path
 - `HARNESS_BASH_SANDBOX`: `auto`, `docker`, `host`, or `off`
 - `HARNESS_SANDBOX_IMAGE`: Docker image used for Bash
 - `HARNESS_SANDBOX_PULL`: `never` or `missing`
 - `HARNESS_SANDBOX_NETWORK`: `none` or `bridge`
+- `HARNESS_MAX_TURNS`, `HARNESS_MAX_WALL_TIME_MS`
+- `HARNESS_MAX_INPUT_TOKENS`, `HARNESS_MAX_OUTPUT_TOKENS`
+- `HARNESS_MAX_TOOL_CALLS`, `HARNESS_MAX_MODEL_RETRIES`
 
 You can also pass the model explicitly:
 
@@ -111,6 +142,9 @@ For an OpenAI-compatible gateway or proxy:
 npm run dev -- --base-url https://your-gateway.example/v1 --task "Inspect README.md"
 ```
 
+Remote model endpoints must use HTTPS. Plain HTTP is accepted only for an
+explicit localhost Base URL.
+
 For harness loop development without an API call, opt into the mock provider explicitly:
 
 ```bash
@@ -120,8 +154,66 @@ npm run dev -- --provider mock --task "Inspect README.md"
 For longer tasks, adjust the per-message agent loop budget:
 
 ```bash
-npm run dev -- --max-turns 100
+npm run dev -- --max-turns 100 --max-tool-calls 300 \
+  --max-wall-time-ms 3600000
 ```
+
+Budget checks run before model requests and tool calls. Provider token usage is
+recorded by request ID, retry attempts count toward the retry limit, and an
+expired wall-time budget aborts in-flight work through the same cancellation
+chain.
+
+## Long-Term Memory
+
+`MemorySearch` is read-only. `MemoryWrite` and `MemoryDelete` require explicit
+user approval and cannot choose storage paths. Memories reject likely secrets,
+credentials, and prompt-injection text; tagged conflicts are returned for user
+resolution instead of being silently overwritten.
+
+User memory is stored at `~/.harness/memory/user.jsonl`. Project memory is also
+stored under the user directory, partitioned by a hash of the workspace path, so
+an untrusted repository cannot edit durable memory directly. Only relevant,
+active, unexpired records are injected, as stale untrusted context, with a
+maximum of ten records.
+
+## MCP Tools
+
+MCP servers can only be defined in the trusted user config. All discovered tools
+receive stable provider-safe names, use full JSON Schema validation, retain the
+normal hooks/permission/Budget path, and default to approval-required. Server
+descriptions and schema annotations are not injected as instructions.
+Stdio servers start from the user home directory unless an absolute `cwd` is
+configured, so an untrusted workspace cannot influence executable lookup
+through the current directory.
+Setting an MCP server to `enabled` in this private user config is the persistent
+authorization to start that server; individual MCP tool calls still pass the
+normal permission prompt.
+
+```json
+{
+  "version": 1,
+  "mcpServers": [
+    {
+      "id": "local_docs",
+      "transport": {
+        "type": "stdio",
+        "command": "node",
+        "args": ["/absolute/path/to/server.js"],
+        "envAllowlist": ["DOCS_TOKEN"]
+      },
+      "timeoutMs": 30000,
+      "maxTools": 64
+    }
+  ]
+}
+```
+
+Remote servers use Streamable HTTP, require an exact host allowlist, use HTTPS
+unless localhost is explicitly enabled, reject private-network resolution, and
+read bearer tokens only through `tokenEnv`. MCP results are untrusted and
+bounded; transport failures after dispatch are recorded as `unknown_outcome`
+and never automatically replayed. This batch supports MCP Tools; Resources and
+Prompts remain disabled until their separate untrusted-context path is complete.
 
 ## Safety Model
 

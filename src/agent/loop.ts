@@ -1,5 +1,10 @@
-import { createHash } from "node:crypto";
-import type { ModelClient } from "../model/base.js";
+import { createHash, randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
+import {
+  isRetryableModelError,
+  ModelRequestError,
+  type ModelClient,
+} from "../model/base.js";
 import type { HookManager } from "../hooks/manager.js";
 import type { HookEventName, HookResult } from "../hooks/types.js";
 import type { ApprovalDecision, ApprovalFunction } from "../permissions/approval.js";
@@ -9,6 +14,11 @@ import type { ToolExecutionResult } from "../tools/base.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { ContextBuilder } from "./context.js";
 import type { SessionCompactor } from "./compaction.js";
+import {
+  AgentBudgetTracker,
+  type AgentBudget,
+  type BudgetExhaustion,
+} from "./budget.js";
 import type { AgentReporter } from "./reporter.js";
 import { silentReporter } from "./reporter.js";
 import type { SessionStore } from "./session.js";
@@ -41,9 +51,36 @@ export class AgentLoop {
     private readonly updateSessionStatus?: (
       status: SessionStatus,
     ) => Promise<void>,
+    private readonly budget?: Partial<AgentBudget>,
   ) {}
 
-  async run(userTask: string, signal?: AbortSignal): Promise<string> {
+  async run(
+    userTask: string,
+    signal?: AbortSignal,
+    sharedBudget?: AgentBudgetTracker,
+  ): Promise<string> {
+    const budget =
+      sharedBudget ??
+      new AgentBudgetTracker({
+        ...this.budget,
+        maxTurns: this.maxTurns,
+      });
+    const accountingNamespace = randomUUID();
+    const callerSignal = signal;
+    const wallTimeSignal = AbortSignal.timeout(
+      Math.ceil(
+        Math.max(
+          1,
+          Math.min(
+            budget.limits.maxWallTimeMs - budget.usage.wallTimeMs,
+            2_147_483_647,
+          ),
+        ),
+      ),
+    );
+    signal = callerSignal
+      ? AbortSignal.any([callerSignal, wallTimeSignal])
+      : wallTimeSignal;
     const pendingToolCalls = new Map<
       string,
       { id: string; name: string; args: Record<string, unknown> }
@@ -52,7 +89,7 @@ export class AgentLoop {
     try {
       throwIfCancelled(signal);
       await this.restoreSessionApprovals();
-      await this.recoverPendingApprovals(signal);
+      await this.recoverPendingApprovals(signal, budget);
       await this.recordStatus("running");
       await this.recoverInterruptedToolCalls();
       await this.compactor?.compactIfNeeded();
@@ -61,45 +98,114 @@ export class AgentLoop {
         text: userTask,
       });
 
-      for (let turn = 0; turn < this.maxTurns; turn += 1) {
+      for (let turn = 0; ; turn += 1) {
         throwIfCancelled(signal);
+        const modelTurn = budget.beginModelTurn();
+        if (!modelTurn.ok) {
+          return this.finishForBudget(modelTurn.exhaustion);
+        }
         let events = await this.session.load();
+
+        if (
+          this.tools.has("GitDiff") &&
+          needsGitDiffReview(events)
+        ) {
+          const reviewBudget = budget.beginToolCall();
+          if (!reviewBudget.ok) {
+            return this.finishForBudget(reviewBudget.exhaustion);
+          }
+        }
 
         if (await this.ensureGitDiffReviewed(events, signal)) {
           events = await this.session.load();
         }
 
         const messages = await this.context.build(events);
+        const toolSchemas = this.tools.schemas();
+        const estimatedInputTokens = estimateTokens({
+          messages,
+          tools: toolSchemas,
+        });
+        const inputUsage = budget.usage.inputTokens;
+        if (
+          inputUsage + estimatedInputTokens >
+          budget.limits.maxInputTokens
+        ) {
+          return this.finishForBudget({
+            code: "input_token_budget_reached",
+            message: "Stopped: token budget reached.",
+            limit: budget.limits.maxInputTokens,
+            used: inputUsage + estimatedInputTokens,
+          });
+        }
 
-        await this.session.append({ type: "model_request_started" });
         let receivedText = false;
         let bufferedText = "";
         const deferStreaming = this.hooks?.has("BeforeAgentStop") ?? false;
-        const response = await this.model
-          .complete({
-            messages,
-            tools: this.tools.schemas(),
-            onTextDelta: (delta) => {
-              receivedText = true;
-              if (deferStreaming) {
-                bufferedText += delta;
-              } else {
-                this.reporter.onTextDelta(delta);
-              }
-            },
-            signal,
-          })
-          .finally(() => {
+        let response:
+          | Awaited<ReturnType<ModelClient["complete"]>>
+          | undefined;
+        let retryAttempt = 0;
+
+        while (!response) {
+          await this.session.append({ type: "model_request_started" });
+          try {
+            response = await this.model.complete({
+              messages,
+              tools: toolSchemas,
+              maxOutputTokens:
+                budget.limits.maxOutputTokens -
+                budget.usage.outputTokens,
+              onTextDelta: (delta) => {
+                receivedText = true;
+                if (deferStreaming) {
+                  bufferedText += delta;
+                } else {
+                  this.reporter.onTextDelta(delta);
+                }
+              },
+              signal,
+            });
+          } catch (error: unknown) {
+            if (
+              isCancellationError(error, signal) ||
+              receivedText ||
+              !isRetryableModelError(error)
+            ) {
+              throw error;
+            }
+            const retry = budget.beginModelRetry();
+            if (!retry.ok) {
+              return this.finishForBudget(retry.exhaustion);
+            }
+            retryAttempt += 1;
+            await delay(modelRetryDelay(error, retryAttempt), undefined, {
+              signal,
+            });
+          } finally {
             if (!deferStreaming) {
               this.reporter.onTextEnd();
             }
-          });
+          }
+        }
         throwIfCancelled(signal);
         await this.session.append({
           type: "model_response_received",
           hasFinalText: Boolean(response.finalText),
           toolCallCount: response.toolCalls?.length ?? 0,
+          usage: response.usage,
+          requestId: response.requestId,
         });
+        const usageRecord = budget.recordProviderUsage(
+          response.requestId ??
+            `${accountingNamespace}:model-turn-${turn + 1}`,
+          response.usage ?? {
+            inputTokens: estimatedInputTokens,
+            outputTokens: estimateTokens(
+              response.finalText ?? response.toolCalls ?? "",
+            ),
+          },
+        );
 
         const toolCalls = response.toolCalls ?? [];
 
@@ -151,6 +257,10 @@ export class AgentLoop {
           return text;
         }
 
+        if (usageRecord?.exhaustion) {
+          return this.finishForBudget(usageRecord.exhaustion);
+        }
+
         const { freshCalls, replayNotices } = await this.deduplicateToolCalls(
           toolCalls,
         );
@@ -165,8 +275,21 @@ export class AgentLoop {
           pendingToolCalls.set(call.id, call);
         }
 
-        for (const call of freshCalls) {
+        for (let callIndex = 0; callIndex < freshCalls.length; callIndex += 1) {
+          const call = freshCalls[callIndex];
+          if (!call) {
+            continue;
+          }
           throwIfCancelled(signal);
+          const toolBudget = budget.beginToolCall();
+          if (!toolBudget.ok) {
+            await this.appendBudgetToolResults(
+              freshCalls.slice(callIndex),
+              pendingToolCalls,
+              toolBudget.exhaustion,
+            );
+            return this.finishForBudget(toolBudget.exhaustion);
+          }
           const fingerprint = toolCallFingerprint(call);
           const validation = this.tools.validate(call.name, call.args);
           let hookBlock;
@@ -254,6 +377,7 @@ export class AgentLoop {
                 call,
                 fingerprint,
                 signal,
+                budget,
               );
             } else {
               this.reporter.onToolStatus(call, "running");
@@ -261,6 +385,8 @@ export class AgentLoop {
                 call,
                 fingerprint,
                 signal,
+                this.hasSessionApproval(call),
+                budget,
               );
             }
 
@@ -315,12 +441,24 @@ export class AgentLoop {
         }
       }
 
-      const text = "Stopped: max turns reached.";
-      await this.session.append({ type: "assistant_final", text });
-      await this.recordStatus("completed");
-      return text;
     } catch (error: unknown) {
       this.reporter.onTextEnd();
+
+      if (wallTimeSignal.aborted && !callerSignal?.aborted) {
+        await this.appendInterruptedToolResults(
+          pendingToolCalls,
+          "interrupted",
+        );
+        return this.finishForBudget({
+          code: "wall_time_budget_reached",
+          message: "Stopped: wall-time budget reached.",
+          limit: budget.limits.maxWallTimeMs,
+          used: Math.max(
+            budget.limits.maxWallTimeMs,
+            budget.usage.wallTimeMs,
+          ),
+        });
+      }
 
       if (isCancellationError(error, signal)) {
         await this.appendInterruptedToolResults(
@@ -434,10 +572,20 @@ export class AgentLoop {
     args: Record<string, unknown>,
     toolCallId: string,
     signal?: AbortSignal,
+    userApproved = false,
+    budget?: AgentBudgetTracker,
   ): Promise<ToolExecutionResult> {
     try {
-      return await this.tools.execute(name, args, { signal, toolCallId });
+      return await this.tools.execute(name, args, {
+        signal,
+        toolCallId,
+        userApproved,
+        budget,
+      });
     } catch (error: unknown) {
+      if (isCancellationError(error, signal)) {
+        throw error;
+      }
       return {
         ok: false,
         content: error instanceof Error ? error.message : String(error),
@@ -450,6 +598,7 @@ export class AgentLoop {
     call: { id: string; name: string; args: Record<string, unknown> },
     fingerprint: string,
     signal?: AbortSignal,
+    budget?: AgentBudgetTracker,
   ): Promise<ToolExecutionResult> {
     if (approval === "reject") {
       return {
@@ -463,21 +612,36 @@ export class AgentLoop {
       this.sessionApprovals.add(fingerprint);
     }
 
-    return this.executeTrackedTool(call, fingerprint, signal);
+    return this.executeTrackedTool(
+      call,
+      fingerprint,
+      signal,
+      true,
+      budget,
+    );
   }
 
   private async executeTrackedTool(
     call: ToolCall,
     fingerprint: string,
     signal?: AbortSignal,
+    userApproved = false,
+    budget?: AgentBudgetTracker,
   ): Promise<ToolExecutionResult> {
     await this.session.append({
       type: "tool_execution_started",
       toolCall: call,
       fingerprint,
-      effect: toolEffect(call.name),
+      effect: this.tools.get(call.name).effect ?? toolEffect(call.name),
     });
-    return this.executeTool(call.name, call.args, call.id, signal);
+    return this.executeTool(
+      call.name,
+      call.args,
+      call.id,
+      signal,
+      userApproved,
+      budget,
+    );
   }
 
   private async appendTerminalEvent(
@@ -499,19 +663,28 @@ export class AgentLoop {
     >,
     code: "cancelled" | "interrupted",
   ): Promise<void> {
+    const events = await this.session.load().catch(() => []);
+    const startedIds = new Set<string>();
+    for (const event of events) {
+      if (event.type === "tool_execution_started") {
+        startedIds.add(event.toolCall.id);
+      }
+    }
     for (const call of pending.values()) {
+      const outcomeUnknown = startedIds.has(call.id);
       try {
         await this.session.append({
           type: "tool_result",
           toolCallId: call.id,
           name: call.name,
           ok: false,
-          content:
-            code === "cancelled"
+          content: outcomeUnknown
+            ? "Tool execution outcome is unknown after interruption; it will not be replayed."
+            : code === "cancelled"
               ? "Tool call cancelled before completion."
               : "Tool call interrupted before completion.",
           data: {
-            code,
+            code: outcomeUnknown ? "unknown_outcome" : code,
             retryable: false,
           },
         });
@@ -582,7 +755,10 @@ export class AgentLoop {
     }
   }
 
-  private async recoverPendingApprovals(signal?: AbortSignal): Promise<void> {
+  private async recoverPendingApprovals(
+    signal: AbortSignal | undefined,
+    budget: AgentBudgetTracker,
+  ): Promise<void> {
     const events = await this.session.load();
     const records = buildToolCallIndex(events);
     const pending = pendingApprovalRequests(events);
@@ -599,10 +775,22 @@ export class AgentLoop {
       }
 
       await this.recordStatus("waiting_for_approval");
+      const recoveredToolBudget = budget.beginToolCall();
       const validation = this.tools.validate(record.call.name, record.call.args);
       let result: ToolExecutionResult;
 
-      if (!validation.ok) {
+      if (!recoveredToolBudget.ok) {
+        result = {
+          ok: false,
+          content: recoveredToolBudget.exhaustion.message,
+          data: {
+            code: recoveredToolBudget.exhaustion.code,
+            limit: recoveredToolBudget.exhaustion.limit,
+            used: recoveredToolBudget.exhaustion.used,
+            retryable: false,
+          },
+        };
+      } else if (!validation.ok) {
         result = {
           ok: false,
           content: `Invalid recovered tool call:\n${validation.errors.join("\n")}`,
@@ -659,6 +847,8 @@ export class AgentLoop {
               record.call,
               record.fingerprint,
               signal,
+              true,
+              budget,
             );
             if (!signal?.aborted) {
               result = await this.emitObservationalHook(
@@ -774,6 +964,41 @@ export class AgentLoop {
       // Preserve the original cancellation or failure.
     }
   }
+
+  private async appendBudgetToolResults(
+    calls: ToolCall[],
+    pending: Map<string, ToolCall>,
+    exhaustion: BudgetExhaustion,
+  ): Promise<void> {
+    for (const call of calls) {
+      await this.session.append({
+        type: "tool_result",
+        toolCallId: call.id,
+        name: call.name,
+        ok: false,
+        content: exhaustion.message,
+        data: {
+          code: exhaustion.code,
+          limit: exhaustion.limit,
+          used: exhaustion.used,
+          retryable: false,
+        },
+      });
+      pending.delete(call.id);
+      this.reporter.onToolStatus(call, "failed");
+    }
+  }
+
+  private async finishForBudget(
+    exhaustion: BudgetExhaustion,
+  ): Promise<string> {
+    await this.session.append({
+      type: "assistant_final",
+      text: exhaustion.message,
+    });
+    await this.recordStatus("completed");
+    return exhaustion.message;
+  }
 }
 
 interface ToolCallRecord {
@@ -888,8 +1113,16 @@ function stableSerialize(value: unknown): string {
 }
 
 function toolEffect(name: string): "readonly" | "side_effect" {
-  return ["Read", "Grep", "Glob", "GitStatus", "GitDiff", "TodoRead", "SkillList"]
-    .includes(name)
+  return [
+    "Read",
+    "Grep",
+    "Glob",
+    "GitStatus",
+    "GitDiff",
+    "TodoRead",
+    "SkillList",
+    "MemorySearch",
+  ].includes(name)
     ? "readonly"
     : "side_effect";
 }
@@ -938,4 +1171,21 @@ function safeErrorMessage(error: unknown): string {
   return normalized.length <= 2_000
     ? normalized
     : `${normalized.slice(0, 1_997)}...`;
+}
+
+function modelRetryDelay(error: unknown, attempt: number): number {
+  if (
+    error instanceof ModelRequestError &&
+    error.retryAfterMs !== undefined
+  ) {
+    return error.retryAfterMs;
+  }
+  const base = Math.min(5_000, 250 * 2 ** Math.max(0, attempt - 1));
+  return Math.round(base * (0.75 + Math.random() * 0.5));
+}
+
+function estimateTokens(value: unknown): number {
+  const serialized =
+    typeof value === "string" ? value : JSON.stringify(value) ?? "";
+  return Math.max(1, Math.ceil(serialized.length / 4));
 }

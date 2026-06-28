@@ -1,0 +1,20 @@
+{
+  "version": 1,
+  "model": {
+    "provider": "openai",
+    "name": "gpt-4.1",
+    "baseUrl": "https://api.openai.com/v1"
+  },
+  "budget": {
+    "maxTurns": 50,
+    "maxWallTimeMs": 1800000,
+    "maxInputTokens": 1000000,
+    "maxOutputTokens": 250000,
+    "maxToolCalls": 200,
+    "maxModelRetries": 3
+  },
+  "memory": {
+    "enabled": true
+  },
+  "mcpServers": []
+}

@@ -1,5 +1,10 @@
 import type { AgentMessage, AgentResponse, ToolCall } from "../agent/types.js";
-import type { ModelClient } from "./base.js";
+import { ModelRequestError, type ModelClient } from "./base.js";
+
+const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
+const MAX_STREAM_BYTES = 64 * 1024 * 1024;
+const MAX_STREAM_EVENT_BYTES = 4 * 1024 * 1024;
+const MAX_TOOL_ARGUMENT_CHARS = 1024 * 1024;
 
 export interface OpenAIModelOptions {
   apiKey: string;
@@ -45,6 +50,13 @@ interface OpenAIResponseBody {
     message?: string;
     type?: string;
   };
+  usage?: {
+    input_tokens?: number;
+    output_tokens?: number;
+    input_tokens_details?: {
+      cached_tokens?: number;
+    };
+  };
 }
 
 interface OpenAIStreamEvent {
@@ -77,34 +89,60 @@ export class OpenAIModel implements ModelClient {
   async complete(options: {
     messages: AgentMessage[];
     tools: Array<Record<string, unknown>>;
+    maxOutputTokens?: number;
     onTextDelta?: (delta: string) => void;
     signal?: AbortSignal;
   }): Promise<AgentResponse> {
-    const response = await this.fetchImpl(`${this.baseUrl}/responses`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${this.options.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: this.options.model,
-        input: toOpenAIInput(options.messages),
-        tools: options.tools.map(toOpenAITool),
-        stream: true,
-      }),
-      signal: options.signal,
-    });
+    let response: Response;
+    try {
+      response = await this.fetchImpl(`${this.baseUrl}/responses`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${this.options.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: this.options.model,
+          input: toOpenAIInput(options.messages),
+          tools: options.tools.map(toOpenAITool),
+          ...(options.maxOutputTokens !== undefined
+            ? { max_output_tokens: options.maxOutputTokens }
+            : {}),
+          stream: true,
+        }),
+        signal: options.signal,
+      });
+    } catch (error: unknown) {
+      if (error instanceof Error && error.name === "AbortError") {
+        throw error;
+      }
+      throw new ModelRequestError(
+        error instanceof Error ? error.message : "Model network request failed.",
+        true,
+      );
+    }
 
     if (!response.ok) {
       const body = await readJsonResponse(response);
       const message =
         body?.error?.message ??
         `OpenAI API request failed with status ${response.status}`;
-      throw new Error(message);
+      throw new ModelRequestError(
+        message,
+        response.status === 408 ||
+          response.status === 429 ||
+          response.status >= 500,
+        response.status,
+        parseRetryAfter(response.headers.get("retry-after")),
+      );
     }
 
     if (response.headers.get("content-type")?.includes("text/event-stream")) {
-      return parseStreamingResponse(response, options.onTextDelta);
+      return parseStreamingResponse(
+        response,
+        options.onTextDelta,
+        options.maxOutputTokens,
+      );
     }
 
     const body = await readJsonResponse(response);
@@ -117,9 +155,25 @@ export class OpenAIModel implements ModelClient {
   }
 }
 
+function parseRetryAfter(value: string | null): number | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const seconds = Number(value);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return Math.min(30_000, Math.round(seconds * 1_000));
+  }
+  const timestamp = Date.parse(value);
+  if (!Number.isFinite(timestamp)) {
+    return undefined;
+  }
+  return Math.min(30_000, Math.max(0, timestamp - Date.now()));
+}
+
 async function parseStreamingResponse(
   response: Response,
   onTextDelta?: (delta: string) => void,
+  maxOutputTokens?: number,
 ): Promise<AgentResponse> {
   if (!response.body) {
     throw new Error("OpenAI streaming response did not include a body.");
@@ -127,6 +181,10 @@ async function parseStreamingResponse(
 
   let finalBody: OpenAIResponseBody | undefined;
   let finalText = "";
+  const maxTextChars = Math.min(
+    16 * 1024 * 1024,
+    Math.max(8_192, (maxOutputTokens ?? 250_000) * 8),
+  );
   const streamedTools = new Map<
     number,
     { id: string; name: string; arguments: string }
@@ -134,6 +192,9 @@ async function parseStreamingResponse(
 
   for await (const event of parseServerSentEvents(response.body)) {
     if (event.type === "response.output_text.delta" && event.delta) {
+      if (finalText.length + event.delta.length > maxTextChars) {
+        throw new Error("OpenAI streamed text exceeded the safety limit.");
+      }
       finalText += event.delta;
       onTextDelta?.(event.delta);
       continue;
@@ -150,7 +211,7 @@ async function parseStreamingResponse(
           event.item.name,
           "OpenAI streamed function call missing name.",
         ),
-        arguments: event.item.arguments ?? "",
+        arguments: boundedToolArguments(event.item.arguments ?? ""),
       });
       continue;
     }
@@ -162,6 +223,14 @@ async function parseStreamingResponse(
       const tool = streamedTools.get(event.output_index);
 
       if (tool) {
+        if (
+          tool.arguments.length + (event.delta?.length ?? 0) >
+          MAX_TOOL_ARGUMENT_CHARS
+        ) {
+          throw new Error(
+            "OpenAI streamed tool arguments exceeded the safety limit.",
+          );
+        }
         tool.arguments += event.delta ?? "";
       }
       continue;
@@ -174,7 +243,9 @@ async function parseStreamingResponse(
       const tool = streamedTools.get(event.output_index);
 
       if (tool) {
-        tool.arguments = event.arguments ?? tool.arguments;
+        tool.arguments = boundedToolArguments(
+          event.arguments ?? tool.arguments,
+        );
         tool.name = event.name ?? tool.name;
         tool.id = event.call_id ?? tool.id;
       }
@@ -192,7 +263,7 @@ async function parseStreamingResponse(
           event.item.name,
           "OpenAI streamed function call missing name.",
         ),
-        arguments: event.item.arguments ?? "",
+        arguments: boundedToolArguments(event.item.arguments ?? ""),
       });
       continue;
     }
@@ -223,18 +294,37 @@ async function parseStreamingResponse(
       : parseToolCalls(finalBody ?? {});
 
   if (toolCalls.length > 0) {
-    return { toolCalls };
+    return {
+      toolCalls,
+      usage: parseUsage(finalBody),
+      requestId: finalBody?.id,
+    };
   }
 
   const completedText = finalText || parseFinalText(finalBody ?? {});
 
   if (completedText) {
-    return { finalText: completedText };
+    return {
+      finalText: completedText,
+      usage: parseUsage(finalBody),
+      requestId: finalBody?.id,
+    };
   }
 
   return {
     finalText: "OpenAI returned no final text or tool calls.",
+    usage: parseUsage(finalBody),
+    requestId: finalBody?.id,
   };
+}
+
+function boundedToolArguments(value: string): string {
+  if (value.length > MAX_TOOL_ARGUMENT_CHARS) {
+    throw new Error(
+      "OpenAI streamed tool arguments exceeded the safety limit.",
+    );
+  }
+  return value;
 }
 
 async function* parseServerSentEvents(
@@ -243,12 +333,23 @@ async function* parseServerSentEvents(
   const reader = stream.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let receivedBytes = 0;
 
   try {
     while (true) {
       const { done, value } = await reader.read();
+      receivedBytes += value?.byteLength ?? 0;
+      if (receivedBytes > MAX_STREAM_BYTES) {
+        throw new Error("OpenAI stream exceeded the 64 MiB safety limit.");
+      }
       buffer += decoder.decode(value, { stream: !done });
       buffer = buffer.replaceAll("\r\n", "\n");
+      if (
+        buffer.length > MAX_STREAM_EVENT_BYTES &&
+        !buffer.includes("\n\n")
+      ) {
+        throw new Error("OpenAI stream event exceeded the safety limit.");
+      }
 
       let boundary = buffer.indexOf("\n\n");
 
@@ -262,6 +363,9 @@ async function* parseServerSentEvents(
         }
 
         boundary = buffer.indexOf("\n\n");
+      }
+      if (buffer.length > MAX_STREAM_EVENT_BYTES) {
+        throw new Error("OpenAI stream event exceeded the safety limit.");
       }
 
       if (done) {
@@ -299,24 +403,95 @@ function parseEventBlock(block: string): OpenAIStreamEvent | null {
 async function readJsonResponse(
   response: Response,
 ): Promise<OpenAIResponseBody | null> {
-  return (await response.json().catch(() => null)) as OpenAIResponseBody | null;
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > MAX_JSON_RESPONSE_BYTES
+  ) {
+    throw new Error("OpenAI JSON response exceeded the 16 MiB safety limit.");
+  }
+  if (!response.body) {
+    return null;
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+      bytes += value.byteLength;
+      if (bytes > MAX_JSON_RESPONSE_BYTES) {
+        throw new Error(
+          "OpenAI JSON response exceeded the 16 MiB safety limit.",
+        );
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  try {
+    return JSON.parse(text) as OpenAIResponseBody;
+  } catch {
+    return null;
+  }
 }
 
 function parseResponseBody(body: OpenAIResponseBody): AgentResponse {
   const toolCalls = parseToolCalls(body);
 
   if (toolCalls.length > 0) {
-    return { toolCalls };
+    return {
+      toolCalls,
+      usage: parseUsage(body),
+      requestId: body.id,
+    };
   }
 
   const finalText = parseFinalText(body);
 
   if (finalText) {
-    return { finalText };
+    return {
+      finalText,
+      usage: parseUsage(body),
+      requestId: body.id,
+    };
   }
 
   return {
     finalText: "OpenAI returned no final text or tool calls.",
+    usage: parseUsage(body),
+    requestId: body.id,
+  };
+}
+
+function parseUsage(
+  body: OpenAIResponseBody | undefined,
+): AgentResponse["usage"] {
+  const inputTokens = body?.usage?.input_tokens;
+  const outputTokens = body?.usage?.output_tokens;
+
+  if (
+    !Number.isSafeInteger(inputTokens) ||
+    (inputTokens ?? -1) < 0 ||
+    !Number.isSafeInteger(outputTokens) ||
+    (outputTokens ?? -1) < 0
+  ) {
+    return undefined;
+  }
+
+  const cacheReadTokens = body?.usage?.input_tokens_details?.cached_tokens;
+  return {
+    inputTokens: inputTokens as number,
+    outputTokens: outputTokens as number,
+    ...(Number.isSafeInteger(cacheReadTokens) && (cacheReadTokens ?? -1) >= 0
+      ? { cacheReadTokens }
+      : {}),
   };
 }
 
@@ -429,5 +604,22 @@ function parseArguments(value: unknown): Record<string, unknown> {
 }
 
 function normalizeBaseUrl(value: string): string {
-  return value.replace(/\/+$/, "");
+  const url = new URL(value);
+  const localhost =
+    url.hostname === "localhost" ||
+    url.hostname === "127.0.0.1" ||
+    url.hostname === "[::1]" ||
+    url.hostname === "::1";
+  if (url.username || url.password || url.hash) {
+    throw new Error("OpenAI Base URL cannot contain credentials or a fragment.");
+  }
+  if (
+    url.protocol !== "https:" &&
+    !(url.protocol === "http:" && localhost)
+  ) {
+    throw new Error(
+      "OpenAI Base URL must use HTTPS; HTTP is allowed only for localhost.",
+    );
+  }
+  return url.toString().replace(/\/+$/, "");
 }

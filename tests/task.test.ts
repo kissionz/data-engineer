@@ -2,6 +2,7 @@ import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { AgentBudgetTracker } from "../src/agent/budget.js";
 import type { AgentMessage, AgentResponse } from "../src/agent/types.js";
 import type { ModelClient } from "../src/model/base.js";
 import type {
@@ -125,7 +126,9 @@ describe("TaskTool", () => {
       },
     );
 
-    expect(model.signal).toBe(controller.signal);
+    expect(model.signal?.aborted).toBe(false);
+    controller.abort();
+    expect(model.signal?.aborted).toBe(true);
   });
 
   it("returns a structured cancelled result for a cancelled reviewer", async () => {
@@ -155,6 +158,31 @@ describe("TaskTool", () => {
         retryable: false,
       },
     });
+  });
+
+  it("uses the parent task budget instead of creating a fresh child budget", async () => {
+    const root = await makeRoot();
+    await writeFile(path.join(root, "README.md"), "hello", "utf8");
+    const budget = new AgentBudgetTracker({ maxToolCalls: 1 });
+    expect(budget.beginToolCall().ok).toBe(true);
+    const result = await new TaskTool(
+      new ReviewerModel("read"),
+      new Workspace(root),
+      unusedExecutor(),
+      "parent-session",
+    ).execute(
+      {
+        subagent: "code-reviewer",
+        task: "Review README",
+      },
+      {
+        toolCallId: "task-call",
+        budget,
+      },
+    );
+
+    expect(result.content).toBe("Stopped: tool-call budget reached.");
+    expect(budget.usage.toolCalls).toBe(1);
   });
 });
 

@@ -52,17 +52,44 @@ export function summarizeToolCall(call: ToolCall): string {
     return `Bash ${compact(String(call.args.command ?? "command"), 100)}`;
   }
 
+  if (call.name === "MemoryWrite") {
+    return `Memory write (${compact(String(call.args.scope ?? "scope"), 20)}/${compact(
+      String(call.args.kind ?? "kind"),
+      30,
+    )})`;
+  }
+
+  if (call.name === "MemoryDelete") {
+    return `Memory delete ${compact(String(call.args.id ?? "memory"), 60)}`;
+  }
+
+  if (call.name.startsWith("mcp_")) {
+    return `MCP ${compact(call.name, 64)}`;
+  }
+
   return call.name;
 }
 
 export function summarizeApproval(call: ToolCall): string | null {
-  if (call.name !== "Edit") {
-    return null;
+  if (call.name === "Edit") {
+    const oldText = compact(String(call.args.old_string ?? ""), 40);
+    const newText = compact(String(call.args.new_string ?? ""), 40);
+    return `"${oldText}" -> "${newText}"`;
   }
 
-  const oldText = compact(String(call.args.old_string ?? ""), 40);
-  const newText = compact(String(call.args.new_string ?? ""), 40);
-  return `"${oldText}" -> "${newText}"`;
+  if (call.name === "MemoryWrite") {
+    return compact(String(call.args.content ?? ""), 300);
+  }
+
+  if (call.name === "MemoryDelete") {
+    return compact(String(call.args.reason ?? ""), 200);
+  }
+
+  if (call.name.startsWith("mcp_")) {
+    return compact(JSON.stringify(redactSensitiveValues(call.args)), 500);
+  }
+
+  return null;
 }
 
 function compact(value: string, maxLength = 100): string {
@@ -73,4 +100,23 @@ function compact(value: string, maxLength = 100): string {
   }
 
   return `${singleLine.slice(0, maxLength - 3)}...`;
+}
+
+function redactSensitiveValues(value: unknown): unknown {
+  if (Array.isArray(value)) {
+    return value.map(redactSensitiveValues);
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  return Object.fromEntries(
+    Object.entries(value as Record<string, unknown>).map(([key, child]) => [
+      key,
+      /(?:secret|token|password|passwd|cookie|api[_-]?key|authorization)/i.test(
+        key,
+      )
+        ? "[redacted]"
+        : redactSensitiveValues(child),
+    ]),
+  );
 }

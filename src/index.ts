@@ -4,6 +4,10 @@ import { Command } from "commander";
 import path from "node:path";
 import { createInterface } from "node:readline/promises";
 import { AgentLoop } from "./agent/loop.js";
+import {
+  DEFAULT_AGENT_BUDGET,
+  type AgentBudget,
+} from "./agent/budget.js";
 import { CANCELLED_TEXT } from "./agent/cancellation.js";
 import { ContextBuilder } from "./agent/context.js";
 import { SessionCompactor } from "./agent/compaction.js";
@@ -17,6 +21,10 @@ import type { ModelClient } from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
 import { MockModel } from "./model/mock.js";
 import { OpenAIModel } from "./model/openai.js";
+import { memoryPathsForWorkspace } from "./memory/paths.js";
+import { MemoryService } from "./memory/service.js";
+import { McpManager } from "./mcp/manager.js";
+import type { McpToolAdapter } from "./mcp/toolAdapter.js";
 import {
   askUserApproval,
   restoreInputAfterApproval,
@@ -46,16 +54,32 @@ import { SkillListTool, SkillLoadTool } from "./tools/skill.js";
 import { TaskTool } from "./tools/task.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { TodoReadTool, TodoStore, TodoWriteTool } from "./tools/todo.js";
+import {
+  MemoryDeleteTool,
+  MemorySearchTool,
+  MemoryWriteTool,
+} from "./tools/memory.js";
 import { WriteTool } from "./tools/write.js";
 import { ConsoleReporter } from "./ui/consoleReporter.js";
+import {
+  defaultUserConfigPath,
+  loadUserConfig,
+} from "./config/userConfig.js";
 
 interface CliOptions {
   task?: string;
+  config?: string;
+  envFile?: string;
   cwd: string;
   provider: string;
   model?: string;
   baseUrl?: string;
   maxTurns: string;
+  maxWallTimeMs: string;
+  maxInputTokens: string;
+  maxOutputTokens: string;
+  maxToolCalls: string;
+  maxModelRetries: string;
   resume?: string;
   bashSandbox: string;
   sandboxImage: string;
@@ -68,6 +92,8 @@ interface CliOptions {
   worktreeBase: string;
 }
 
+let activeMcpManager: McpManager | undefined;
+
 async function main(): Promise<void> {
   const program = new Command();
 
@@ -75,11 +101,38 @@ async function main(): Promise<void> {
     .name("harness")
     .description("TypeScript local coding agent harness")
     .option("-t, --task <task>", "Task to run")
+    .option("--config <path>", "Trusted user config file")
+    .option("--env-file <path>", "Explicit environment file to load")
     .option("--cwd <cwd>", "Workspace directory", process.cwd())
     .option("--provider <provider>", "Model provider: openai or mock", "openai")
     .option("--model <model>", "Model name")
     .option("--base-url <baseUrl>", "OpenAI-compatible API base URL")
     .option("--max-turns <turns>", "Maximum agent turns per user message", "50")
+    .option(
+      "--max-wall-time-ms <milliseconds>",
+      "Maximum wall time per user message",
+      String(DEFAULT_AGENT_BUDGET.maxWallTimeMs),
+    )
+    .option(
+      "--max-input-tokens <tokens>",
+      "Maximum provider input tokens per user message",
+      String(DEFAULT_AGENT_BUDGET.maxInputTokens),
+    )
+    .option(
+      "--max-output-tokens <tokens>",
+      "Maximum provider output tokens per user message",
+      String(DEFAULT_AGENT_BUDGET.maxOutputTokens),
+    )
+    .option(
+      "--max-tool-calls <calls>",
+      "Maximum tool calls per user message",
+      String(DEFAULT_AGENT_BUDGET.maxToolCalls),
+    )
+    .option(
+      "--max-model-retries <retries>",
+      "Maximum model retries per user message",
+      String(DEFAULT_AGENT_BUDGET.maxModelRetries),
+    )
     .option("--resume <session>", "Resume a session id or latest")
     .option(
       "--bash-sandbox <mode>",
@@ -102,8 +155,20 @@ async function main(): Promise<void> {
 
   const opts = program.opts<CliOptions>();
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
-  await loadEnvFile(path.join(sourceWorkspaceRoot, ".env"));
-  assertModelConfiguration(opts.provider);
+  if (opts.envFile) {
+    await loadEnvFile(path.resolve(sourceWorkspaceRoot, opts.envFile));
+  }
+  const userConfig = await loadUserConfig(
+    opts.config ?? process.env.HARNESS_CONFIG ?? defaultUserConfigPath(),
+  );
+  const provider = resolveStringOption(
+    program,
+    "provider",
+    opts.provider,
+    "OPENAI_PROVIDER",
+    userConfig.model?.provider,
+  );
+  assertModelConfiguration(provider);
 
   const executor = new LocalCommandExecutor();
   let worktree: WorktreeInfo | undefined;
@@ -125,6 +190,10 @@ async function main(): Promise<void> {
 
   const workspaceRoot = worktree?.path ?? sourceWorkspaceRoot;
   const workspace = new Workspace(workspaceRoot);
+  const memory =
+    userConfig.memory?.enabled === false
+      ? undefined
+      : new MemoryService(memoryPathsForWorkspace(workspaceRoot));
   const sandboxConfig = parseSandboxConfig({
     mode: optionOrEnv(
       program,
@@ -174,10 +243,98 @@ async function main(): Promise<void> {
     executor,
     workspace,
   );
-  const modelName = opts.model ?? process.env.OPENAI_MODEL ?? "gpt-4.1";
+  const mcpManager = new McpManager();
+  activeMcpManager = mcpManager;
+  await mcpManager.start(userConfig.mcpServers);
+  const modelName =
+    resolveOptionalStringOption(
+      program,
+      "model",
+      opts.model,
+      "OPENAI_MODEL",
+      userConfig.model?.name,
+    ) ?? "gpt-4.1";
   const sessionManager = new SessionManager(workspaceRoot, { model: modelName });
-  const baseUrl = opts.baseUrl ?? process.env.OPENAI_BASE_URL;
-  const maxTurns = parsePositiveInteger(opts.maxTurns, "--max-turns");
+  const baseUrl = resolveOptionalStringOption(
+    program,
+    "baseUrl",
+    opts.baseUrl,
+    "OPENAI_BASE_URL",
+    userConfig.model?.baseUrl,
+  );
+  const maxTurns = parsePositiveInteger(
+    resolveStringOption(
+      program,
+      "maxTurns",
+      opts.maxTurns,
+      "HARNESS_MAX_TURNS",
+      numericConfig(userConfig.budget?.maxTurns),
+    ),
+    "--max-turns",
+  );
+  const budget: AgentBudget = {
+    maxTurns,
+    maxWallTimeMs: parsePositiveInteger(
+      resolveStringOption(
+        program,
+        "maxWallTimeMs",
+        opts.maxWallTimeMs,
+        "HARNESS_MAX_WALL_TIME_MS",
+        numericConfig(userConfig.budget?.maxWallTimeMs),
+      ),
+      "--max-wall-time-ms",
+    ),
+    maxInputTokens: parsePositiveInteger(
+      resolveStringOption(
+        program,
+        "maxInputTokens",
+        opts.maxInputTokens,
+        "HARNESS_MAX_INPUT_TOKENS",
+        numericConfig(userConfig.budget?.maxInputTokens),
+      ),
+      "--max-input-tokens",
+    ),
+    maxOutputTokens: parsePositiveInteger(
+      resolveStringOption(
+        program,
+        "maxOutputTokens",
+        opts.maxOutputTokens,
+        "HARNESS_MAX_OUTPUT_TOKENS",
+        numericConfig(userConfig.budget?.maxOutputTokens),
+      ),
+      "--max-output-tokens",
+    ),
+    maxToolCalls: parseNonNegativeInteger(
+      resolveStringOption(
+        program,
+        "maxToolCalls",
+        opts.maxToolCalls,
+        "HARNESS_MAX_TOOL_CALLS",
+        numericConfig(userConfig.budget?.maxToolCalls),
+      ),
+      "--max-tool-calls",
+    ),
+    maxModelRetries: parseNonNegativeInteger(
+      resolveStringOption(
+        program,
+        "maxModelRetries",
+        opts.maxModelRetries,
+        "HARNESS_MAX_MODEL_RETRIES",
+        numericConfig(userConfig.budget?.maxModelRetries),
+      ),
+      "--max-model-retries",
+    ),
+  };
+  console.log(
+    [
+      `Runtime: provider=${provider}`,
+      `model=${modelName}`,
+      `endpoint=${baseUrl ? "custom" : "default"}`,
+      `memory=${memory ? "on" : "off"}`,
+      `mcpTools=${mcpManager.tools.length}`,
+      `budget(turns=${budget.maxTurns}, tools=${budget.maxToolCalls}, wallMs=${budget.maxWallTimeMs})`,
+    ].join(" "),
+  );
   const initialSession = await sessionManager.start(opts.resume);
   const interactivePrompt = opts.task ? undefined : new InteractivePrompt();
   const createRuntime = (session: ManagedSession): SessionRuntime => ({
@@ -188,10 +345,13 @@ async function main(): Promise<void> {
       workspace,
       executor,
       shellExecutor: shellExecutorFactory(session),
-      provider: opts.provider,
+      provider,
       modelName,
       baseUrl,
       maxTurns,
+      budget,
+      memory,
+      mcpTools: mcpManager.tools,
       interactivePrompt,
     }),
   });
@@ -232,6 +392,36 @@ function optionOrEnv(
     : optionValue;
 }
 
+function resolveStringOption(
+  program: Command,
+  optionName: string,
+  optionValue: string,
+  environmentName: string,
+  configValue?: string,
+): string {
+  return (
+    program.getOptionValueSource(optionName) === "cli"
+      ? optionValue
+      : process.env[environmentName] ?? configValue ?? optionValue
+  );
+}
+
+function resolveOptionalStringOption(
+  program: Command,
+  optionName: string,
+  optionValue: string | undefined,
+  environmentName: string,
+  configValue?: string,
+): string | undefined {
+  return program.getOptionValueSource(optionName) === "cli"
+    ? optionValue
+    : process.env[environmentName] ?? configValue ?? optionValue;
+}
+
+function numericConfig(value: number | undefined): string | undefined {
+  return value === undefined ? undefined : String(value);
+}
+
 interface SessionRuntime {
   session: ManagedSession;
   agent: AgentLoop;
@@ -251,6 +441,9 @@ interface CreateAgentOptions {
   modelName: string;
   baseUrl?: string;
   maxTurns: number;
+  budget: AgentBudget;
+  memory?: MemoryService;
+  mcpTools: readonly McpToolAdapter[];
   interactivePrompt?: InteractivePrompt;
 }
 
@@ -328,6 +521,21 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
   tools.register(new TodoWriteTool(todoStore));
   tools.register(new SkillListTool(skillLoader));
   tools.register(new SkillLoadTool(skillLoader));
+  if (options.memory) {
+    tools.register(new MemorySearchTool(options.memory));
+    const memoryAuthorization = (context?: { userApproved?: boolean }) => ({
+      explicitUserRequest: context?.userApproved === true,
+      source: {
+        type: "user" as const,
+        sessionId: options.session.id,
+      },
+    });
+    tools.register(new MemoryWriteTool(options.memory, memoryAuthorization));
+    tools.register(new MemoryDeleteTool(options.memory, memoryAuthorization));
+  }
+  for (const tool of options.mcpTools) {
+    tools.register(tool);
+  }
   tools.register(
     new TaskTool(
       model,
@@ -341,7 +549,12 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     model,
     tools,
     new PermissionGate(defaultPolicy()),
-    new ContextBuilder(options.workspaceRoot),
+    new ContextBuilder(
+      options.workspaceRoot,
+      undefined,
+      undefined,
+      options.memory,
+    ),
     sessionStore,
     options.maxTurns,
     options.interactivePrompt
@@ -355,6 +568,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     new SessionCompactor(sessionStore),
     hooks,
     (status) => options.session.updateStatus(status).then(() => undefined),
+    options.budget,
   );
 }
 
@@ -573,7 +787,7 @@ function assertModelConfiguration(provider: string): void {
         "Set up your local environment:",
         "  1. cp .env.example .env",
         "  2. edit .env and set OPENAI_API_KEY=sk-...",
-        "  3. npm start -- --task \"Inspect this project\"",
+        "  3. npm start -- --env-file .env --task \"Inspect this project\"",
         "",
         "For loop-only development without an API call, run:",
         "  npm start -- --provider mock --task \"Inspect README.md\"",
@@ -585,8 +799,18 @@ function assertModelConfiguration(provider: string): void {
 function parsePositiveInteger(value: string, optionName: string): number {
   const parsed = Number.parseInt(value, 10);
 
-  if (!Number.isInteger(parsed) || parsed < 1) {
+  if (!Number.isInteger(parsed) || parsed < 1 || String(parsed) !== value.trim()) {
     throw new Error(`${optionName} must be a positive integer.`);
+  }
+
+  return parsed;
+}
+
+function parseNonNegativeInteger(value: string, optionName: string): number {
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== value.trim()) {
+    throw new Error(`${optionName} must be a non-negative integer.`);
   }
 
   return parsed;
@@ -706,8 +930,12 @@ class InteractivePrompt {
   }
 }
 
-void main().catch((error: unknown) => {
-  const message = error instanceof Error ? error.message : String(error);
-  console.error(`Error: ${message}`);
-  process.exitCode = 1;
-});
+void main()
+  .catch((error: unknown) => {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error(`Error: ${message}`);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await activeMcpManager?.closeAll();
+  });

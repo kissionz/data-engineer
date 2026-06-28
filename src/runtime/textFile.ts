@@ -17,7 +17,6 @@ import {
 import type { Workspace } from "./workspace.js";
 
 export const DEFAULT_MAX_TEXT_FILE_BYTES = 8 * 1024 * 1024;
-const activeEditLocks = new Set<string>();
 
 export type FileOperationErrorCode =
   | "not_found"
@@ -513,7 +512,6 @@ async function acquireEditLock(
         "utf8",
       );
       await handle.sync();
-      activeEditLocks.add(lockPath);
       return handle;
     } catch (error: unknown) {
       if (handle) {
@@ -572,12 +570,7 @@ async function removeStaleEditLock(lockPath: string): Promise<boolean> {
       return false;
     }
 
-    if (
-      owner &&
-      isProcessAlive(owner.pid) &&
-      (owner.pid !== process.pid || activeEditLocks.has(lockPath)) &&
-      !oldEnough
-    ) {
+    if (owner && isProcessAlive(owner.pid) && !oldEnough) {
       return false;
     }
 
@@ -598,36 +591,30 @@ async function releaseEditLock(
   lockPath: string,
   expected?: Identity,
 ): Promise<void> {
-  try {
-    if (!expected) {
+  if (!expected) {
+    return;
+  }
+
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const current = await lstat(lockPath).catch(() => undefined);
+
+    if (!current || !current.isFile() || !sameIdentity(current, expected)) {
       return;
     }
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const current = await lstat(lockPath).catch(() => undefined);
-
-      if (!current || !current.isFile() || !sameIdentity(current, expected)) {
-        return;
+    try {
+      await unlink(lockPath);
+      return;
+    } catch (error: unknown) {
+      if (
+        !["EACCES", "EPERM", "EBUSY"].includes(nodeErrorCode(error) ?? "") ||
+        attempt === 3
+      ) {
+        throw error;
       }
 
-      try {
-        await unlink(lockPath);
-        return;
-      } catch (error: unknown) {
-        if (
-          !["EACCES", "EPERM", "EBUSY"].includes(nodeErrorCode(error) ?? "") ||
-          attempt === 3
-        ) {
-          throw error;
-        }
-
-        await new Promise((resolve) =>
-          setTimeout(resolve, 25 * 2 ** attempt),
-        );
-      }
+      await new Promise((resolve) => setTimeout(resolve, 25 * 2 ** attempt));
     }
-  } finally {
-    activeEditLocks.delete(lockPath);
   }
 }
 

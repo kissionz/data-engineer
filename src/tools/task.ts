@@ -87,7 +87,7 @@ export class TaskTool implements Tool {
       new SessionStore(childSessionPath),
       CODE_REVIEWER_SPEC.maxTurns,
       async () => "reject",
-    ).run(args.task.trim(), context?.signal);
+    ).run(args.task.trim(), context?.signal, context?.budget);
     const truncated = result.length > this.maxResultChars;
 
     if (result === CANCELLED_TEXT) {

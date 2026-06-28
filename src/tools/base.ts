@@ -1,3 +1,5 @@
+import type { AgentBudgetTracker } from "../agent/budget.js";
+
 export interface ToolExecutionResult {
   ok: boolean;
   content: string;
@@ -7,12 +9,20 @@ export interface ToolExecutionResult {
 export interface ToolExecutionContext {
   signal?: AbortSignal;
   toolCallId: string;
+  userApproved?: boolean;
+  budget?: AgentBudgetTracker;
 }
 
 export interface Tool {
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  effect?: "readonly" | "side_effect";
+  source?: {
+    type: "builtin" | "mcp";
+    serverId?: string;
+    remoteName?: string;
+  };
 
   execute(
     args: Record<string, unknown>,

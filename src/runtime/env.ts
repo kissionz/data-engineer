@@ -1,21 +1,7 @@
 import { readFile } from "node:fs/promises";
 
 export async function loadEnvFile(filePath: string): Promise<void> {
-  let text: string;
-
-  try {
-    text = await readFile(filePath, "utf8");
-  } catch (error: unknown) {
-    if (
-      error instanceof Error &&
-      "code" in error &&
-      (error as NodeJS.ErrnoException).code === "ENOENT"
-    ) {
-      return;
-    }
-
-    throw error;
-  }
+  const text = await readFile(filePath, "utf8");
 
   for (const line of text.split(/\r?\n/)) {
     const parsed = parseEnvLine(line);

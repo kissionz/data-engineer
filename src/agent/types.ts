@@ -24,6 +24,14 @@ export interface AgentMessage {
 export interface AgentResponse {
   finalText?: string;
   toolCalls?: ToolCall[];
+  usage?: ModelUsage;
+  requestId?: string;
+}
+
+export interface ModelUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens?: number;
 }
 
 export interface SessionEventEnvelope {
@@ -70,6 +78,8 @@ export type SessionEvent = SessionEventEnvelope &
       type: "model_response_received";
       hasFinalText: boolean;
       toolCallCount: number;
+      usage?: ModelUsage;
+      requestId?: string;
     }
   | {
       type: "approval_requested";
@@ -142,6 +152,8 @@ export type SessionEventInput =
       type: "model_response_received";
       hasFinalText: boolean;
       toolCallCount: number;
+      usage?: ModelUsage;
+      requestId?: string;
     }
   | {
       type: "approval_requested";

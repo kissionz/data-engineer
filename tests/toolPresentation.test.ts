@@ -71,4 +71,30 @@ describe("summarizeToolCall", () => {
     expect(summary).toMatch(/^Task code-reviewer: Review /);
     expect(summary.length).toBeLessThan(140);
   });
+
+  it("shows durable memory content and redacted MCP arguments for approval", () => {
+    expect(
+      summarizeApproval({
+        id: "memory",
+        name: "MemoryWrite",
+        args: {
+          scope: "user",
+          kind: "preference",
+          content: "Prefer concise status reports.",
+        },
+      }),
+    ).toBe("Prefer concise status reports.");
+
+    const mcp = summarizeApproval({
+      id: "mcp",
+      name: "mcp_remote_publish_123",
+      args: {
+        title: "Release",
+        api_token: "do-not-display",
+      },
+    });
+    expect(mcp).toContain("Release");
+    expect(mcp).toContain("[redacted]");
+    expect(mcp).not.toContain("do-not-display");
+  });
 });

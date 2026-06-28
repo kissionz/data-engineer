@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { ModelRequestError } from "../src/model/base.js";
 import { OpenAIModel } from "../src/model/openai.js";
 
 describe("OpenAIModel", () => {
@@ -9,6 +10,7 @@ describe("OpenAIModel", () => {
 
       return new Response(
         JSON.stringify({
+          id: "resp_123",
           output: [
             {
               type: "function_call",
@@ -17,6 +19,11 @@ describe("OpenAIModel", () => {
               arguments: JSON.stringify({ file_path: "README.md" }),
             },
           ],
+          usage: {
+            input_tokens: 120,
+            output_tokens: 18,
+            input_tokens_details: { cached_tokens: 40 },
+          },
         }),
         { status: 200 },
       );
@@ -42,11 +49,13 @@ describe("OpenAIModel", () => {
           },
         },
       ],
+      maxOutputTokens: 321,
     });
 
     expect(requestBody).toMatchObject({
       model: "test-model",
       stream: true,
+      max_output_tokens: 321,
       input: [{ role: "user", content: "read README" }],
       tools: [
         {
@@ -68,6 +77,14 @@ describe("OpenAIModel", () => {
         args: { file_path: "README.md" },
       },
     ]);
+    expect(result).toMatchObject({
+      requestId: "resp_123",
+      usage: {
+        inputTokens: 120,
+        outputTokens: 18,
+        cacheReadTokens: 40,
+      },
+    });
   });
 
   it("sends prior tool results back as function_call_output items", async () => {
@@ -156,6 +173,26 @@ describe("OpenAIModel", () => {
     expect(requestUrl).toBe("https://gateway.example/v1/responses");
   });
 
+  it("rejects remote plaintext Base URLs but permits explicit localhost HTTP", () => {
+    expect(
+      () =>
+        new OpenAIModel({
+          apiKey: "test-key",
+          model: "test-model",
+          baseUrl: "http://gateway.example/v1",
+        }),
+    ).toThrow("must use HTTPS");
+
+    expect(
+      () =>
+        new OpenAIModel({
+          apiKey: "test-key",
+          model: "test-model",
+          baseUrl: "http://localhost:11434/v1",
+        }),
+    ).not.toThrow();
+  });
+
   it("passes the task AbortSignal to fetch", async () => {
     const controller = new AbortController();
     let requestSignal: AbortSignal | null | undefined;
@@ -180,6 +217,76 @@ describe("OpenAIModel", () => {
     expect(requestSignal).toBe(controller.signal);
   });
 
+  it("classifies retryable HTTP errors and honors Retry-After", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({ error: { message: "rate limited" } }),
+          {
+            status: 429,
+            headers: { "retry-after": "1.5" },
+          },
+        ),
+    });
+
+    const error = await model
+      .complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ModelRequestError);
+    expect(error).toMatchObject({
+      retryable: true,
+      status: 429,
+      retryAfterMs: 1_500,
+    });
+  });
+
+  it("does not classify ordinary client errors as retryable", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({ error: { message: "bad request" } }),
+          { status: 400 },
+        ),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).rejects.toMatchObject({
+      retryable: false,
+      status: 400,
+    });
+  });
+
+  it("rejects oversized JSON responses before buffering the body", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl: async () =>
+        new Response("{}", {
+          status: 200,
+          headers: { "content-length": String(17 * 1024 * 1024) },
+        }),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).rejects.toThrow("16 MiB safety limit");
+  });
+
   it("streams text deltas while returning the complete text", async () => {
     const deltas: string[] = [];
     const fetchImpl: typeof fetch = async () =>
@@ -195,7 +302,14 @@ describe("OpenAIModel", () => {
           },
           {
             type: "response.completed",
-            response: { output: [] },
+            response: {
+              id: "resp_stream",
+              output: [],
+              usage: {
+                input_tokens: 10,
+                output_tokens: 2,
+              },
+            },
           },
         ],
         7,
@@ -214,6 +328,10 @@ describe("OpenAIModel", () => {
 
     expect(deltas).toEqual(["Hello", " world"]);
     expect(result.finalText).toBe("Hello world");
+    expect(result).toMatchObject({
+      requestId: "resp_stream",
+      usage: { inputTokens: 10, outputTokens: 2 },
+    });
   });
 
   it("assembles streamed function call arguments", async () => {

@@ -13,7 +13,10 @@ import type {
   AgentResponse,
   ToolCall,
 } from "../src/agent/types.js";
-import type { ModelClient } from "../src/model/base.js";
+import {
+  ModelRequestError,
+  type ModelClient,
+} from "../src/model/base.js";
 import { HookManager } from "../src/hooks/manager.js";
 import { PermissionGate } from "../src/permissions/gate.js";
 import { defaultPolicy } from "../src/permissions/policy.js";
@@ -194,6 +197,42 @@ class SingleToolThenDoneModel implements ModelClient {
   }
 }
 
+class UsageToolModel implements ModelClient {
+  async complete(): Promise<AgentResponse> {
+    return {
+      toolCalls: [
+        {
+          id: "usage-call",
+          name: "Bash",
+          args: { command: "npm test" },
+        },
+      ],
+      requestId: "usage-response",
+      usage: {
+        inputTokens: 10,
+        outputTokens: 5,
+      },
+    };
+  }
+}
+
+class TransientModel implements ModelClient {
+  calls = 0;
+
+  async complete(): Promise<AgentResponse> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      throw new ModelRequestError(
+        "temporary rate limit",
+        true,
+        429,
+        0,
+      );
+    }
+    return { finalText: "recovered" };
+  }
+}
+
 class CountingWriteTool implements Tool {
   name = "Write";
   description = "Fake write tool for hook tests.";
@@ -292,6 +331,31 @@ class AbortableModel implements ModelClient {
       }
 
       options.signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
+}
+
+class AbortableBashTool implements Tool {
+  name = "Bash";
+  description = "Wait until the task budget aborts execution.";
+  inputSchema = {
+    type: "object",
+    properties: { command: { type: "string" } },
+    required: ["command"],
+  };
+
+  async execute(
+    _args: Record<string, unknown>,
+    context?: { signal?: AbortSignal },
+  ): Promise<ToolExecutionResult> {
+    return new Promise((_resolve, reject) => {
+      const abort = () =>
+        reject(new DOMException("The operation was aborted.", "AbortError"));
+      if (context?.signal?.aborted) {
+        abort();
+        return;
+      }
+      context?.signal?.addEventListener("abort", abort, { once: true });
     });
   }
 }
@@ -691,6 +755,205 @@ describe("AgentLoop", () => {
     expect(bash.executions).toBe(1);
   });
 
+  it("stops before a tool when its execution budget is exhausted", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    const loop = new AgentLoop(
+      new SingleToolThenDoneModel({
+        id: "budgeted-tool",
+        name: "Bash",
+        args: { command: "npm test" },
+      }),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+      10,
+      async () => "allow_once",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxToolCalls: 0 },
+    );
+
+    await expect(loop.run("do not run tools")).resolves.toBe(
+      "Stopped: tool-call budget reached.",
+    );
+    expect(bash.executions).toBe(0);
+    expect(await new SessionStore(sessionPath).load()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_result",
+          toolCallId: "budgeted-tool",
+          data: expect.objectContaining({
+            code: "tool_call_budget_reached",
+            retryable: false,
+          }),
+        }),
+      ]),
+    );
+  });
+
+  it("uses provider token usage to stop before executing returned tools", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    const loop = new AgentLoop(
+      new UsageToolModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => "allow_once",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxOutputTokens: 5 },
+    );
+
+    await expect(loop.run("respect token usage")).resolves.toBe(
+      "Stopped: token budget reached.",
+    );
+    expect(bash.executions).toBe(0);
+  });
+
+  it("stops before sending a request that exceeds the input-token budget", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const model = new CountingFinalModel();
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxInputTokens: 1 },
+    );
+
+    await expect(loop.run("large enough to exceed one token")).resolves.toBe(
+      "Stopped: token budget reached.",
+    );
+    expect(model.calls).toBe(0);
+  });
+
+  it("retries transient model failures within the retry budget", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const model = new TransientModel();
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxModelRetries: 1 },
+    );
+
+    await expect(loop.run("retry safely")).resolves.toBe("recovered");
+    expect(model.calls).toBe(2);
+  });
+
+  it("stops before retrying when the model retry budget is zero", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const model = new TransientModel();
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxModelRetries: 0 },
+    );
+
+    await expect(loop.run("do not retry")).resolves.toBe(
+      "Stopped: model-retry budget reached.",
+    );
+    expect(model.calls).toBe(1);
+  });
+
+  it("aborts an in-flight model request when wall-time budget expires", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const loop = new AgentLoop(
+      new AbortableModel(),
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxWallTimeMs: 20 },
+    );
+
+    await expect(loop.run("respect wall time")).resolves.toBe(
+      "Stopped: wall-time budget reached.",
+    );
+  });
+
+  it("records an unknown outcome when wall time expires during a tool", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const tools = new ToolRegistry();
+    tools.register(new AbortableBashTool());
+    const loop = new AgentLoop(
+      new SingleToolThenDoneModel({
+        id: "slow-side-effect",
+        name: "Bash",
+        args: { command: "slow operation" },
+      }),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+      10,
+      async () => "allow_once",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxWallTimeMs: 100 },
+    );
+
+    await expect(loop.run("respect tool wall time")).resolves.toBe(
+      "Stopped: wall-time budget reached.",
+    );
+    expect(await new SessionStore(sessionPath).load()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "tool_result",
+          toolCallId: "slow-side-effect",
+          data: { code: "unknown_outcome", retryable: false },
+        }),
+      ]),
+    );
+  });
+
   it("blocks tool execution when a BeforeToolUse hook rejects it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
     const writeTool = new CountingWriteTool();
@@ -776,6 +1039,38 @@ describe("AgentLoop", () => {
     expect(await readFile(sessionPath, "utf8")).toContain(
       '"kind":"git_diff_review"',
     );
+  });
+
+  it("counts automatic GitDiff review against the tool-call budget", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const writeTool = new CountingWriteTool();
+    const diffTool = new CountingGitDiffTool();
+    const tools = new ToolRegistry();
+    tools.register(writeTool);
+    tools.register(diffTool);
+
+    const loop = new AgentLoop(
+      new WriteThenInspectModel(),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(
+        path.join(root, ".harness", "sessions", "test.jsonl"),
+      ),
+      10,
+      async () => "allow_once",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxToolCalls: 1 },
+    );
+
+    await expect(loop.run("write and review")).resolves.toBe(
+      "Stopped: tool-call budget reached.",
+    );
+    expect(writeTool.executions).toBe(1);
+    expect(diffTool.executions).toBe(0);
   });
 
   it("does not repeat GitDiff when the model already reviewed the edit", async () => {

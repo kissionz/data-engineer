@@ -33,4 +33,12 @@ describe("loadEnvFile", () => {
     expect(process.env.HARNESS_TEST_KEY).toBe("from file");
     expect(process.env.HARNESS_EXISTING_KEY).toBe("from-shell");
   });
+
+  it("fails when an explicitly selected env file does not exist", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-env-"));
+
+    await expect(
+      loadEnvFile(path.join(root, "missing.env")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  });
 });
