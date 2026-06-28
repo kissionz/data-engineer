@@ -201,6 +201,87 @@ describe("OpenAIModel", () => {
     expect(requestUrl).toBe("https://gateway.example/v1/responses");
   });
 
+  it("keeps compatibility safeguards for third-party chat APIs", async () => {
+    let requestUrl = "";
+    let requestBody: Record<string, unknown> | undefined;
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "compatible-model",
+      baseUrl: "https://compatible.example/v1",
+      fetchImpl: async (input, init) => {
+        requestUrl = String(input);
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            id: "chatcmpl-compatible",
+            choices: [
+              {
+                message: { role: "assistant", content: "ok" },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    const result = await model.complete({
+      messages: [{ role: "user", content: "hello" }],
+      tools: [
+        {
+          name: "Read",
+          description: "Read a file",
+          input_schema: { type: "object" },
+        },
+      ],
+      maxOutputTokens: 100_000,
+    });
+
+    expect(requestUrl).toBe("https://compatible.example/v1/chat/completions");
+    expect(requestBody).toMatchObject({
+      model: "compatible-model",
+      tool_choice: "auto",
+      stream: true,
+    });
+    expect(requestBody).not.toHaveProperty("max_tokens");
+    expect(result).toMatchObject({
+      finalText: "ok",
+      stopReason: "end_turn",
+    });
+  });
+
+  it("sends supported max_tokens values to compatible APIs", async () => {
+    let requestBody: Record<string, unknown> | undefined;
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "compatible-model",
+      baseUrl: "https://compatible.example/v1",
+      fetchImpl: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            choices: [
+              {
+                message: { role: "assistant", content: "ok" },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+          { status: 200 },
+        );
+      },
+    });
+
+    await model.complete({
+      messages: [{ role: "user", content: "hello" }],
+      tools: [],
+      maxOutputTokens: 4_096,
+    });
+
+    expect(requestBody).toMatchObject({ max_tokens: 4_096 });
+  });
+
   it("rejects remote plaintext Base URLs but permits explicit localhost HTTP", () => {
     expect(
       () =>

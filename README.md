@@ -488,3 +488,24 @@ git branch -d harness/<id>
 - 有界、只读的 `code-reviewer` 子代理
 - 显式 Git worktree 隔离模式
 - 仅供明确本地循环测试的 mock model
+
+## 验收与回归测试
+
+提交前运行完整构建和测试：
+
+```bash
+npm run build
+npm test -- --run
+```
+
+指南中的五类 MVP 任务有独立的确定性验收套件，不调用真实模型 API：
+
+```bash
+npm run test:acceptance
+```
+
+OpenAI 原生/兼容接口与 MCP 协议转换使用合同测试：
+
+```bash
+npm run test:contract
+```

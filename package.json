@@ -12,7 +12,9 @@
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "vitest"
+    "test": "vitest",
+    "test:acceptance": "vitest run tests/acceptance.test.ts",
+    "test:contract": "vitest run tests/openai.test.ts tests/mcp.test.ts"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.0.0",

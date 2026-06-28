@@ -93,7 +93,6 @@ export class AgentLoop {
       await this.recoverPendingApprovals(signal, budget);
       await this.recordStatus("running");
       await this.recoverInterruptedToolCalls();
-      await this.compactor?.compactIfNeeded();
       await this.session.append({
         type: "user_message",
         text: userTask,
@@ -121,8 +120,24 @@ export class AgentLoop {
           events = await this.session.load();
         }
 
+        const modelContextWindow = this.model.capabilities?.contextWindow;
+        const compactionTokenThreshold = modelContextWindow
+          ? Math.max(1_000, Math.floor(modelContextWindow * 0.6))
+          : undefined;
+        if (
+          await this.compactor?.compactIfNeeded({
+            events,
+            tokenThreshold: compactionTokenThreshold,
+          })
+        ) {
+          events = await this.session.load();
+        }
+
         const messages = await this.context.build(events);
-        const toolSchemas = this.tools.schemas();
+        const toolSchemas =
+          this.model.capabilities?.supportsToolUse === false
+            ? []
+            : this.tools.schemas();
         const estimatedInputTokens = estimateTokens({
           messages,
           tools: toolSchemas,
@@ -147,24 +162,35 @@ export class AgentLoop {
           | Awaited<ReturnType<ModelClient["complete"]>>
           | undefined;
         let retryAttempt = 0;
+        const supportsStreaming =
+          this.model.capabilities?.supportsStreaming !== false;
 
         while (!response) {
           await this.session.append({ type: "model_request_started" });
           try {
+            const remainingOutputTokens =
+              budget.limits.maxOutputTokens -
+              budget.usage.outputTokens;
+            const providerOutputLimit =
+              this.model.capabilities?.maxOutputTokens ??
+              remainingOutputTokens;
             response = await this.model.complete({
               messages,
               tools: toolSchemas,
-              maxOutputTokens:
-                budget.limits.maxOutputTokens -
-                budget.usage.outputTokens,
-              onTextDelta: (delta) => {
-                receivedText = true;
-                if (deferStreaming) {
-                  bufferedText += delta;
-                } else {
-                  this.reporter.onTextDelta(delta);
-                }
-              },
+              maxOutputTokens: Math.max(
+                1,
+                Math.min(remainingOutputTokens, providerOutputLimit),
+              ),
+              onTextDelta: supportsStreaming
+                ? (delta) => {
+                    receivedText = true;
+                    if (deferStreaming) {
+                      bufferedText += delta;
+                    } else {
+                      this.reporter.onTextDelta(delta);
+                    }
+                  }
+                : undefined,
               signal,
             });
           } catch (error: unknown) {

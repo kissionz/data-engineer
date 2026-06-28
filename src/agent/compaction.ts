@@ -1,20 +1,33 @@
 import type { SessionEvent, ToolCall } from "./types.js";
 import type { SessionStore } from "./session.js";
 
+export interface CompactionCheckOptions {
+  events?: SessionEvent[];
+  tokenThreshold?: number;
+}
+
 export class SessionCompactor {
   constructor(
     private readonly session: SessionStore,
     private readonly eventThreshold = 60,
+    private readonly tokenThreshold = 24_000,
   ) {}
 
-  async compactIfNeeded(): Promise<boolean> {
-    const events = await this.session.load();
+  async compactIfNeeded(
+    options: CompactionCheckOptions = {},
+  ): Promise<boolean> {
+    const events = options.events ?? await this.session.load();
     const latestSummaryIndex = findLatestSummaryIndex(events);
     const eventsSinceSummary = events
       .slice(latestSummaryIndex + 1)
       .filter((event) => event.type !== "summary");
+    const tokenThreshold =
+      options.tokenThreshold ?? this.tokenThreshold;
 
-    if (eventsSinceSummary.length < this.eventThreshold) {
+    if (
+      eventsSinceSummary.length < this.eventThreshold &&
+      estimateSessionEventTokens(eventsSinceSummary) < tokenThreshold
+    ) {
       return false;
     }
 
@@ -24,6 +37,10 @@ export class SessionCompactor {
     });
     return true;
   }
+}
+
+export function estimateSessionEventTokens(events: SessionEvent[]): number {
+  return Math.ceil(JSON.stringify(events).length / 4);
 }
 
 export function buildSessionSummary(events: SessionEvent[]): string {

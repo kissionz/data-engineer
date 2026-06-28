@@ -5,6 +5,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { AgentLoop } from "../src/agent/loop.js";
 import { CANCELLED_TEXT } from "../src/agent/cancellation.js";
+import { SessionCompactor } from "../src/agent/compaction.js";
 import { ContextBuilder } from "../src/agent/context.js";
 import type { AgentReporter, ToolStatus } from "../src/agent/reporter.js";
 import { SessionStore } from "../src/agent/session.js";
@@ -15,6 +16,7 @@ import type {
 } from "../src/agent/types.js";
 import {
   ModelRequestError,
+  type ModelCapabilities,
   type ModelClient,
 } from "../src/model/base.js";
 import { HookManager } from "../src/hooks/manager.js";
@@ -346,6 +348,54 @@ class TruncatedThenFinalModel implements ModelClient {
       usage: { inputTokens: 1, outputTokens: 1 },
       requestId: "truncated-2",
     };
+  }
+}
+
+class CapabilityAwareModel implements ModelClient {
+  readonly capabilities: ModelCapabilities = {
+    contextWindow: 8_000,
+    maxOutputTokens: 7,
+    supportsStreaming: false,
+    supportsToolUse: false,
+    supportsImages: false,
+  };
+  receivedTools: Array<Record<string, unknown>> = [];
+  receivedMaxOutputTokens?: number;
+
+  async complete(options: {
+    tools: Array<Record<string, unknown>>;
+    maxOutputTokens?: number;
+  }): Promise<AgentResponse> {
+    this.receivedTools = options.tools;
+    this.receivedMaxOutputTokens = options.maxOutputTokens;
+    return { finalText: "done", stopReason: "end_turn" };
+  }
+}
+
+class CompactingModel implements ModelClient {
+  calls = 0;
+  sawSummary = false;
+
+  async complete(options: {
+    messages: AgentMessage[];
+  }): Promise<AgentResponse> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      return {
+        toolCalls: [
+          {
+            id: "compact-read",
+            name: "Read",
+            args: { file_path: "README.md" },
+          },
+        ],
+        stopReason: "tool_use",
+      };
+    }
+    this.sawSummary = options.messages.some((message) =>
+      message.content.includes("Previous session summary"),
+    );
+    return { finalText: "done", stopReason: "end_turn" };
   }
 }
 
@@ -907,6 +957,59 @@ describe("AgentLoop", () => {
     expect(model.sawPartialAssistantMessage).toBe(true);
     expect(await readFile(sessionPath, "utf8")).toContain(
       '"type":"assistant_partial"',
+    );
+  });
+
+  it("uses model capabilities for tool exposure and output limits", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const model = new CapabilityAwareModel();
+    const tools = new ToolRegistry();
+    tools.register(new ReadTool(new Workspace(root)));
+    const loop = new AgentLoop(
+      model,
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxOutputTokens: 20 },
+    );
+
+    await expect(loop.run("answer directly")).resolves.toBe("done");
+    expect(model.receivedTools).toEqual([]);
+    expect(model.receivedMaxOutputTokens).toBe(7);
+  });
+
+  it("compacts during a multi-turn task instead of waiting for the next run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    await writeFile(path.join(root, "README.md"), "hello", "utf8");
+    const session = new SessionStore(
+      path.join(root, ".harness", "sessions", "test.jsonl"),
+    );
+    const model = new CompactingModel();
+    const tools = new ToolRegistry();
+    tools.register(new ReadTool(new Workspace(root)));
+    const loop = new AgentLoop(
+      model,
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      session,
+      10,
+      undefined,
+      undefined,
+      new SessionCompactor(session, 3, 100_000),
+    );
+
+    await expect(loop.run("inspect README")).resolves.toBe("done");
+    expect(model.sawSummary).toBe(true);
+    expect((await session.load()).some((event) => event.type === "summary")).toBe(
+      true,
     );
   });
 

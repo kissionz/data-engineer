@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildSessionSummary,
+  estimateSessionEventTokens,
   SessionCompactor,
 } from "../src/agent/compaction.js";
 import { SessionStore } from "../src/agent/session.js";
@@ -83,5 +84,21 @@ describe("SessionCompactor", () => {
     expect(summary).toContain("README.md");
     expect(summary).toContain("npm test");
     expect(summary).toContain("Bash: test failed");
+  });
+
+  it("compacts when estimated context tokens cross the threshold", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-compact-"));
+    const store = new SessionStore(path.join(root, "session.jsonl"));
+    await store.append({
+      type: "user_message",
+      text: "x".repeat(400),
+    });
+    const events = await store.load();
+
+    expect(estimateSessionEventTokens(events)).toBeGreaterThan(50);
+    await expect(
+      new SessionCompactor(store, 100, 50).compactIfNeeded({ events }),
+    ).resolves.toBe(true);
+    expect((await store.load()).at(-1)).toMatchObject({ type: "summary" });
   });
 });
