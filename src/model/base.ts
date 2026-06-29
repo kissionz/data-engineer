@@ -39,7 +39,7 @@ export type ModelStreamHandler = (event: ModelStreamEvent) => void;
 
 export interface ModelClient {
   /** Provider capabilities declaration (optional for backwards compatibility). */
-  capabilities?: ModelCapabilities;
+  capabilities?: Partial<ModelCapabilities>;
 
   complete(options: {
     messages: AgentMessage[];
@@ -62,6 +62,22 @@ export class ModelRequestError extends Error {
     super(message);
     this.name = "ModelRequestError";
   }
+}
+
+export class ContextWindowExceededError extends ModelRequestError {
+  constructor(
+    message: string,
+    status?: number,
+  ) {
+    super(message, false, status);
+    this.name = "ContextWindowExceededError";
+  }
+}
+
+export function isContextWindowExceededError(
+  error: unknown,
+): error is ContextWindowExceededError {
+  return error instanceof ContextWindowExceededError;
 }
 
 export function isRetryableModelError(error: unknown): boolean {

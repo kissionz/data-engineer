@@ -15,6 +15,7 @@ import type {
   ToolCall,
 } from "../src/agent/types.js";
 import {
+  ContextWindowExceededError,
   ModelRequestError,
   type ModelCapabilities,
   type ModelClient,
@@ -450,6 +451,39 @@ class CompactingModel implements ModelClient {
       message.content.includes("Previous session summary"),
     );
     return { finalText: "done", stopReason: "end_turn" };
+  }
+}
+
+class OverflowThenRecoveredModel implements ModelClient {
+  calls = 0;
+  sawSummary = false;
+
+  async complete(options: {
+    messages: AgentMessage[];
+  }): Promise<AgentResponse> {
+    this.calls += 1;
+    if (this.calls === 1) {
+      throw new ContextWindowExceededError(
+        "Maximum context length exceeded.",
+        400,
+      );
+    }
+    this.sawSummary = options.messages.some((message) =>
+      message.content.includes("Previous session summary"),
+    );
+    return { finalText: "recovered", stopReason: "end_turn" };
+  }
+}
+
+class AlwaysOverflowModel implements ModelClient {
+  calls = 0;
+
+  async complete(): Promise<AgentResponse> {
+    this.calls += 1;
+    throw new ContextWindowExceededError(
+      "Maximum context length exceeded.",
+      400,
+    );
   }
 }
 
@@ -1111,6 +1145,83 @@ describe("AgentLoop", () => {
     expect((await session.load()).some((event) => event.type === "summary")).toBe(
       true,
     );
+  });
+
+  it("forces one compaction and retries after context overflow", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const session = new SessionStore(
+      path.join(root, ".harness", "sessions", "test.jsonl"),
+    );
+    const model = new OverflowThenRecoveredModel();
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      session,
+      10,
+      undefined,
+      undefined,
+      new SessionCompactor(session, 100, 100_000),
+    );
+
+    await expect(loop.run("recover context")).resolves.toBe("recovered");
+    expect(model.calls).toBe(2);
+    expect(model.sawSummary).toBe(true);
+  });
+
+  it("does not retry context overflow more than once", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const session = new SessionStore(
+      path.join(root, ".harness", "sessions", "test.jsonl"),
+    );
+    const model = new AlwaysOverflowModel();
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      session,
+      10,
+      undefined,
+      undefined,
+      new SessionCompactor(session, 100, 100_000),
+    );
+
+    await expect(loop.run("still too large")).rejects.toBeInstanceOf(
+      ContextWindowExceededError,
+    );
+    expect(model.calls).toBe(2);
+  });
+
+  it("respects a PreCompact block during overflow recovery", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const session = new SessionStore(
+      path.join(root, ".harness", "sessions", "test.jsonl"),
+    );
+    const model = new AlwaysOverflowModel();
+    const hooks = new HookManager();
+    hooks.register("PreCompact", () => ({
+      decision: "block",
+      reason: "keep full history",
+    }));
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      session,
+      10,
+      undefined,
+      undefined,
+      new SessionCompactor(session, 100, 100_000),
+      hooks,
+    );
+
+    await expect(loop.run("do not compact")).rejects.toBeInstanceOf(
+      ContextWindowExceededError,
+    );
+    expect(model.calls).toBe(1);
   });
 
   it("retries transient model failures within the retry budget", async () => {

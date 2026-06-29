@@ -40,7 +40,14 @@ const httpTransportSchema = z
   .object({
     type: z.literal("http"),
     url: z.string().url(),
-    allowedHosts: z.array(z.string().min(1).max(253)).min(1).max(32),
+    allowedHosts: z
+      .array(exactHostname)
+      .min(1)
+      .max(32)
+      .refine(
+        (hosts) => new Set(hosts).size === hosts.length,
+        "allowedHosts must not contain duplicates",
+      ),
     tokenEnv: environmentName.optional(),
     allowLocalhost: z.boolean().default(false),
   })
@@ -128,6 +135,16 @@ export const userConfigSchema = z
             outputPerMillionTokens: nonNegativeFiniteNumber,
             cacheReadPerMillionTokens:
               nonNegativeFiniteNumber.optional(),
+          })
+          .strict()
+          .optional(),
+        capabilities: z
+          .object({
+            contextWindow: positiveInteger.max(10_000_000).optional(),
+            maxOutputTokens: positiveInteger.max(1_000_000).optional(),
+            supportsStreaming: z.boolean().optional(),
+            supportsToolUse: z.boolean().optional(),
+            supportsImages: z.boolean().optional(),
           })
           .strict()
           .optional(),
@@ -262,10 +279,8 @@ function validateUserConfigSecurity(config: UserConfig): void {
       continue;
     }
     const url = new URL(server.transport.url);
-    const hostname = url.hostname.toLowerCase();
-    const allowedHosts = server.transport.allowedHosts.map((host) =>
-      host.toLowerCase(),
-    );
+    const hostname = canonicalHostname(url.hostname);
+    const allowedHosts = server.transport.allowedHosts;
     const localhost =
       hostname === "localhost" ||
       hostname === "127.0.0.1" ||
@@ -286,9 +301,6 @@ function validateUserConfigSecurity(config: UserConfig): void {
       throw new Error(
         `MCP server ${server.id} hostname is not in its exact allowedHosts list.`,
       );
-    }
-    if (allowedHosts.some((host) => host.includes("*"))) {
-      throw new Error(`MCP server ${server.id} allowedHosts cannot use wildcards.`);
     }
   }
 }

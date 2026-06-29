@@ -101,27 +101,32 @@ export class TaskTool implements Tool {
           trigger: "subagent",
         })
       : undefined;
-    const result = await new AgentLoop(
-      this.model,
-      tools,
-      new PermissionGate(readonlyPolicy()),
-      new ContextBuilder(
-        this.workspace.root,
-        30,
-        CODE_REVIEWER_SPEC.systemPrompt,
-      ),
-      new SessionStore(
-        childSessionPath,
-        childSessionId,
-        telemetry
-          ? async (event) => {
-              void telemetry.observe(event);
-            }
-          : undefined,
-      ),
-      CODE_REVIEWER_SPEC.maxTurns,
-      async () => "reject",
-    ).run(args.task.trim(), context?.signal, context?.budget);
+    let result: string;
+    try {
+      result = await new AgentLoop(
+        this.model,
+        tools,
+        new PermissionGate(readonlyPolicy()),
+        new ContextBuilder(
+          this.workspace.root,
+          30,
+          CODE_REVIEWER_SPEC.systemPrompt,
+        ),
+        new SessionStore(
+          childSessionPath,
+          childSessionId,
+          telemetry
+            ? async (event) => {
+                await telemetry.observe(event);
+              }
+            : undefined,
+        ),
+        CODE_REVIEWER_SPEC.maxTurns,
+        async () => "reject",
+      ).run(args.task.trim(), context?.signal, context?.budget);
+    } finally {
+      await telemetry?.dispose();
+    }
     const truncated = result.length > this.maxResultChars;
 
     if (result === CANCELLED_TEXT) {

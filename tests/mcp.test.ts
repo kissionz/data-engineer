@@ -10,7 +10,11 @@ import {
   ListToolsRequestSchema,
 } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServerConfig } from "../src/config/userConfig.js";
-import { isPrivateIp, McpManager } from "../src/mcp/manager.js";
+import {
+  isPrivateIp,
+  McpManager,
+  validateMcpHttpRequestTarget,
+} from "../src/mcp/manager.js";
 import {
   McpToolAdapter,
   mcpWireName,
@@ -25,6 +29,40 @@ describe("MCP integration", () => {
     expect(isPrivateIp("ff02::1")).toBe(true);
     expect(isPrivateIp("8.8.8.8")).toBe(false);
     expect(isPrivateIp("2606:4700:4700::1111")).toBe(false);
+  });
+
+  it("binds MCP HTTP requests and credentials to the configured origin", () => {
+    const configured = new URL("https://mcp.example:8443/api");
+    const allowed = new Set(["mcp.example", "cdn.example"]);
+
+    expect(
+      validateMcpHttpRequestTarget(
+        configured,
+        allowed,
+        "https://mcp.example:8443/next",
+      ),
+    ).toMatchObject({ includeCredential: true });
+    expect(
+      validateMcpHttpRequestTarget(
+        configured,
+        allowed,
+        "https://cdn.example:8443/next",
+      ),
+    ).toMatchObject({ includeCredential: false });
+    expect(() =>
+      validateMcpHttpRequestTarget(
+        configured,
+        allowed,
+        "https://mcp.example:9443/next",
+      ),
+    ).toThrow("port allowlist");
+    expect(() =>
+      validateMcpHttpRequestTarget(
+        configured,
+        allowed,
+        "https://user:secret@mcp.example:8443/next",
+      ),
+    ).toThrow("allowlist");
   });
 
   it("discovers and invokes a real stdio MCP tool through the official SDK", async () => {

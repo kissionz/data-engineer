@@ -50,13 +50,18 @@ export class SessionTelemetryObserver {
     await this.queue;
   }
 
+  async dispose(): Promise<void> {
+    await this.flush();
+    activeObservers.delete(this);
+  }
+
   private async observeNow(event: SessionEvent): Promise<void> {
     try {
       this.eventCount += 1;
       this.sessionId = event.sessionId;
       if (event.type === "user_message") {
         await this.finishTask("failed", event.timestamp, "superseded");
-        this.startTask(
+        await this.startTask(
           `${event.sessionId}:${event.sequence}`,
           event.timestamp,
           "user",
@@ -67,7 +72,7 @@ export class SessionTelemetryObserver {
       if (!this.taskId && !startsRecoveryTask(event)) {
         return;
       }
-      this.ensureTask(event);
+      await this.ensureTask(event);
       const taskId = this.taskId;
       if (!taskId) {
         return;
@@ -236,22 +241,22 @@ export class SessionTelemetryObserver {
     }
   }
 
-  private ensureTask(event: SessionEvent): void {
+  private async ensureTask(event: SessionEvent): Promise<void> {
     if (this.taskId) {
       return;
     }
-    this.startTask(
+    await this.startTask(
       `${event.sessionId}:recovery:${event.sequence}`,
       event.timestamp,
       this.options.trigger ?? "resume",
     );
   }
 
-  private startTask(
+  private async startTask(
     taskId: string,
     eventTimestamp: string,
     trigger: "user" | "resume" | "subagent",
-  ): void {
+  ): Promise<void> {
     this.taskId = taskId;
     this.taskStartedAt = timestamp(eventTimestamp);
     this.taskFinished = false;
@@ -261,7 +266,7 @@ export class SessionTelemetryObserver {
     this.modelRequests.length = 0;
     this.tools.clear();
     this.permissions.clear();
-    void this.sink.emit({
+    await this.sink.emit({
       type: "task_started",
       taskId,
       sessionId: this.sessionId,

@@ -18,7 +18,11 @@ import {
 } from "./agent/sessionManager.js";
 import { HookManager } from "./hooks/manager.js";
 import { protectSensitiveWrites } from "./hooks/defaults.js";
-import type { ModelClient, ModelPricing } from "./model/base.js";
+import type {
+  ModelCapabilities,
+  ModelClient,
+  ModelPricing,
+} from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
 import { MockModel } from "./model/mock.js";
 import { OpenAIModel, type ApiStyle } from "./model/openai.js";
@@ -408,9 +412,8 @@ async function main(): Promise<void> {
   );
   const initialSession = await sessionManager.start(opts.resume);
   const interactivePrompt = opts.task ? undefined : new InteractivePrompt();
-  const createRuntime = (session: ManagedSession): SessionRuntime => ({
-    session,
-    agent: createAgent({
+  const createRuntime = (session: ManagedSession): SessionRuntime => {
+    const created = createAgent({
       session,
       workspaceRoot,
       workspace,
@@ -421,6 +424,7 @@ async function main(): Promise<void> {
       baseUrl,
       apiStyle,
       modelPricing: userConfig.model?.pricing,
+      modelCapabilities: userConfig.model?.capabilities,
       maxTurns,
       budget,
       memory,
@@ -429,8 +433,9 @@ async function main(): Promise<void> {
       interactivePrompt,
       runtimeCapabilities,
       httpFetch: userConfig.httpFetch,
-    }),
-  });
+    });
+    return { session, ...created };
+  };
   const runtime = createRuntime(initialSession);
 
   if (opts.task || !interactivePrompt) {
@@ -442,7 +447,11 @@ async function main(): Promise<void> {
     try {
       await runSingleTask(runtime.agent, opts.task);
     } finally {
-      await runtime.session.release();
+      try {
+        await runtime.telemetry.dispose();
+      } finally {
+        await runtime.session.release();
+      }
     }
     printWorktreeReminder(worktree);
     return;
@@ -501,6 +510,7 @@ function numericConfig(value: number | undefined): string | undefined {
 interface SessionRuntime {
   session: ManagedSession;
   agent: AgentLoop;
+  telemetry: SessionTelemetryObserver;
 }
 
 type ShellExecutorFactory = (
@@ -518,6 +528,7 @@ interface CreateAgentOptions {
   baseUrl?: string;
   apiStyle?: ApiStyle;
   modelPricing?: ModelPricing;
+  modelCapabilities?: Partial<ModelCapabilities>;
   maxTurns: number;
   budget: AgentBudget;
   memory?: MemoryService;
@@ -571,7 +582,9 @@ async function createShellExecutorFactory(
     );
 }
 
-function createAgent(options: CreateAgentOptions): AgentLoop {
+function createAgent(
+  options: CreateAgentOptions,
+): { agent: AgentLoop; telemetry: SessionTelemetryObserver } {
   const tools = new ToolRegistry();
   const model = createModel(
     options.provider,
@@ -579,6 +592,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     options.baseUrl,
     options.apiStyle,
     options.modelPricing,
+    options.modelCapabilities,
   );
   const todoStore = new TodoStore(options.session.todoPath);
   const telemetry = new SessionTelemetryObserver(options.telemetry, {
@@ -669,7 +683,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     }
   }
 
-  return new AgentLoop(
+  const agent = new AgentLoop(
     model,
     tools,
     new PermissionGate(permissionPolicy),
@@ -694,6 +708,7 @@ function createAgent(options: CreateAgentOptions): AgentLoop {
     (status) => options.session.updateStatus(status).then(() => undefined),
     options.budget,
   );
+  return { agent, telemetry };
 }
 
 async function runTask(
@@ -777,6 +792,7 @@ async function runInteractiveSession(
       if (trimmed === "/new") {
         try {
           const nextRuntime = createRuntime(await sessionManager.create());
+          await runtime.telemetry.dispose();
           await runtime.session.release();
           runtime = nextRuntime;
           console.log(`New session: ${runtime.session.id}`);
@@ -833,6 +849,7 @@ async function runInteractiveSession(
 
           if (nextSession.id !== runtime.session.id) {
             const nextRuntime = createRuntime(nextSession);
+            await runtime.telemetry.dispose();
             await runtime.session.release();
             runtime = nextRuntime;
           }
@@ -860,9 +877,13 @@ async function runInteractiveSession(
     }
   } finally {
     try {
-      await runtime.session.release();
+      await runtime.telemetry.dispose();
     } finally {
-      prompt.close();
+      try {
+        await runtime.session.release();
+      } finally {
+        prompt.close();
+      }
     }
   }
 }
@@ -886,6 +907,7 @@ function createModel(
   baseUrl: string | undefined,
   apiStyle?: ApiStyle,
   pricing?: ModelPricing,
+  capabilities?: Partial<ModelCapabilities>,
 ): ModelClient {
   assertModelConfiguration(provider);
 
@@ -899,6 +921,7 @@ function createModel(
     baseUrl,
     apiStyle,
     pricing,
+    capabilities,
   });
 }
 

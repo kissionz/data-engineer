@@ -36,6 +36,11 @@ describe("user config", () => {
             outputPerMillionTokens: 6,
             cacheReadPerMillionTokens: 0.75,
           },
+          capabilities: {
+            contextWindow: 128000,
+            maxOutputTokens: 8192,
+            supportsStreaming: false,
+          },
         },
         budget: {
           maxTurns: 25,
@@ -76,6 +81,11 @@ describe("user config", () => {
       model: {
         name: "production-model",
         pricing: { inputPerMillionTokens: 1.5 },
+        capabilities: {
+          contextWindow: 128000,
+          maxOutputTokens: 8192,
+          supportsStreaming: false,
+        },
       },
       budget: {
         maxTurns: 25,

@@ -1,6 +1,5 @@
-import { lookup } from "node:dns/promises";
-import { lookup as lookupCallback, type LookupAddress } from "node:dns";
-import { BlockList, isIP } from "node:net";
+import type { LookupOptions } from "node:dns";
+import { isIP, type LookupFunction } from "node:net";
 import { homedir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import {
@@ -10,6 +9,13 @@ import {
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { Agent, type Dispatcher } from "undici";
 import type { McpServerConfig } from "../config/userConfig.js";
+import {
+  assertAllowedAddress,
+  canonicalHostname,
+  isLoopback,
+  resolveHost,
+  type LookupAddress,
+} from "../runtime/httpSafety.js";
 import {
   McpToolAdapter,
   type McpToolCaller,
@@ -31,8 +37,6 @@ type HttpTransportConfig = Extract<
   McpServerConfig["transport"],
   { type: "http" }
 >;
-
-const blockedAddresses = createBlockedAddressList();
 
 export class McpManager {
   private readonly connections: McpConnection[] = [];
@@ -180,7 +184,7 @@ async function createHttpTransport(
     );
   }
   const allowedHosts = new Set(
-    transportConfig.allowedHosts.map((host) => host.toLowerCase()),
+    transportConfig.allowedHosts,
   );
   const dispatcher = new Agent({
     connect: {
@@ -189,19 +193,18 @@ async function createHttpTransport(
     maxResponseSize: 2 * 1024 * 1024,
   });
   const secureFetch: typeof fetch = async (input, init) => {
-    const target = new URL(
+    const validated = validateMcpHttpRequestTarget(
+      url,
+      allowedHosts,
       input instanceof Request ? input.url : String(input),
     );
-    if (
-      !allowedHosts.has(target.hostname.toLowerCase()) ||
-      target.protocol !== url.protocol
-    ) {
-      throw new Error("MCP HTTP request attempted to leave its host allowlist.");
-    }
+    const target = validated.url;
     await assertNetworkDestination(target, transportConfig.allowLocalhost);
     const headers = new Headers(init?.headers);
-    if (token) {
+    if (token && validated.includeCredential) {
       headers.set("authorization", `Bearer ${token}`);
+    } else {
+      headers.delete("authorization");
     }
     return fetch(target, {
       ...init,
@@ -225,53 +228,59 @@ async function createHttpTransport(
   };
 }
 
+export function validateMcpHttpRequestTarget(
+  configuredUrl: URL,
+  allowedHosts: ReadonlySet<string>,
+  input: string,
+): { url: URL; includeCredential: boolean } {
+  const target = new URL(input);
+  const targetHost = canonicalHostname(target.hostname);
+  if (
+    target.username ||
+    target.password ||
+    target.hash ||
+    !allowedHosts.has(targetHost) ||
+    target.protocol !== configuredUrl.protocol ||
+    effectivePort(target) !== effectivePort(configuredUrl)
+  ) {
+    throw new Error(
+      "MCP HTTP request attempted to leave its protocol, host, or port allowlist.",
+    );
+  }
+  target.hostname = targetHost;
+  return {
+    url: target,
+    includeCredential: target.origin === configuredUrl.origin,
+  };
+}
+
 function secureLookup(allowLocalhost: boolean) {
   return (
     hostname: string,
-    options: {
-      family?: number | "IPv4" | "IPv6";
-      hints?: number;
-      all?: boolean;
-    },
-    callback: (
-      error: NodeJS.ErrnoException | null,
-      address: string | LookupAddress[],
-      family?: number,
-    ) => void,
+    options: LookupOptions,
+    callback: Parameters<LookupFunction>[2],
   ): void => {
-    lookupCallback(
-      hostname,
-      {
-        ...options,
-        all: true,
-      },
-      (error, addresses) => {
-        if (error) {
-          callback(error, []);
-          return;
-        }
+    void (async () => {
+      try {
+        const canonical = canonicalHostname(hostname);
+        const addresses = await resolveHost(canonical);
         const localhostAllowed =
-          allowLocalhost && isLocalhostHostname(hostname);
-        if (
-          addresses.length === 0 ||
-          (!localhostAllowed &&
-            addresses.some(({ address }) => isPrivateIp(address)))
-        ) {
-          const denied = new Error(
-            "MCP HTTP socket lookup resolved to a private or unavailable address.",
-          ) as NodeJS.ErrnoException;
-          denied.code = "EACCES";
-          callback(denied, []);
-          return;
+          allowLocalhost && isLocalhostHostname(canonical);
+        if (addresses.length === 0) {
+          throw new Error("MCP HTTP socket lookup returned no addresses.");
         }
-        if (options.all) {
-          callback(null, addresses);
-        } else {
-          const selected = addresses[0]!;
-          callback(null, selected.address, selected.family);
+        for (const { address } of addresses) {
+          assertAllowedAddress(address, { allowLoopback: localhostAllowed });
         }
-      },
-    );
+        finishLookup(addresses, options, callback);
+      } catch (error) {
+        const denied = (
+          error instanceof Error ? error : new Error(String(error))
+        ) as NodeJS.ErrnoException;
+        denied.code ??= "EACCES";
+        callback(denied, "", 0);
+      }
+    })();
   };
 }
 
@@ -341,68 +350,73 @@ async function assertNetworkDestination(
   url: URL,
   allowLocalhost: boolean,
 ): Promise<void> {
-  const localhost = isLocalhostHostname(url.hostname);
+  const hostname = canonicalHostname(url.hostname);
+  const localhost = isLocalhostHostname(hostname);
   if (localhost) {
     if (!allowLocalhost) {
       throw new Error("MCP localhost access requires allowLocalhost=true.");
     }
-    return;
   }
 
-  const addresses = await lookup(url.hostname, { all: true });
-  if (addresses.length === 0 || addresses.some(({ address }) => isPrivateIp(address))) {
-    throw new Error("MCP HTTP hostname resolves to a private or unavailable address.");
+  const addresses = await resolveHost(hostname);
+  if (addresses.length === 0) {
+    throw new Error("MCP HTTP hostname resolved to no addresses.");
+  }
+  for (const { address } of addresses) {
+    assertAllowedAddress(address, {
+      allowLoopback: allowLocalhost && localhost,
+    });
   }
 }
 
 function isLocalhostHostname(hostname: string): boolean {
-  return (
-    hostname.toLowerCase() === "localhost" ||
-    hostname === "127.0.0.1" ||
-    hostname === "[::1]" ||
-    hostname === "::1"
-  );
+  return canonicalHostname(hostname) === "localhost" || isLoopback(hostname);
 }
 
 export function isPrivateIp(address: string): boolean {
-  const family = isIP(address);
-  if (family === 4) {
-    return blockedAddresses.check(address, "ipv4");
+  if (isIP(address) === 0) {
+    return true;
   }
-  if (family === 6) {
-    return blockedAddresses.check(address, "ipv6");
+  try {
+    assertAllowedAddress(address, { allowLoopback: false });
+    return false;
+  } catch {
+    return true;
   }
-  return true;
 }
 
-function createBlockedAddressList(): BlockList {
-  const list = new BlockList();
-  for (const [network, prefix] of [
-    ["0.0.0.0", 8],
-    ["10.0.0.0", 8],
-    ["100.64.0.0", 10],
-    ["127.0.0.0", 8],
-    ["169.254.0.0", 16],
-    ["172.16.0.0", 12],
-    ["192.0.0.0", 24],
-    ["192.0.2.0", 24],
-    ["192.168.0.0", 16],
-    ["198.18.0.0", 15],
-    ["198.51.100.0", 24],
-    ["203.0.113.0", 24],
-    ["224.0.0.0", 4],
-  ] as const) {
-    list.addSubnet(network, prefix, "ipv4");
+function effectivePort(url: URL): number {
+  if (url.port) {
+    return Number(url.port);
   }
-  for (const [network, prefix] of [
-    ["::", 96],
-    ["::1", 128],
-    ["fc00::", 7],
-    ["fe80::", 10],
-    ["fec0::", 10],
-    ["ff00::", 8],
-  ] as const) {
-    list.addSubnet(network, prefix, "ipv6");
+  return url.protocol === "https:" ? 443 : 80;
+}
+
+function finishLookup(
+  addresses: LookupAddress[],
+  options: LookupOptions,
+  callback: Parameters<LookupFunction>[2],
+): void {
+  const requestedFamily =
+    options.family === 4 || options.family === "IPv4"
+      ? 4
+      : options.family === 6 || options.family === "IPv6"
+        ? 6
+        : undefined;
+  const eligible = requestedFamily
+    ? addresses.filter(({ family }) => family === requestedFamily)
+    : addresses;
+  if (eligible.length === 0) {
+    callback(
+      new Error("DNS returned no address for the requested family."),
+      "",
+      0,
+    );
+    return;
   }
-  return list;
+  if (options.all) {
+    callback(null, eligible);
+    return;
+  }
+  callback(null, eligible[0].address, eligible[0].family);
 }

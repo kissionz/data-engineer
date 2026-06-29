@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { ModelRequestError } from "../src/model/base.js";
+import {
+  ContextWindowExceededError,
+  ModelRequestError,
+} from "../src/model/base.js";
 import { OpenAIModel } from "../src/model/openai.js";
 
 describe("OpenAIModel", () => {
@@ -333,6 +336,59 @@ describe("OpenAIModel", () => {
     });
   });
 
+  it("does not invent numeric capabilities for compatible endpoints", () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "compatible-model",
+      baseUrl: "https://compatible.example/v1",
+    });
+
+    expect(model.capabilities.contextWindow).toBeUndefined();
+    expect(model.capabilities.maxOutputTokens).toBeUndefined();
+    expect(model.capabilities.supportsStreaming).toBe(true);
+  });
+
+  it("honors configured non-streaming compatible capabilities", async () => {
+    let requestBody: Record<string, unknown> = {};
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "compatible-model",
+      baseUrl: "https://compatible.example/v1",
+      capabilities: {
+        contextWindow: 64_000,
+        maxOutputTokens: 4_096,
+        supportsStreaming: false,
+      },
+      fetchImpl: async (_input, init) => {
+        requestBody = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        return new Response(
+          JSON.stringify({
+            id: "chatcmpl-json",
+            choices: [
+              {
+                message: { role: "assistant", content: "json response" },
+                finish_reason: "stop",
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          },
+        );
+      },
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).resolves.toMatchObject({ finalText: "json response" });
+    expect(requestBody.stream).toBe(false);
+    expect(model.capabilities.contextWindow).toBe(64_000);
+  });
+
   it("sends supported max_tokens values to compatible APIs", async () => {
     let requestBody: Record<string, unknown> | undefined;
     const model = new OpenAIModel({
@@ -457,6 +513,77 @@ describe("OpenAIModel", () => {
       retryable: false,
       status: 400,
     });
+  });
+
+  it("classifies native context length errors for compaction recovery", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      apiStyle: "responses",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "Maximum context length exceeded.",
+              code: "context_length_exceeded",
+            },
+          }),
+          { status: 400 },
+        ),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).rejects.toBeInstanceOf(ContextWindowExceededError);
+  });
+
+  it("classifies compatible context window messages conservatively", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      baseUrl: "https://gateway.example/v1",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            error: { message: "This model's prompt is too long." },
+          }),
+          { status: 413 },
+        ),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).rejects.toBeInstanceOf(ContextWindowExceededError);
+  });
+
+  it("classifies compatible streaming context errors", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      baseUrl: "https://gateway.example/v1",
+      fetchImpl: async () =>
+        sseResponse([
+          {
+            error: {
+              message: "Context window exceeded.",
+              code: "context_window_exceeded",
+            },
+          },
+        ]),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).rejects.toBeInstanceOf(ContextWindowExceededError);
   });
 
   it("rejects oversized JSON responses before buffering the body", async () => {

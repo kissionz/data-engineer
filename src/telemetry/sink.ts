@@ -239,6 +239,15 @@ async function ensureSafeDirectory(directoryPath: string): Promise<void> {
     if (info.isSymbolicLink() || !info.isDirectory()) {
       throw new Error("Telemetry directory must be a real directory.");
     }
+    if (process.platform !== "win32") {
+      const currentUid = process.getuid?.();
+      if (currentUid !== undefined && info.uid !== currentUid) {
+        throw new Error(
+          "Telemetry directory must be owned by the current user.",
+        );
+      }
+      await chmod(directoryPath, 0o700);
+    }
   } catch (error: unknown) {
     throw taggedError("prepare", error);
   }

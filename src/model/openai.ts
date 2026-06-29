@@ -1,5 +1,6 @@
 import type { AgentMessage, AgentResponse, StopReason, ToolCall } from "../agent/types.js";
 import {
+  ContextWindowExceededError,
   ModelRequestError,
   type ModelCapabilities,
   type ModelClient,
@@ -20,6 +21,7 @@ export interface OpenAIModelOptions {
   baseUrl?: string;
   apiStyle?: ApiStyle;
   pricing?: ModelPricing;
+  capabilities?: Partial<ModelCapabilities>;
   fetchImpl?: typeof fetch;
 }
 
@@ -63,6 +65,7 @@ interface OpenAIResponseBody {
   error?: {
     message?: string;
     type?: string;
+    code?: string;
   };
   usage?: {
     input_tokens?: number;
@@ -84,6 +87,8 @@ interface OpenAIStreamEvent {
   response?: OpenAIResponseBody;
   error?: {
     message?: string;
+    type?: string;
+    code?: string;
   };
 }
 
@@ -92,7 +97,7 @@ export class OpenAIModel implements ModelClient {
   private readonly apiStyle: ApiStyle;
   private readonly fetchImpl: typeof fetch;
 
-  readonly capabilities: ModelCapabilities;
+  readonly capabilities: Partial<ModelCapabilities>;
 
   constructor(private readonly options: OpenAIModelOptions) {
     if (!options.apiKey) {
@@ -105,11 +110,13 @@ export class OpenAIModel implements ModelClient {
     this.apiStyle = options.apiStyle ?? inferApiStyle(this.baseUrl);
 
     this.capabilities = {
-      contextWindow: 200_000,
-      maxOutputTokens: 16_384,
+      ...(isOfficialOpenAIBaseUrl(this.baseUrl)
+        ? { contextWindow: 200_000, maxOutputTokens: 16_384 }
+        : {}),
       supportsStreaming: true,
       supportsToolUse: true,
       supportsImages: false,
+      ...options.capabilities,
     };
   }
 
@@ -151,7 +158,7 @@ export class OpenAIModel implements ModelClient {
           ...(options.maxOutputTokens !== undefined
             ? { max_output_tokens: options.maxOutputTokens }
             : {}),
-          stream: true,
+          stream: this.capabilities.supportsStreaming !== false,
         }),
         signal: options.signal,
       });
@@ -170,13 +177,11 @@ export class OpenAIModel implements ModelClient {
       const message =
         body?.error?.message ??
         `OpenAI API request failed with status ${response.status}`;
-      throw new ModelRequestError(
-        message,
-        response.status === 408 ||
-          response.status === 429 ||
-          response.status >= 500,
+      throw classifyHttpError(
         response.status,
-        parseRetryAfter(response.headers.get("retry-after")),
+        body?.error,
+        message,
+        response.headers.get("retry-after"),
       );
     }
 
@@ -231,7 +236,7 @@ export class OpenAIModel implements ModelClient {
           ...(safeMaxTokens !== undefined
             ? { max_tokens: safeMaxTokens }
             : {}),
-          stream: true,
+          stream: this.capabilities.supportsStreaming !== false,
         }),
         signal: options.signal,
       });
@@ -250,13 +255,11 @@ export class OpenAIModel implements ModelClient {
       const message =
         body?.error?.message ??
         `API request failed with status ${response.status}`;
-      throw new ModelRequestError(
-        message,
-        response.status === 408 ||
-          response.status === 429 ||
-          response.status >= 500,
+      throw classifyHttpError(
         response.status,
-        parseRetryAfter(response.headers.get("retry-after")),
+        body?.error,
+        message,
+        response.headers.get("retry-after"),
       );
     }
 
@@ -419,7 +422,10 @@ async function parseStreamingResponse(
         event.error?.message ??
         event.response?.error?.message ??
         "OpenAI streaming response failed.";
-      throw new Error(message);
+      throw classifyProviderError(
+        event.response?.error ?? event.error,
+        message,
+      );
     }
   }
 
@@ -811,6 +817,18 @@ function inferApiStyle(baseUrl: string): ApiStyle {
   return "chat_completions";
 }
 
+function isOfficialOpenAIBaseUrl(baseUrl: string): boolean {
+  try {
+    const hostname = new URL(baseUrl).hostname.toLowerCase();
+    return (
+      hostname === "api.openai.com" ||
+      hostname.endsWith(".openai.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
 // ─── Chat Completions types and helpers ───────────────────────────────────────
 
 interface ChatCompletionsMessage {
@@ -859,7 +877,74 @@ interface ChatCompletionsResponseBody {
   error?: {
     message?: string;
     type?: string;
+    code?: string;
   };
+}
+
+function classifyHttpError(
+  status: number,
+  providerError:
+    | { message?: string; type?: string; code?: string }
+    | undefined,
+  fallbackMessage: string,
+  retryAfter: string | null,
+): ModelRequestError {
+  const message = providerError?.message ?? fallbackMessage;
+  if (
+    (status === 400 || status === 413) &&
+    isContextWindowError(providerError, message)
+  ) {
+    return new ContextWindowExceededError(message, status);
+  }
+  return new ModelRequestError(
+    message,
+    status === 408 || status === 429 || status >= 500,
+    status,
+    parseRetryAfter(retryAfter),
+  );
+}
+
+function classifyProviderError(
+  providerError:
+    | { message?: string; type?: string; code?: string }
+    | undefined,
+  fallbackMessage: string,
+): Error {
+  const message = providerError?.message ?? fallbackMessage;
+  return isContextWindowError(providerError, message)
+    ? new ContextWindowExceededError(message)
+    : new Error(message);
+}
+
+function isContextWindowError(
+  providerError:
+    | { message?: string; type?: string; code?: string }
+    | undefined,
+  message: string,
+): boolean {
+  const identifiers = [providerError?.code, providerError?.type]
+    .filter((value): value is string => typeof value === "string")
+    .map((value) => value.toLowerCase());
+  if (
+    identifiers.some((value) =>
+      [
+        "context_length_exceeded",
+        "context_window_exceeded",
+        "prompt_too_long",
+        "input_too_long",
+      ].includes(value),
+    )
+  ) {
+    return true;
+  }
+  return [
+    "maximum context length",
+    "context window exceeded",
+    "prompt is too long",
+    "prompt too long",
+    "input is too long",
+    "input too long",
+  ].some((pattern) => message.toLowerCase().includes(pattern));
 }
 
 function toChatCompletionsMessages(
@@ -1090,6 +1175,12 @@ async function parseChatStreamingResponse(
 
   for await (const event of parseChatSSEStream(response.body)) {
     lastBody = event;
+    if (event.error) {
+      throw classifyProviderError(
+        event.error,
+        event.error.message ?? "Chat completions streaming response failed.",
+      );
+    }
     const choice = event.choices?.[0];
     if (choice?.finish_reason) {
       finishReason = choice.finish_reason;

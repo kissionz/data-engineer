@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
+  isContextWindowExceededError,
   isRetryableModelError,
   ModelRequestError,
   type ModelClient,
@@ -159,12 +160,12 @@ export class AgentLoop {
           events = await this.session.load();
         }
 
-        const messages = await this.context.build(events);
+        let messages = await this.context.build(events);
         const toolSchemas =
           this.model.capabilities?.supportsToolUse === false
             ? []
             : this.tools.schemas();
-        const estimatedInputTokens = estimateTokens({
+        let estimatedInputTokens = estimateTokens({
           messages,
           tools: toolSchemas,
         });
@@ -188,6 +189,7 @@ export class AgentLoop {
           | Awaited<ReturnType<ModelClient["complete"]>>
           | undefined;
         let retryAttempt = 0;
+        let overflowRecoveryAttempted = false;
         const supportsStreaming =
           this.model.capabilities?.supportsStreaming !== false;
 
@@ -220,6 +222,51 @@ export class AgentLoop {
               signal,
             });
           } catch (error: unknown) {
+            if (
+              isContextWindowExceededError(error) &&
+              !receivedText &&
+              !overflowRecoveryAttempted
+            ) {
+              overflowRecoveryAttempted = true;
+              const overflowEvents = await this.session.load();
+              const compacted = await this.compactor?.compactIfNeeded({
+                events: overflowEvents,
+                force: true,
+                beforeCompact: async (eventsToCompact) => {
+                  const result = await this.hooks?.emit(
+                    "PreCompact",
+                    {
+                      eventCount: eventsToCompact.length,
+                      estimatedTokens: estimateTokens(eventsToCompact),
+                      reason: "context_window_exceeded",
+                    },
+                    signal,
+                  );
+                  return result?.decision !== "block";
+                },
+              });
+              if (!compacted) {
+                throw error;
+              }
+              events = await this.session.load();
+              messages = await this.context.build(events);
+              estimatedInputTokens = estimateTokens({
+                messages,
+                tools: toolSchemas,
+              });
+              if (
+                inputUsage + estimatedInputTokens >
+                budget.limits.maxInputTokens
+              ) {
+                return this.finishForBudget({
+                  code: "input_token_budget_reached",
+                  message: "Stopped: token budget reached.",
+                  limit: budget.limits.maxInputTokens,
+                  used: inputUsage + estimatedInputTokens,
+                });
+              }
+              continue;
+            }
             if (
               isCancellationError(error, signal) ||
               receivedText ||
