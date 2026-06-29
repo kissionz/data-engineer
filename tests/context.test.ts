@@ -1,9 +1,10 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContextBuilder } from "../src/agent/context.js";
 import { MemoryService } from "../src/memory/service.js";
+import { SkillLoader } from "../src/skills/loader.js";
 import type { SessionEvent } from "../src/agent/types.js";
 
 describe("ContextBuilder", () => {
@@ -22,6 +23,46 @@ describe("ContextBuilder", () => {
         "Use npm test.",
       ].join("\n"),
     });
+  });
+
+  it("adds metadata-only skill recommendations without auto-loading content", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
+    const skillRoot = path.join(
+      root,
+      ".harness",
+      "skills",
+      "typescript-testing",
+    );
+    await mkdir(skillRoot, { recursive: true });
+    await writeFile(
+      path.join(skillRoot, "SKILL.md"),
+      [
+        "---",
+        "name: typescript-testing",
+        "description: Run TypeScript tests",
+        "---",
+        "SECRET SKILL BODY",
+      ].join("\n"),
+      "utf8",
+    );
+    const messages = await new ContextBuilder(
+      root,
+      30,
+      undefined,
+      undefined,
+      new SkillLoader(root),
+    ).build([
+      {
+        type: "user_message",
+        ts: "1",
+        text: "Please run TypeScript tests",
+      } as SessionEvent,
+    ]);
+    const serialized = JSON.stringify(messages);
+
+    expect(serialized).toContain("typescript-testing");
+    expect(serialized).toContain("Load a skill with SkillLoad");
+    expect(serialized).not.toContain("SECRET SKILL BODY");
   });
 
   it("uses the latest summary and drops orphaned tool results", async () => {

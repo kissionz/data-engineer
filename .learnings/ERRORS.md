@@ -31,6 +31,38 @@ Locate the exact neighboring test before constructing an insertion patch.
 
 ---
 
+## [ERR-20260629-001] skill_context_wiring
+
+**Logged**: 2026-06-29T02:24:24Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Skill recommendation wiring referenced a loader outside its scope in TaskTool.
+
+### Error
+```
+src/tools/task.ts(115,11): error TS2304: Cannot find name 'skills'.
+```
+
+### Context
+- Added metadata-only skill recommendations to ContextBuilder.
+- The main agent had a SkillLoader, but the subagent context referenced the helper-local loader.
+
+### Suggested Fix
+Create one SkillLoader in TaskTool.execute and pass it to both the tool registry and ContextBuilder.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/tools/task.ts, src/agent/context.ts
+
+### Resolution
+- **Resolved**: 2026-06-29T02:24:24Z
+- **Notes**: Shared the loader explicitly; build and 35 directed tests passed.
+
+---
+
 ## [ERR-20260628-002] git_merge
 
 **Logged**: 2026-06-28T13:41:00Z

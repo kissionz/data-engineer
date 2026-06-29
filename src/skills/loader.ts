@@ -4,6 +4,8 @@ import { parse } from "yaml";
 import type { Workspace } from "../runtime/workspace.js";
 
 export const MAX_SKILL_SIZE_BYTES = 64 * 1024;
+export const MAX_SKILL_COUNT = 128;
+const MAX_SKILL_DIRECTORY_ENTRIES = 512;
 
 export interface SkillMetadata {
   name: string;
@@ -14,6 +16,10 @@ export interface SkillMetadata {
 export interface SkillSummary {
   name: string;
   description: string;
+}
+
+export interface RecommendedSkill extends SkillSummary {
+  score: number;
 }
 
 export interface LoadedSkill extends SkillSummary {
@@ -43,6 +49,7 @@ export class SkillLoaderError extends Error {
 export class SkillLoader {
   private readonly workspaceRoot: string;
   private readonly skillsRoot: string;
+  private cachedSummaries?: SkillSummary[];
 
   constructor(workspace: Workspace | string) {
     this.workspaceRoot = path.resolve(
@@ -52,13 +59,23 @@ export class SkillLoader {
   }
 
   async list(): Promise<SkillSummary[]> {
+    if (this.cachedSummaries) {
+      return this.cachedSummaries.map((skill) => ({ ...skill }));
+    }
     const root = await this.resolveSkillsRoot(true);
 
     if (!root) {
+      this.cachedSummaries = [];
       return [];
     }
 
     const entries = await readdir(root, { withFileTypes: true });
+    if (entries.length > MAX_SKILL_DIRECTORY_ENTRIES) {
+      throw new SkillLoaderError(
+        `Skills directory exceeds the ${MAX_SKILL_DIRECTORY_ENTRIES}-entry limit.`,
+        "too_large",
+      );
+    }
     const names: string[] = [];
 
     for (const entry of entries) {
@@ -73,12 +90,19 @@ export class SkillLoader {
         names.push(entry.name);
       }
     }
+    if (names.length > MAX_SKILL_COUNT) {
+      throw new SkillLoaderError(
+        `Skills directory exceeds the ${MAX_SKILL_COUNT}-skill limit.`,
+        "too_large",
+      );
+    }
 
     const skills = await Promise.all(names.map((name) => this.load(name)));
 
-    return skills
+    this.cachedSummaries = skills
       .map(({ name, description }) => ({ name, description }))
       .sort((left, right) => left.name.localeCompare(right.name));
+    return this.cachedSummaries.map((skill) => ({ ...skill }));
   }
 
   async load(name: string): Promise<LoadedSkill> {
@@ -153,6 +177,32 @@ export class SkillLoader {
     };
   }
 
+  async recommend(query: string, limit = 3): Promise<RecommendedSkill[]> {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
+      throw new SkillLoaderError(
+        "Skill recommendation limit must be an integer between 1 and 10.",
+        "invalid_name",
+      );
+    }
+    const queryTokens = tokenizeForMatch(query);
+    if (queryTokens.size === 0) {
+      return [];
+    }
+    const summaries = await this.list();
+    return summaries
+      .map((skill) => ({
+        name: skill.name,
+        description: compactRecommendationDescription(skill.description),
+        score: recommendationScore(query, queryTokens, skill),
+      }))
+      .filter((skill) => skill.score >= 2)
+      .sort(
+        (left, right) =>
+          right.score - left.score || left.name.localeCompare(right.name),
+      )
+      .slice(0, limit);
+  }
+
   private async resolveSkillsRoot(
     allowMissing: false,
   ): Promise<string>;
@@ -201,6 +251,74 @@ export class SkillLoader {
 
     return skillsRoot;
   }
+}
+
+function compactRecommendationDescription(value: string): string {
+  const normalized = value
+    .replace(/[\p{Cc}\p{Cf}]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return normalized.length <= 300
+    ? normalized
+    : `${normalized.slice(0, 297)}...`;
+}
+
+function recommendationScore(
+  rawQuery: string,
+  queryTokens: ReadonlySet<string>,
+  skill: SkillSummary,
+): number {
+  const normalizedQuery = rawQuery.toLocaleLowerCase();
+  const normalizedName = skill.name.toLocaleLowerCase();
+  let score = normalizedQuery.includes(normalizedName) ? 10 : 0;
+  for (const token of tokenizeForMatch(skill.name.replaceAll(/[-_.]/g, " "))) {
+    if (hasMatchingToken(queryTokens, token)) {
+      score += 3;
+    }
+  }
+  for (const token of tokenizeForMatch(skill.description)) {
+    if (hasMatchingToken(queryTokens, token)) {
+      score += 1;
+    }
+  }
+  return score;
+}
+
+function tokenizeForMatch(value: string): Set<string> {
+  const ignored = new Set([
+    "and",
+    "for",
+    "from",
+    "into",
+    "the",
+    "this",
+    "that",
+    "use",
+    "with",
+  ]);
+  return new Set(
+    value
+      .toLocaleLowerCase()
+      .match(/[\p{L}\p{N}]+/gu)
+      ?.filter((token) => token.length >= 3 && !ignored.has(token)) ?? [],
+  );
+}
+
+function hasMatchingToken(
+  candidates: ReadonlySet<string>,
+  target: string,
+): boolean {
+  for (const candidate of candidates) {
+    if (
+      candidate === target ||
+      (candidate.length >= 5 &&
+        target.length >= 5 &&
+        (candidate.startsWith(target) || target.startsWith(candidate)))
+    ) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function assertValidSkillName(name: string): void {

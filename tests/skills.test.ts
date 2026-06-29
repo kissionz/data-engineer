@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  MAX_SKILL_COUNT,
   MAX_SKILL_SIZE_BYTES,
   SkillLoader,
   SkillLoaderError,
@@ -78,6 +79,85 @@ describe("SkillLoader", () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-skills-"));
 
     await expect(new SkillLoader(root).list()).resolves.toEqual([]);
+  });
+
+  it("deterministically recommends relevant skills from metadata", async () => {
+    const root = await createWorkspace();
+    await writeSkill(
+      root,
+      "typescript-testing",
+      [
+        "---",
+        "name: typescript-testing",
+        "description: Run TypeScript tests and verify regressions",
+        "---",
+        "Use the test runner.",
+      ].join("\n"),
+    );
+    await writeSkill(
+      root,
+      "release-notes",
+      [
+        "---",
+        "name: release-notes",
+        "description: Draft release documentation",
+        "---",
+        "Write notes.",
+      ].join("\n"),
+    );
+
+    await expect(
+      new SkillLoader(root).recommend("Fix the TypeScript testing regression"),
+    ).resolves.toEqual([
+      expect.objectContaining({
+        name: "typescript-testing",
+        score: expect.any(Number),
+      }),
+    ]);
+  });
+
+  it("bounds and normalizes recommended descriptions", async () => {
+    const root = await createWorkspace();
+    await writeSkill(
+      root,
+      "audit",
+      [
+        "---",
+        "name: audit",
+        `description: "Audit\\u0000 ${"details ".repeat(80)}"`,
+        "---",
+        "Instructions.",
+      ].join("\n"),
+    );
+
+    const [recommended] = await new SkillLoader(root).recommend(
+      "audit the details",
+    );
+    expect(recommended?.description.length).toBeLessThanOrEqual(300);
+    expect(recommended?.description).not.toContain("\0");
+  });
+
+  it("caps skill count and reuses a successful metadata snapshot", async () => {
+    const root = await createWorkspace();
+    await writeSkill(
+      root,
+      "audit",
+      "---\nname: audit\ndescription: Audit changes\n---\nInstructions.",
+    );
+    const loader = new SkillLoader(root);
+    await expect(loader.list()).resolves.toHaveLength(1);
+    await writeSkill(root, "broken", "invalid");
+    await expect(loader.list()).resolves.toHaveLength(1);
+
+    const crowded = await createWorkspace();
+    for (let index = 0; index <= MAX_SKILL_COUNT; index += 1) {
+      await mkdir(
+        path.join(crowded, ".harness", "skills", `skill-${index}`),
+      );
+    }
+    await expect(new SkillLoader(crowded).list()).rejects.toThrow(
+      `${MAX_SKILL_COUNT}-skill limit`,
+    );
   });
 
   it.each(["../outside", "nested/skill", "nested\\skill", ".", ".."])(

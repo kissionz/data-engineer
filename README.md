@@ -285,6 +285,34 @@ Budget 会在模型请求和工具调用前检查。provider token 用量按 req
 
 Windows PowerShell 不使用 Bash 的行尾 `\` 续行语法。请把上面的多行命令写成一行，或改用 PowerShell 的反引号续行。
 
+## 离线 Eval
+
+确定性 Eval 不调用真实模型，也不读取 API Key。它使用版本化的
+`evals/deterministic.v1.json` 套件和内置 scripted mock 场景，覆盖项目分析、
+故障定位、精确编辑、修复后复测以及危险命令拦截：
+
+```bash
+npm run eval
+```
+
+默认报告写入 `.harness/eval-report.json`，同时以单行 JSON 输出到 stdout。报告只包含
+case ID、pass/fail、耗时，以及固定的 `mock` provider/model/config 标识；在 Git
+仓库中会附带当前 commit SHA。报告不会包含任务文本、模型消息、工具输入输出或生产
+Telemetry。
+
+可以指定相对于工作区根目录的套件、报告和基线文件：
+
+```bash
+npm run eval -- --suite evals/deterministic.v1.json \
+  --report .harness/eval-current.json \
+  --baseline .harness/eval-baseline.json
+```
+
+任一 case 失败，或基线中通过的 case 在当前报告中不再通过时，命令以非零状态退出。
+套件、基线和报告路径不允许使用绝对路径或逃逸工作区；输入必须是普通文件且不超过
+1 MiB，symlink、打开期间替换和未知 schema 字段会被拒绝。使用
+`--no-git-sha` 可省略 commit SHA。
+
 ## 长期记忆（Memory）
 
 在用户配置中使用 `"memory": { "enabled": true }` 启用长期记忆。启用后提供：
@@ -508,11 +536,31 @@ description: 测试并验证 TypeScript 改动。
 先运行定向测试，再运行完整测试套件。
 ```
 
-模型通过 `SkillList` 读取元数据，再用 `SkillLoad` 显式加载一个相关指令文件。Skill 名称必须与目录名一致，单个文件最大 64KB，路径不能逃逸工作区。`scripts/` 目录中的文件不会自动执行。Project Skills 来自项目，应按不可信仓库内容审查后再使用。
+模型通过 `SkillList` 读取元数据，再用 `SkillLoad` 显式加载一个相关指令文件。Skill 名称必须与目录名一致，单个文件最大 64KB，最多 128 个，路径不能逃逸工作区。首次成功扫描后的元数据会在当前 Agent runtime 内缓存；修改 Skill 后需启动新 runtime。`scripts/` 目录中的文件不会自动执行。Project Skills 来自项目，应按不可信仓库内容审查后再使用。
 
-## 只读代码审查子代理
+运行时会根据当前任务与 Skill 的名称、description 做确定性的元数据匹配，并把最多三个候选名称提示给模型。这个过程不会自动加载 Skill 正文或执行 `scripts/`；模型仍须显式调用 `SkillLoad`，加载后的内容继续按不可信项目数据处理。
 
-`Task` 工具可以把内置 `code-reviewer` 作为独立 AgentLoop 运行。它有单独、隐藏的 append-only audit log，最多运行 20 轮，只能使用：
+## 可配置的只读子代理
+
+`Task` 工具可以把内置 `code-reviewer` 或项目定义的只读角色作为独立 AgentLoop 运行。每个子代理都有单独、隐藏的 append-only audit log。内置 `code-reviewer` 始终可用，作为没有项目配置时的 fallback。
+
+项目角色放在工作区 `.harness/agents/*.yaml`。文件名必须与 `name` 一致，配置采用严格 schema，不接受未知字段：
+
+```yaml
+name: test-analyst
+description: Review tests and identify missing coverage.
+systemPrompt: Focus on observable behavior, edge cases, and regression risks.
+tools:
+  - Read
+  - Grep
+  - Glob
+maxTurns: 8
+maxResultChars: 12000
+```
+
+`name` 只能使用小写字母、数字和连字符，不能覆盖保留的 `code-reviewer`。单个 spec 最大 32 KiB；最多加载 32 个项目角色；`maxTurns` 上限为 20，`maxResultChars` 上限为 20000。无效、超限、符号链接或逃逸工作区的配置会被拒绝。角色配置在 Agent runtime 创建时读取，修改后需启动新 runtime。
+
+`tools` 必须是以下只读工具的非空子集：
 
 ```text
 Read
@@ -524,7 +572,7 @@ SkillList
 SkillLoad
 ```
 
-它不能访问 `Write`、`Edit`、`Bash`、`TodoWrite` 或 `Task`，因此不能修改文件，也不能递归创建更多子代理。父 Agent 只会收到有长度限制的最终审查结果。
+子代理不会注册 `Write`、`Edit`、`Bash`、`Task`、Todo、Memory、MCP 或 `HttpFetch`，因此不能修改文件、访问网络或递归创建更多子代理。项目提供的 system prompt、任务、文件和 Skill 都被视为不可信内容，不能覆盖固定的只读安全规则。父 Agent 只会收到有长度限制的最终结果。
 
 ## Git Worktree 隔离
 
@@ -554,6 +602,39 @@ git branch -d harness/<id>
 ```
 
 运行时不会自动 merge 或删除 worktree。`--worktree` 不能与 `--resume` 同时使用；继续已有 worktree 时应通过 `--cwd` 进入对应路径，再使用 `--resume`。
+
+### 只读检查 worktree
+
+构建后可从任意 repository 或 worktree 路径列出关联 worktree，并汇总每个
+worktree 的 clean/dirty 状态：
+
+```bash
+npm run worktrees -- --cwd /path/to/repository
+# 或安装 package 后：
+harness-worktrees --cwd /path/to/repository
+```
+
+输出为 JSON，只包含 worktree path、HEAD、branch、锁定/可清理标记及变更数量。
+检查器通过 `git --no-optional-locks worktree list/status` 工作，不刷新 index，
+也不会执行 merge、remove、prune、checkout 或其他写操作。`prunable` worktree
+只会报告，不会自动清理。
+
+## 离线 Telemetry 报告
+
+构建后可对本地 telemetry JSONL 生成不含任务内容的聚合 JSON：
+
+```bash
+npm run telemetry:report
+npm run telemetry:report -- --file /path/to/telemetry.jsonl
+# 或安装 package 后：
+harness-telemetry-report --file /path/to/telemetry.jsonl
+```
+
+报告只统计任务成功率、模型请求数与 token/cost、工具调用数和取消次数；不会输出
+task/session/tool ID、工具名、提示词、回答或文件内容。读取器默认最多接受 16 MiB，
+拒绝 symlink、文件替换、无终止换行、未知 envelope/event 字段和非 canonical
+schema。可用 `--max-bytes` 调低限制；上限为 1 GiB。该命令只读取输入文件，
+不会修改或轮转 telemetry。
 
 ## 当前实现概览
 

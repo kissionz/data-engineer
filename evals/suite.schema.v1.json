@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://harness.local/schemas/eval-suite-v1.json",
+  "title": "Harness deterministic eval suite v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "suiteId", "suiteVersion", "cases"],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "maxLength": 256
+    },
+    "schemaVersion": {
+      "const": 1
+    },
+    "suiteId": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "suiteVersion": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "cases": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "scenario", "scenarioVersion"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+          },
+          "scenario": {
+            "enum": [
+              "project_analysis",
+              "failure_diagnosis",
+              "exact_edit",
+              "fix_and_verify",
+              "destructive_command_denied"
+            ]
+          },
+          "scenarioVersion": {
+            "const": 1
+          }
+        }
+      }
+    }
+  }
+}

@@ -11,7 +11,12 @@ import type { CommandExecutor } from "../runtime/commandExecutor.js";
 import type { RuntimeCapabilities } from "../runtime/capabilities.js";
 import type { Workspace } from "../runtime/workspace.js";
 import { SkillLoader } from "../skills/loader.js";
-import { CODE_REVIEWER_SPEC } from "../subagents/spec.js";
+import { SubagentSpecLoader } from "../subagents/loader.js";
+import {
+  wrappedSubagentPrompt,
+  type ReadonlySubagentToolName,
+  type SubagentSpec,
+} from "../subagents/spec.js";
 import {
   SessionTelemetryObserver,
   type TelemetrySink,
@@ -30,20 +35,9 @@ import { SkillListTool, SkillLoadTool } from "./skill.js";
 
 export class TaskTool implements Tool {
   name = "Task";
-  description =
-    "Run a bounded read-only subagent for an independent code review task.";
-  inputSchema = {
-    type: "object",
-    properties: {
-      subagent: {
-        type: "string",
-        enum: [CODE_REVIEWER_SPEC.name],
-      },
-      task: { type: "string", minLength: 1, maxLength: 4_000 },
-    },
-    required: ["subagent", "task"],
-    additionalProperties: false,
-  };
+  readonly description: string;
+  readonly inputSchema: Record<string, unknown>;
+  private readonly specs: ReadonlyMap<string, SubagentSpec>;
 
   constructor(
     private readonly model: ModelClient,
@@ -61,17 +55,37 @@ export class TaskTool implements Tool {
       ripgrep: true,
       gitRepository: true,
     },
-  ) {}
+  ) {
+    const specs = new SubagentSpecLoader(workspace).loadAll();
+    this.specs = new Map(specs.map((spec) => [spec.name, spec]));
+    // Project-authored descriptions are intentionally not placed in the tool
+    // schema, where they could become prompt injection against the parent.
+    this.description =
+      `Run a bounded read-only subagent. Available role names: ` +
+      specs.map((spec) => spec.name).join(", ");
+    this.inputSchema = {
+      type: "object",
+      properties: {
+        subagent: {
+          type: "string",
+          enum: specs.map((spec) => spec.name),
+        },
+        task: { type: "string", minLength: 1, maxLength: 4_000 },
+      },
+      required: ["subagent", "task"],
+      additionalProperties: false,
+    };
+  }
 
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
   ): Promise<ToolExecutionResult> {
-    if (
-      args.subagent !== CODE_REVIEWER_SPEC.name ||
-      typeof args.task !== "string" ||
-      !args.task.trim()
-    ) {
+    const spec =
+      typeof args.subagent === "string"
+        ? this.specs.get(args.subagent)
+        : undefined;
+    if (!spec || typeof args.task !== "string" || !args.task.trim()) {
       return {
         ok: false,
         content: "subagent and a non-empty task are required.",
@@ -79,14 +93,17 @@ export class TaskTool implements Tool {
       };
     }
 
+    const skills = new SkillLoader(this.workspace);
     const tools = createReviewerTools(
       this.workspace,
       this.executor,
       this.runtimeCapabilities,
+      skills,
+      spec.tools,
     );
     const childSessionId = createChildSessionId(
       this.parentSessionId,
-      CODE_REVIEWER_SPEC.name,
+      spec.name,
     );
     const childSessionPath = path.join(
       this.workspace.root,
@@ -106,11 +123,13 @@ export class TaskTool implements Tool {
       result = await new AgentLoop(
         this.model,
         tools,
-        new PermissionGate(readonlyPolicy()),
+        new PermissionGate(readonlyPolicy(spec.tools)),
         new ContextBuilder(
           this.workspace.root,
           30,
-          CODE_REVIEWER_SPEC.systemPrompt,
+          wrappedSubagentPrompt(spec),
+          undefined,
+          skills,
         ),
         new SessionStore(
           childSessionPath,
@@ -121,13 +140,17 @@ export class TaskTool implements Tool {
               }
             : undefined,
         ),
-        CODE_REVIEWER_SPEC.maxTurns,
+        spec.maxTurns,
         async () => "reject",
       ).run(args.task.trim(), context?.signal, context?.budget);
     } finally {
       await telemetry?.dispose();
     }
-    const truncated = result.length > this.maxResultChars;
+    const resultLimit = Math.min(
+      this.maxResultChars,
+      spec.maxResultChars,
+    );
+    const truncated = result.length > resultLimit;
 
     if (result === CANCELLED_TEXT) {
       return {
@@ -136,7 +159,7 @@ export class TaskTool implements Tool {
         data: {
           code: "cancelled",
           retryable: false,
-          subagent: CODE_REVIEWER_SPEC.name,
+          subagent: spec.name,
           childSessionId,
         },
       };
@@ -145,10 +168,10 @@ export class TaskTool implements Tool {
     return {
       ok: true,
       content: truncated
-        ? `${result.slice(0, this.maxResultChars)}\n[Subagent result truncated]`
+        ? `${result.slice(0, resultLimit)}\n[Subagent result truncated]`
         : result,
       data: {
-        subagent: CODE_REVIEWER_SPEC.name,
+        subagent: spec.name,
         childSessionId,
         truncated,
       },
@@ -160,35 +183,54 @@ function createReviewerTools(
   workspace: Workspace,
   executor: CommandExecutor,
   capabilities: RuntimeCapabilities,
+  skills = new SkillLoader(workspace),
+  requestedTools: ReadonlyArray<ReadonlySubagentToolName>,
 ): ToolRegistry {
   const tools = new ToolRegistry();
-  const skills = new SkillLoader(workspace);
-  tools.register(new ReadTool(workspace));
-  if (capabilities.ripgrep) {
+  const requested = new Set(requestedTools);
+  if (requested.has("Read")) {
+    tools.register(new ReadTool(workspace));
+  }
+  if (capabilities.ripgrep && requested.has("Grep")) {
     tools.register(new GrepTool(workspace, executor));
+  }
+  if (capabilities.ripgrep && requested.has("Glob")) {
     tools.register(new GlobTool(workspace, executor));
   }
   if (capabilities.git && capabilities.gitRepository) {
-    tools.register(new GitStatusTool(workspace, executor));
-    tools.register(new GitDiffTool(workspace, executor));
+    if (requested.has("GitStatus")) {
+      tools.register(new GitStatusTool(workspace, executor));
+    }
+    if (requested.has("GitDiff")) {
+      tools.register(new GitDiffTool(workspace, executor));
+    }
   }
-  tools.register(new SkillListTool(skills));
-  tools.register(new SkillLoadTool(skills));
+  if (requested.has("SkillList")) {
+    tools.register(new SkillListTool(skills));
+  }
+  if (requested.has("SkillLoad")) {
+    tools.register(new SkillLoadTool(skills));
+  }
   return tools;
 }
 
-function readonlyPolicy(): PermissionPolicy {
+function readonlyPolicy(
+  tools: ReadonlyArray<ReadonlySubagentToolName>,
+): PermissionPolicy {
   return {
-    allowedTools: new Set([
-      "Read",
-      "Grep",
-      "Glob",
-      "GitStatus",
-      "GitDiff",
-      "SkillList",
-      "SkillLoad",
+    allowedTools: new Set(tools),
+    deniedTools: new Set([
+      "Write",
+      "Edit",
+      "Bash",
+      "Task",
+      "TodoRead",
+      "TodoWrite",
+      "MemorySearch",
+      "MemoryWrite",
+      "MemoryDelete",
+      "HttpFetch",
     ]),
-    deniedTools: new Set(["Write", "Edit", "Bash", "Task", "TodoWrite"]),
     allowReadonly: true,
     askForBash: false,
     askForWrite: false,

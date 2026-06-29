@@ -692,6 +692,7 @@ function createAgent(
       undefined,
       undefined,
       options.memory,
+      skillLoader,
     ),
     sessionStore,
     options.maxTurns,

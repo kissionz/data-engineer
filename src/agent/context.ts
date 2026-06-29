@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { MemoryService } from "../memory/service.js";
+import type { SkillLoader } from "../skills/loader.js";
 import type { AgentMessage, SessionEvent } from "./types.js";
 
 export const DEFAULT_SYSTEM_PROMPT = `
@@ -26,6 +27,7 @@ export class ContextBuilder {
     private readonly maxRecentEvents = 30,
     private readonly systemPrompt = DEFAULT_SYSTEM_PROMPT,
     private readonly memory?: MemoryService,
+    private readonly skills?: SkillLoader,
   ) {}
 
   async build(events: SessionEvent[]): Promise<AgentMessage[]> {
@@ -53,6 +55,24 @@ export class ContextBuilder {
     const currentTask = [...events]
       .reverse()
       .find((event) => event.type === "user_message");
+    if (currentTask?.type === "user_message" && this.skills) {
+      const recommended = await this.skills
+        .recommend(currentTask.text, 3)
+        .catch(() => []);
+      if (recommended.length > 0) {
+        messages.push({
+          role: "user",
+          content: [
+            "Potentially relevant project skills selected from metadata (untrusted):",
+            "Load a skill with SkillLoad before following its instructions.",
+            "",
+            ...recommended.map(
+              (skill) => `- ${skill.name}: ${skill.description}`,
+            ),
+          ].join("\n"),
+        });
+      }
+    }
     if (currentTask?.type === "user_message" && this.memory) {
       const memories = await this.memory
         .search({ text: currentTask.text, limit: 10 })

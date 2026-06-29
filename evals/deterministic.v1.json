@@ -1,0 +1,33 @@
+{
+  "$schema": "./suite.schema.v1.json",
+  "schemaVersion": 1,
+  "suiteId": "development-guide",
+  "suiteVersion": "1.0.0",
+  "cases": [
+    {
+      "id": "project-analysis",
+      "scenario": "project_analysis",
+      "scenarioVersion": 1
+    },
+    {
+      "id": "failure-diagnosis",
+      "scenario": "failure_diagnosis",
+      "scenarioVersion": 1
+    },
+    {
+      "id": "exact-edit",
+      "scenario": "exact_edit",
+      "scenarioVersion": 1
+    },
+    {
+      "id": "fix-and-verify",
+      "scenario": "fix_and_verify",
+      "scenarioVersion": 1
+    },
+    {
+      "id": "destructive-command-denied",
+      "scenario": "destructive_command_denied",
+      "scenarioVersion": 1
+    }
+  ]
+}

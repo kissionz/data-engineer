@@ -1,4 +1,10 @@
-import { mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -102,6 +108,55 @@ describe("TaskTool", () => {
       ok: false,
       data: { reason: "invalid_subagent_task" },
     });
+  });
+
+  it("runs a configured role with only its selected read-only tools", async () => {
+    const root = await makeRoot();
+    await mkdir(path.join(root, ".harness", "agents"), { recursive: true });
+    await writeFile(
+      path.join(root, ".harness", "agents", "docs-auditor.yaml"),
+      [
+        "name: docs-auditor",
+        "description: Audit documentation accuracy.",
+        "systemPrompt: Compare documentation with the implementation.",
+        "tools:",
+        "  - Read",
+        "maxTurns: 3",
+        "maxResultChars: 1000",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(path.join(root, "README.md"), "hello", "utf8");
+    const model = new ReviewerModel("read");
+    const tool = new TaskTool(
+      model,
+      new Workspace(root),
+      unusedExecutor(),
+      "parent-session",
+    );
+
+    expect(tool.inputSchema).toMatchObject({
+      properties: {
+        subagent: {
+          enum: ["code-reviewer", "docs-auditor"],
+        },
+      },
+    });
+    const result = await tool.execute({
+      subagent: "docs-auditor",
+      task: "Audit README",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      data: { subagent: "docs-auditor" },
+    });
+    expect(model.toolNames).toEqual(["Read"]);
+    expect(model.firstSystemMessage).toContain(
+      "Compare documentation with the implementation.",
+    );
+    expect(model.firstSystemMessage).toContain("Immutable safety rules");
   });
 
   it("passes the parent task cancellation signal to the reviewer", async () => {

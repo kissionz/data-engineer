@@ -3,7 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "bin": {
-    "harness": "./dist/index.js"
+    "harness": "./dist/index.js",
+    "harness-worktrees": "./dist/cli/worktreeReport.js",
+    "harness-telemetry-report": "./dist/cli/telemetryReport.js"
   },
   "engines": {
     "node": ">=22.12.0"
@@ -12,9 +14,12 @@
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "worktrees": "node dist/cli/worktreeReport.js",
+    "telemetry:report": "node dist/cli/telemetryReport.js",
     "test": "vitest",
     "test:acceptance": "vitest run tests/acceptance.test.ts",
-    "test:contract": "vitest run tests/openai.test.ts tests/mcp.test.ts"
+    "test:contract": "vitest run tests/openai.test.ts tests/mcp.test.ts",
+    "eval": "npm run build --silent && node dist/eval/cli.js"
   },
   "dependencies": {
     "@inquirer/prompts": "^7.0.0",
