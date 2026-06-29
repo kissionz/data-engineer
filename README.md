@@ -574,6 +574,14 @@ SkillLoad
 
 子代理不会注册 `Write`、`Edit`、`Bash`、`Task`、Todo、Memory、MCP 或 `HttpFetch`，因此不能修改文件、访问网络或递归创建更多子代理。项目提供的 system prompt、任务、文件和 Skill 都被视为不可信内容，不能覆盖固定的只读安全规则。父 Agent 只会收到有长度限制的最终结果。
 
+### 用户显式请求的临时子代理
+
+只有当前用户消息以 `/subagent <子任务>` 开头时，主模型才可以在一次 `EphemeralTask` 调用中内联声明临时只读角色，例如 `/subagent 审查测试覆盖`。采用结构化前缀是为了避免把自然语言讨论、文档引用或粘贴的提示词误当授权；普通的“是否需要 Subagent”“请解释如何创建 Subagent”均不会授权。若后续句子明确写出 `cancel`、`never mind`、“算了”或“取消”，本次授权撤销。未授权的 run 不会向模型暴露 `EphemeralTask` schema，即使模型自行构造同名调用，执行层也会再次拒绝。运行时会使用与 YAML 角色相同的严格 schema、工具白名单、轮数和结果上限校验。
+
+临时角色不进入全局 Registry，不写入 `.harness/agents/`，也不需要重启。生命周期固定为：创建独立 AgentLoop → 串行执行一个 subtask → 返回有界结果 → 在 `finally` 中释放 telemetry observer 和运行时引用。为保留恢复与审计能力，父会话中的工具调用记录和隐藏的 append-only child session 日志仍会保留，但不会作为可复用角色重新加载。每条用户任务最多运行 8 个临时角色，并继续共享父任务 Budget。
+
+当前不提供自动持久化、自动更新或自动覆盖 Subagent YAML 的能力。若需要长期角色，仍由人工维护项目 YAML。
+
 ## Git Worktree 隔离
 
 在干净 Git repository 中创建新分支和相邻 worktree 后执行任务：

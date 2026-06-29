@@ -20,6 +20,40 @@ export const READONLY_SUBAGENT_TOOLS = [
 export type ReadonlySubagentToolName =
   (typeof READONLY_SUBAGENT_TOOLS)[number];
 
+export const EPHEMERAL_SUBAGENT_INPUT_SCHEMA = {
+  type: "object",
+  properties: {
+    name: {
+      type: "string",
+      pattern: "^[a-z][a-z0-9-]{0,63}$",
+    },
+    description: { type: "string", minLength: 1, maxLength: 500 },
+    systemPrompt: { type: "string", minLength: 1, maxLength: 16_000 },
+    tools: {
+      type: "array",
+      items: { type: "string", enum: [...READONLY_SUBAGENT_TOOLS] },
+      minItems: 1,
+      maxItems: READONLY_SUBAGENT_TOOLS.length,
+      uniqueItems: true,
+    },
+    maxTurns: { type: "integer", minimum: 1, maximum: 20 },
+    maxResultChars: {
+      type: "integer",
+      minimum: 1,
+      maximum: 20_000,
+    },
+  },
+  required: [
+    "name",
+    "description",
+    "systemPrompt",
+    "tools",
+    "maxTurns",
+    "maxResultChars",
+  ],
+  additionalProperties: false,
+} as const;
+
 export const CODE_REVIEWER_SPEC: SubagentSpec = {
   name: "code-reviewer",
   description: "Review current code and changes for bugs, risks, and missing tests.",

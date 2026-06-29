@@ -60,7 +60,7 @@ import { GlobTool } from "./tools/glob.js";
 import { GrepTool } from "./tools/grep.js";
 import { ReadTool } from "./tools/read.js";
 import { SkillListTool, SkillLoadTool } from "./tools/skill.js";
-import { TaskTool } from "./tools/task.js";
+import { EphemeralTaskTool, TaskTool } from "./tools/task.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { TodoReadTool, TodoStore, TodoWriteTool } from "./tools/todo.js";
 import {
@@ -660,21 +660,21 @@ function createAgent(
   for (const tool of options.mcpTools) {
     tools.register(tool);
   }
-  tools.register(
-    new TaskTool(
-      model,
-      options.workspace,
-      options.executor,
-      options.session.id,
-      undefined,
-      {
-        sink: options.telemetry,
-        provider: options.provider,
-        model: options.modelName,
-      },
-      options.runtimeCapabilities,
-    ),
+  const taskTool = new TaskTool(
+    model,
+    options.workspace,
+    options.executor,
+    options.session.id,
+    undefined,
+    {
+      sink: options.telemetry,
+      provider: options.provider,
+      model: options.modelName,
+    },
+    options.runtimeCapabilities,
   );
+  tools.register(taskTool);
+  tools.register(new EphemeralTaskTool(taskTool));
 
   const permissionPolicy = defaultPolicy();
   for (const tool of options.mcpTools) {

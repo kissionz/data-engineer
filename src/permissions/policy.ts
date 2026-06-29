@@ -23,6 +23,7 @@ export function defaultPolicy(): PermissionPolicy {
       "SkillLoad",
       "MemorySearch",
       "Task",
+      "EphemeralTask",
     ]),
     deniedTools: new Set(),
     allowReadonly: true,

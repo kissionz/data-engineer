@@ -11,8 +11,12 @@ import type { CommandExecutor } from "../runtime/commandExecutor.js";
 import type { RuntimeCapabilities } from "../runtime/capabilities.js";
 import type { Workspace } from "../runtime/workspace.js";
 import { SkillLoader } from "../skills/loader.js";
-import { SubagentSpecLoader } from "../subagents/loader.js";
 import {
+  parseEphemeralSubagentSpec,
+  SubagentSpecLoader,
+} from "../subagents/loader.js";
+import {
+  EPHEMERAL_SUBAGENT_INPUT_SCHEMA,
   wrappedSubagentPrompt,
   type ReadonlySubagentToolName,
   type SubagentSpec,
@@ -38,6 +42,7 @@ export class TaskTool implements Tool {
   readonly description: string;
   readonly inputSchema: Record<string, unknown>;
   private readonly specs: ReadonlyMap<string, SubagentSpec>;
+  private readonly ephemeralRuns = new Map<string, number>();
 
   constructor(
     private readonly model: ModelClient,
@@ -61,7 +66,7 @@ export class TaskTool implements Tool {
     // Project-authored descriptions are intentionally not placed in the tool
     // schema, where they could become prompt injection against the parent.
     this.description =
-      `Run a bounded read-only subagent. Available role names: ` +
+      `Run a bounded configured read-only subagent. Available role names: ` +
       specs.map((spec) => spec.name).join(", ");
     this.inputSchema = {
       type: "object",
@@ -81,17 +86,75 @@ export class TaskTool implements Tool {
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
   ): Promise<ToolExecutionResult> {
-    const spec =
+    const configuredSpec =
       typeof args.subagent === "string"
         ? this.specs.get(args.subagent)
         : undefined;
-    if (!spec || typeof args.task !== "string" || !args.task.trim()) {
+    if (
+      typeof args.task !== "string" ||
+      !args.task.trim() ||
+      !configuredSpec
+    ) {
       return {
         ok: false,
         content: "subagent and a non-empty task are required.",
         data: { reason: "invalid_subagent_task" },
       };
     }
+    return this.runSpec(
+      configuredSpec,
+      args.task.trim(),
+      context,
+      false,
+    );
+  }
+
+  async executeEphemeral(
+    value: unknown,
+    task: string,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    if (context?.explicitSubagentRequest !== true) {
+      return {
+        ok: false,
+        content:
+          "Creating an ephemeral subagent requires an explicit request from the current user.",
+        data: { reason: "explicit_subagent_request_required" },
+      };
+    }
+    let spec: SubagentSpec;
+    try {
+      spec = parseEphemeralSubagentSpec(value);
+    } catch (error: unknown) {
+      return {
+        ok: false,
+        content: error instanceof Error ? error.message : String(error),
+        data: { reason: "invalid_ephemeral_subagent" },
+      };
+    }
+    if (this.specs.has(spec.name)) {
+      return {
+        ok: false,
+        content: `Ephemeral subagent name conflicts with configured role: ${spec.name}`,
+        data: { reason: "subagent_name_conflict" },
+      };
+    }
+    if (!this.claimEphemeralRun(context)) {
+      return {
+        ok: false,
+        content: "At most 8 ephemeral subagents may run for one user task.",
+        data: { reason: "ephemeral_subagent_limit_reached" },
+      };
+    }
+    return this.runSpec(spec, task, context, true);
+  }
+
+  private async runSpec(
+    spec: SubagentSpec,
+    task: string,
+    context: ToolExecutionContext | undefined,
+    ephemeral: boolean,
+  ): Promise<ToolExecutionResult> {
 
     const skills = new SkillLoader(this.workspace);
     const tools = createReviewerTools(
@@ -142,7 +205,7 @@ export class TaskTool implements Tool {
         ),
         spec.maxTurns,
         async () => "reject",
-      ).run(args.task.trim(), context?.signal, context?.budget);
+      ).run(task, context?.signal, context?.budget);
     } finally {
       await telemetry?.dispose();
     }
@@ -161,6 +224,8 @@ export class TaskTool implements Tool {
           retryable: false,
           subagent: spec.name,
           childSessionId,
+          ephemeral,
+          reclaimed: ephemeral,
         },
       };
     }
@@ -174,8 +239,63 @@ export class TaskTool implements Tool {
         subagent: spec.name,
         childSessionId,
         truncated,
+        ephemeral,
+        reclaimed: ephemeral,
       },
     };
+  }
+
+  private claimEphemeralRun(context: ToolExecutionContext | undefined): boolean {
+    const key = context?.taskRunId ?? `approved:${context?.toolCallId ?? "unknown"}`;
+    const count = this.ephemeralRuns.get(key) ?? 0;
+    if (count >= 8) {
+      return false;
+    }
+    this.ephemeralRuns.set(key, count + 1);
+    while (this.ephemeralRuns.size > 32) {
+      const oldest = this.ephemeralRuns.keys().next().value;
+      if (typeof oldest !== "string") {
+        break;
+      }
+      this.ephemeralRuns.delete(oldest);
+    }
+    return true;
+  }
+}
+
+export class EphemeralTaskTool implements Tool {
+  readonly name = "EphemeralTask";
+  readonly description =
+    'Create one temporary read-only subagent for the current subtask, only when the current user message starts with "/subagent <subtask>". The role is reclaimed immediately after the result.';
+  readonly effect = "readonly" as const;
+  readonly inputSchema = {
+    type: "object",
+    properties: {
+      role: EPHEMERAL_SUBAGENT_INPUT_SCHEMA,
+      task: { type: "string", minLength: 1, maxLength: 4_000 },
+    },
+    required: ["role", "task"],
+    additionalProperties: false,
+  };
+
+  constructor(private readonly taskTool: TaskTool) {}
+
+  async execute(
+    args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    if (typeof args.task !== "string" || !args.task.trim()) {
+      return {
+        ok: false,
+        content: "role and a non-empty task are required.",
+        data: { reason: "invalid_ephemeral_subagent" },
+      };
+    }
+    return this.taskTool.executeEphemeral(
+      args.role,
+      args.task.trim(),
+      context,
+    );
   }
 }
 
@@ -224,6 +344,7 @@ function readonlyPolicy(
       "Edit",
       "Bash",
       "Task",
+      "EphemeralTask",
       "TodoRead",
       "TodoWrite",
       "MemorySearch",

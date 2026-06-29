@@ -48,6 +48,18 @@ export function summarizeToolCall(call: ToolCall): string {
     return `Task ${subagent}: ${task}`;
   }
 
+  if (call.name === "EphemeralTask") {
+    const role =
+      call.args.role &&
+      typeof call.args.role === "object" &&
+      !Array.isArray(call.args.role)
+        ? call.args.role as Record<string, unknown>
+        : undefined;
+    const subagent = compact(String(role?.name ?? "subagent"), 40);
+    const task = compact(String(call.args.task ?? "task"), 70);
+    return `Ephemeral task ${subagent}: ${task}`;
+  }
+
   if (call.name === "Bash") {
     return `Bash ${compact(String(call.args.command ?? "command"), 100)}`;
   }

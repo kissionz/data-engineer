@@ -107,6 +107,48 @@ describe("tool schema validation", () => {
     });
   });
 
+  it("enforces integer bounds and array cardinality", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        turns: { type: "integer", minimum: 1, maximum: 8 },
+        tools: {
+          type: "array",
+          minItems: 1,
+          uniqueItems: true,
+          items: { type: "string" },
+        },
+      },
+      required: ["turns", "tools"],
+      additionalProperties: false,
+    };
+
+    expect(
+      validateSchema(schema, { turns: 2, tools: ["Read"] }),
+    ).toEqual({ ok: true });
+    expect(
+      validateSchema(schema, {
+        turns: 2.5,
+        tools: ["Read", "Read"],
+      }),
+    ).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "args.turns must be a safe integer.",
+        "args.tools must not contain duplicate items.",
+      ]),
+    });
+    expect(
+      validateSchema(schema, { turns: 9, tools: [] }),
+    ).toMatchObject({
+      ok: false,
+      errors: expect.arrayContaining([
+        "args.turns must be at most 8.",
+        "args.tools must contain at least 1 items.",
+      ]),
+    });
+  });
+
   it("rejects path-shadowing fields on Bash calls", () => {
     const registry = new ToolRegistry();
     registry.register(new SchemaOnlyTool());

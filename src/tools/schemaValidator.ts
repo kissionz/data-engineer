@@ -72,6 +72,15 @@ function validateValue(
     case "number":
       if (typeof value !== "number" || !Number.isFinite(value)) {
         errors.push(`${valuePath} must be a finite number.`);
+      } else {
+        validateNumberBounds(schema, value, valuePath, errors);
+      }
+      return;
+    case "integer":
+      if (!Number.isSafeInteger(value)) {
+        errors.push(`${valuePath} must be a safe integer.`);
+      } else {
+        validateNumberBounds(schema, value as number, valuePath, errors);
       }
       return;
     case "boolean":
@@ -138,10 +147,24 @@ function validateArray(
   }
 
   if (
+    typeof schema.minItems === "number" &&
+    value.length < schema.minItems
+  ) {
+    errors.push(`${valuePath} must contain at least ${schema.minItems} items.`);
+  }
+
+  if (
     typeof schema.maxItems === "number" &&
     value.length > schema.maxItems
   ) {
     errors.push(`${valuePath} cannot contain more than ${schema.maxItems} items.`);
+  }
+
+  if (
+    schema.uniqueItems === true &&
+    new Set(value.map(stableValue)).size !== value.length
+  ) {
+    errors.push(`${valuePath} must not contain duplicate items.`);
   }
 
   if (!isRecord(schema.items)) {
@@ -156,6 +179,33 @@ function validateArray(
       errors,
     );
   });
+}
+
+function validateNumberBounds(
+  schema: Record<string, unknown>,
+  value: number,
+  valuePath: string,
+  errors: string[],
+): void {
+  if (typeof schema.minimum === "number" && value < schema.minimum) {
+    errors.push(`${valuePath} must be at least ${schema.minimum}.`);
+  }
+  if (typeof schema.maximum === "number" && value > schema.maximum) {
+    errors.push(`${valuePath} must be at most ${schema.maximum}.`);
+  }
+}
+
+function stableValue(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableValue).join(",")}]`;
+  }
+  if (isRecord(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${stableValue(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value) ?? String(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

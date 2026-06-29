@@ -10,6 +10,8 @@ export interface ToolExecutionContext {
   signal?: AbortSignal;
   toolCallId: string;
   userApproved?: boolean;
+  taskRunId?: string;
+  explicitSubagentRequest?: boolean;
   budget?: AgentBudgetTracker;
 }
 

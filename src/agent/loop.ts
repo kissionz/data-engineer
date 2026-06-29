@@ -68,6 +68,8 @@ export class AgentLoop {
         maxTurns: this.maxTurns,
       });
     const accountingNamespace = randomUUID();
+    const explicitSubagentRequest =
+      explicitlyRequestsSubagent(userTask);
     const callerSignal = signal;
     const wallTimeSignal = AbortSignal.timeout(
       Math.ceil(
@@ -164,7 +166,13 @@ export class AgentLoop {
         const toolSchemas =
           this.model.capabilities?.supportsToolUse === false
             ? []
-            : this.tools.schemas();
+            : this.tools
+                .schemas()
+                .filter(
+                  (schema) =>
+                    explicitSubagentRequest ||
+                    schema.name !== "EphemeralTask",
+                );
         let estimatedInputTokens = estimateTokens({
           messages,
           tools: toolSchemas,
@@ -522,6 +530,8 @@ export class AgentLoop {
                 signal,
                 this.hasSessionApproval(call),
                 budget,
+                accountingNamespace,
+                explicitSubagentRequest,
               );
             }
 
@@ -709,12 +719,16 @@ export class AgentLoop {
     signal?: AbortSignal,
     userApproved = false,
     budget?: AgentBudgetTracker,
+    taskRunId?: string,
+    explicitSubagentRequest = false,
   ): Promise<ToolExecutionResult> {
     try {
       return await this.tools.execute(name, args, {
         signal,
         toolCallId,
         userApproved,
+        taskRunId,
+        explicitSubagentRequest,
         budget,
       });
     } catch (error: unknown) {
@@ -765,6 +779,8 @@ export class AgentLoop {
     signal?: AbortSignal,
     userApproved = false,
     budget?: AgentBudgetTracker,
+    taskRunId?: string,
+    explicitSubagentRequest = false,
   ): Promise<ToolExecutionResult> {
     await this.session.append({
       type: "tool_execution_started",
@@ -779,6 +795,8 @@ export class AgentLoop {
       signal,
       userApproved,
       budget,
+      taskRunId,
+      explicitSubagentRequest,
     );
   }
 
@@ -1277,6 +1295,17 @@ function sessionApprovalAllowed(call: {
   name: string;
 }): boolean {
   return call.name !== "HttpFetch";
+}
+
+export function explicitlyRequestsSubagent(userTask: string): boolean {
+  const normalized = userTask.normalize("NFKC").trimStart().slice(0, 16_000);
+  if (!/^\/subagent(?:\s+)\S/iu.test(normalized)) {
+    return false;
+  }
+  const task = normalized.replace(/^\/subagent(?:\s+)/iu, "");
+  return !/(?:^|[。！？.!?\n]\s*)(?:(?:actually[,\s]+)?(?:don't|do\s+not|cancel|never\s+mind)\b|算了|取消|不要了|停止创建)/iu.test(
+    task,
+  );
 }
 
 function needsGitDiffReview(

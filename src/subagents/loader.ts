@@ -47,6 +47,21 @@ const agentSpecSchema = z
   })
   .strict();
 
+export function parseEphemeralSubagentSpec(value: unknown): SubagentSpec {
+  const parsed = agentSpecSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid ephemeral subagent spec: ${parsed.error.issues
+        .map((issue) => `${issue.path.join(".") || "spec"}: ${issue.message}`)
+        .join("; ")}`,
+    );
+  }
+  if (parsed.data.name === CODE_REVIEWER_SPEC.name) {
+    throw new Error("Ephemeral subagent cannot use a reserved role name.");
+  }
+  return parsed.data;
+}
+
 export class SubagentSpecLoader {
   private readonly workspaceRoot: string;
   private readonly agentsRoot: string;

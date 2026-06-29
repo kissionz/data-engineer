@@ -31,6 +31,71 @@ Locate the exact neighboring test before constructing an insertion patch.
 
 ---
 
+## [ERR-20260629-002] ephemeral_subagent_contract
+
+**Logged**: 2026-06-29T07:28:47Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The first ephemeral Subagent contract depended on unsupported schema combinators, and a broad test edit wrapped one configured-role case with the wrong tool.
+
+### Error
+```
+expected true to be false
+Creating an ephemeral subagent requires an explicit request from the current user.
+```
+
+### Context
+- The local tool validator did not previously enforce `oneOf`/`not`.
+- A repeated constructor pattern caused an imprecise patch to alter an adjacent test.
+
+### Suggested Fix
+Use a separate basic-schema `EphemeralTask` tool for provider compatibility, retain strict runtime Zod validation, and anchor repeated-code patches to the test name.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/tools/task.ts, src/tools/schemaValidator.ts, tests/task.test.ts
+
+### Resolution
+- **Resolved**: 2026-06-29T07:28:47Z
+- **Notes**: Split configured and ephemeral tools, added only the basic numeric/array constraints used by that schema, corrected the targeted test, and passed directed regression tests.
+
+---
+
+## [ERR-20260630-001] explicit_request_sentence_split
+
+**Logged**: 2026-06-30T07:05:23Z
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The conservative Subagent authorization classifier omitted the ASCII period from sentence boundaries.
+
+### Error
+```
+expected false to be true
+```
+
+### Context
+- `Review the docs. Create a subagent to check tests` remained one segment.
+- The meta-discussion guard correctly rejected that combined segment.
+
+### Suggested Fix
+Test every supported sentence boundary when authorization depends on sentence-local intent.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/agent/loop.ts, tests/loop.test.ts
+
+### Resolution
+- **Resolved**: 2026-06-30T07:05:23Z
+- **Notes**: The immediate split bug was fixed, then the ambiguous natural-language classifier was replaced entirely by the structured `/subagent <subtask>` prefix.
+
+---
+
 ## [ERR-20260629-001] skill_context_wiring
 
 **Logged**: 2026-06-29T02:24:24Z

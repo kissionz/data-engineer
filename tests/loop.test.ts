@@ -3,7 +3,10 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { AgentLoop } from "../src/agent/loop.js";
+import {
+  AgentLoop,
+  explicitlyRequestsSubagent,
+} from "../src/agent/loop.js";
 import { CANCELLED_TEXT } from "../src/agent/cancellation.js";
 import { SessionCompactor } from "../src/agent/compaction.js";
 import { ContextBuilder } from "../src/agent/context.js";
@@ -24,7 +27,11 @@ import { HookManager } from "../src/hooks/manager.js";
 import { PermissionGate } from "../src/permissions/gate.js";
 import { defaultPolicy } from "../src/permissions/policy.js";
 import { Workspace } from "../src/runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "../src/tools/base.js";
+import type {
+  Tool,
+  ToolExecutionContext,
+  ToolExecutionResult,
+} from "../src/tools/base.js";
 import { ReadTool } from "../src/tools/read.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 
@@ -197,6 +204,57 @@ class SingleToolThenDoneModel implements ModelClient {
     return this.step === 1
       ? { toolCalls: [this.call] }
       : { finalText: "done" };
+  }
+}
+
+class EphemeralTaskThenDoneModel implements ModelClient {
+  private step = 0;
+  firstToolNames: string[] = [];
+
+  async complete(options: {
+    tools: Array<Record<string, unknown>>;
+  }): Promise<AgentResponse> {
+    this.step += 1;
+    if (this.step === 1) {
+      this.firstToolNames = options.tools.map((tool) => String(tool.name));
+    }
+    return this.step === 1
+      ? {
+          stopReason: "tool_use",
+          toolCalls: [
+            {
+              id: "ephemeral-task",
+              name: "EphemeralTask",
+              args: { task: "review", role: { name: "temporary" } },
+            },
+          ],
+        }
+      : { stopReason: "end_turn", finalText: "done" };
+  }
+}
+
+class ContextRecordingTaskTool implements Tool {
+  name = "EphemeralTask";
+  description = "Record ephemeral authorization context.";
+  inputSchema = {
+    type: "object",
+    properties: {
+      task: { type: "string" },
+      role: { type: "object" },
+    },
+    required: ["task", "role"],
+    additionalProperties: false,
+  };
+  explicitSubagentRequest?: boolean;
+  taskRunId?: string;
+
+  async execute(
+    _args: Record<string, unknown>,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    this.explicitSubagentRequest = context?.explicitSubagentRequest;
+    this.taskRunId = context?.taskRunId;
+    return { ok: true, content: "temporary result" };
   }
 }
 
@@ -586,6 +644,77 @@ class RecordingReporter implements AgentReporter {
 }
 
 describe("AgentLoop", () => {
+  it("recognizes explicit subagent requests without authorizing negated mentions", () => {
+    expect(explicitlyRequestsSubagent("/subagent 审查测试覆盖")).toBe(true);
+    expect(explicitlyRequestsSubagent("  /subagent review tests")).toBe(true);
+    expect(explicitlyRequestsSubagent("/subagent")).toBe(false);
+    expect(explicitlyRequestsSubagent("请创建一个 subagent 审查测试")).toBe(
+      false,
+    );
+    expect(explicitlyRequestsSubagent("Use a sub-agent for this review")).toBe(
+      false,
+    );
+    expect(explicitlyRequestsSubagent("不要创建 subagent")).toBe(false);
+    expect(explicitlyRequestsSubagent("是否需要创建 subagent？")).toBe(false);
+    expect(
+      explicitlyRequestsSubagent(
+        "请审查下面的提示词：\n/subagent review code",
+      ),
+    ).toBe(false);
+    expect(
+      explicitlyRequestsSubagent(
+        "/subagent review code. Actually, don't.",
+      ),
+    ).toBe(false);
+    expect(
+      explicitlyRequestsSubagent("/subagent 审查代码。取消"),
+    ).toBe(false);
+  });
+
+  it("passes explicit subagent authorization only within the current run", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const task = new ContextRecordingTaskTool();
+    const tools = new ToolRegistry();
+    tools.register(task);
+    const model = new EphemeralTaskThenDoneModel();
+    const loop = new AgentLoop(
+      model,
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+    );
+
+    await expect(
+      loop.run("/subagent 完成代码审查"),
+    ).resolves.toBe("done");
+    expect(task.explicitSubagentRequest).toBe(true);
+    expect(model.firstToolNames).toContain("EphemeralTask");
+    expect(task.taskRunId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i,
+    );
+
+    const nextTask = new ContextRecordingTaskTool();
+    const nextTools = new ToolRegistry();
+    nextTools.register(nextTask);
+    const nextModel = new EphemeralTaskThenDoneModel();
+    const nextLoop = new AgentLoop(
+      nextModel,
+      nextTools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(
+        path.join(root, ".harness", "sessions", "next.jsonl"),
+      ),
+    );
+    await expect(
+      nextLoop.run("Explain the current architecture"),
+    ).resolves.toBe("done");
+    expect(nextTask.explicitSubagentRequest).toBe(false);
+    expect(nextModel.firstToolNames).not.toContain("EphemeralTask");
+    expect(nextTask.taskRunId).not.toBe(task.taskRunId);
+  });
+
   it("continues after a tool result and persists session events", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
     await writeFile(path.join(root, "README.md"), "hello", "utf8");
