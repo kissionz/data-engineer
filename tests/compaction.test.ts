@@ -101,4 +101,21 @@ describe("SessionCompactor", () => {
     ).resolves.toBe(true);
     expect((await store.load()).at(-1)).toMatchObject({ type: "summary" });
   });
+
+  it("can disable event-count compaction and rely on tokens only", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-compact-"));
+    const store = new SessionStore(path.join(root, "session.jsonl"));
+    const events = Array.from(
+      { length: 80 },
+      (_, index): SessionEvent => ({
+        type: "user_message",
+        ts: String(index),
+        text: "short",
+      }),
+    );
+
+    await expect(
+      new SessionCompactor(store, null, 1_000_000).compactIfNeeded({ events }),
+    ).resolves.toBe(false);
+  });
 });

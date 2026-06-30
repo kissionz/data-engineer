@@ -121,6 +121,17 @@ const budgetSchema = z
   })
   .strict();
 
+const compactionSchema = z
+  .object({
+    maxRecentEvents: nonNegativeInteger.max(1_000_000).default(30),
+    eventThreshold: nonNegativeInteger.max(1_000_000).default(60),
+    fallbackTokenThreshold: positiveInteger
+      .max(1_000_000_000)
+      .default(24_000),
+    contextWindowRatio: z.number().finite().min(0.1).max(0.95).default(0.6),
+  })
+  .strict();
+
 export const userConfigSchema = z
   .object({
     version: z.literal(1).default(1),
@@ -140,7 +151,7 @@ export const userConfigSchema = z
           .optional(),
         capabilities: z
           .object({
-            contextWindow: positiveInteger.max(10_000_000).optional(),
+            contextWindow: positiveInteger.max(1_000_000_000).optional(),
             maxOutputTokens: positiveInteger.max(1_000_000).optional(),
             supportsStreaming: z.boolean().optional(),
             supportsToolUse: z.boolean().optional(),
@@ -152,6 +163,7 @@ export const userConfigSchema = z
       .strict()
       .optional(),
     budget: budgetSchema.optional(),
+    compaction: compactionSchema.optional(),
     memory: z
       .object({
         enabled: z.boolean().default(true),

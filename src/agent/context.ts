@@ -25,7 +25,7 @@ Rules:
 export class ContextBuilder {
   constructor(
     private readonly workspaceRoot: string,
-    private readonly maxRecentEvents = 30,
+    private readonly maxRecentEvents: number | null = 30,
     private readonly systemPrompt = DEFAULT_SYSTEM_PROMPT,
     private readonly memory?: MemoryService,
     private readonly skills?: SkillLoader,
@@ -299,8 +299,11 @@ function sanitizeDuplicateToolCalls(events: SessionEvent[]): SessionEvent[] {
 
 function alignRecentEvents(
   events: SessionEvent[],
-  maxRecentEvents: number,
+  maxRecentEvents: number | null,
 ): SessionEvent[] {
+  if (maxRecentEvents === null) {
+    return events;
+  }
   const boundedStart = Math.max(0, events.length - maxRecentEvents);
   let start = boundedStart;
   const lowerBound = Math.max(0, boundedStart - maxRecentEvents);

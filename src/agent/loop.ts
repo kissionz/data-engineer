@@ -54,6 +54,7 @@ export class AgentLoop {
       status: SessionStatus,
     ) => Promise<void>,
     private readonly budget?: Partial<AgentBudget>,
+    private readonly compactionContextWindowRatio = 0.6,
   ) {}
 
   async run(
@@ -139,7 +140,12 @@ export class AgentLoop {
 
         const modelContextWindow = this.model.capabilities?.contextWindow;
         const compactionTokenThreshold = modelContextWindow
-          ? Math.max(1_000, Math.floor(modelContextWindow * 0.6))
+          ? Math.max(
+              1_000,
+              Math.floor(
+                modelContextWindow * this.compactionContextWindowRatio,
+              ),
+            )
           : undefined;
         if (
           await this.compactor?.compactIfNeeded({

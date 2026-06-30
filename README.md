@@ -423,6 +423,30 @@ Windows 的绝对路径可使用 JSON 转义形式，例如 `"C:\\path\\to\\serv
 ```
 
 当原生或兼容 API 明确报告上下文超限时，运行时会触发 `PreCompact`，强制压缩一次后重试。第二次超限、没有可压缩事件或 hook 阻止压缩时会保留原始错误，不会无限重试。
+
+上下文保留与主动压缩可在可信用户配置中调整：
+
+```json
+{
+  "model": {
+    "capabilities": {
+      "contextWindow": 100000000
+    }
+  },
+  "compaction": {
+    "maxRecentEvents": 0,
+    "eventThreshold": 0,
+    "fallbackTokenThreshold": 1000000,
+    "contextWindowRatio": 0.8
+  }
+}
+```
+
+`maxRecentEvents` 控制没有摘要时最多注入多少个近期事件，设为 `0` 表示不按
+事件数截断。`eventThreshold` 控制达到多少个新事件时主动压缩，设为 `0`
+表示仅按 token 判断。已声明 `contextWindow` 时，压缩 token 阈值为
+`contextWindow × contextWindowRatio`；未声明时使用
+`fallbackTokenThreshold`。API 明确报告上下文溢出时仍会强制压缩一次。
 - 通过目标地址检查；非 localhost 的 private-network resolution 会被拒绝。
 
 MCP tool 会获得稳定且符合 provider 要求的名称，并使用完整 JSON Schema 验证参数。server 描述和 schema annotation 不会被当作指令注入。调用结果按不可信、有限大小的数据处理；请求发出后的传输失败会记录为 `unknown_outcome`，不会自动重放。

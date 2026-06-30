@@ -11,7 +11,7 @@ export interface CompactionCheckOptions {
 export class SessionCompactor {
   constructor(
     private readonly session: SessionStore,
-    private readonly eventThreshold = 60,
+    private readonly eventThreshold: number | null = 60,
     private readonly tokenThreshold = 24_000,
   ) {}
 
@@ -31,7 +31,8 @@ export class SessionCompactor {
     }
     if (
       !options.force &&
-      eventsSinceSummary.length < this.eventThreshold &&
+      (this.eventThreshold === null ||
+        eventsSinceSummary.length < this.eventThreshold) &&
       estimateSessionEventTokens(eventsSinceSummary) < tokenThreshold
     ) {
       return false;

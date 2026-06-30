@@ -37,7 +37,7 @@ describe("user config", () => {
             cacheReadPerMillionTokens: 0.75,
           },
           capabilities: {
-            contextWindow: 128000,
+            contextWindow: 100_000_000,
             maxOutputTokens: 8192,
             supportsStreaming: false,
           },
@@ -48,6 +48,12 @@ describe("user config", () => {
           maxEstimatedCostUsd: 2,
         },
         memory: { enabled: false },
+        compaction: {
+          maxRecentEvents: 0,
+          eventThreshold: 0,
+          fallbackTokenThreshold: 1_000_000,
+          contextWindowRatio: 0.8,
+        },
         httpFetch: {
           enabled: true,
           allowedHosts: ["docs.example.com"],
@@ -82,7 +88,7 @@ describe("user config", () => {
         name: "production-model",
         pricing: { inputPerMillionTokens: 1.5 },
         capabilities: {
-          contextWindow: 128000,
+          contextWindow: 100_000_000,
           maxOutputTokens: 8192,
           supportsStreaming: false,
         },
@@ -93,6 +99,12 @@ describe("user config", () => {
         maxEstimatedCostUsd: 2,
       },
       memory: { enabled: false },
+      compaction: {
+        maxRecentEvents: 0,
+        eventThreshold: 0,
+        fallbackTokenThreshold: 1_000_000,
+        contextWindowRatio: 0.8,
+      },
       httpFetch: {
         enabled: true,
         allowedHosts: ["docs.example.com"],
@@ -146,6 +158,12 @@ describe("user config", () => {
         budget: { maxEstimatedCostUsd: 1 },
       },
       "requires non-zero model pricing",
+    ],
+    [
+      {
+        compaction: { contextWindowRatio: 1 },
+      },
+      "expected number to be <=0.95",
     ],
     [
       {

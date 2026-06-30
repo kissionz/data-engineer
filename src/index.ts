@@ -75,6 +75,7 @@ import {
   defaultUserConfigPath,
   loadUserConfig,
   type HttpFetchConfig,
+  type UserConfig,
 } from "./config/userConfig.js";
 import {
   applyProjectRestrictions,
@@ -433,6 +434,7 @@ async function main(): Promise<void> {
       interactivePrompt,
       runtimeCapabilities,
       httpFetch: userConfig.httpFetch,
+      compaction: userConfig.compaction,
     });
     return { session, ...created };
   };
@@ -537,6 +539,7 @@ interface CreateAgentOptions {
   interactivePrompt?: InteractivePrompt;
   runtimeCapabilities: RuntimeCapabilities;
   httpFetch?: HttpFetchConfig;
+  compaction?: UserConfig["compaction"];
 }
 
 async function createShellExecutorFactory(
@@ -683,13 +686,22 @@ function createAgent(
     }
   }
 
+  const maxRecentEvents =
+    options.compaction?.maxRecentEvents === 0
+      ? null
+      : options.compaction?.maxRecentEvents;
+  const eventThreshold =
+    options.compaction?.eventThreshold === 0
+      ? null
+      : options.compaction?.eventThreshold;
+
   const agent = new AgentLoop(
     model,
     tools,
     new PermissionGate(permissionPolicy, options.workspaceRoot),
     new ContextBuilder(
       options.workspaceRoot,
-      undefined,
+      maxRecentEvents,
       undefined,
       options.memory,
       skillLoader,
@@ -704,10 +716,15 @@ function createAgent(
         )
       : askUserApproval,
     new ConsoleReporter(),
-    new SessionCompactor(sessionStore),
+    new SessionCompactor(
+      sessionStore,
+      eventThreshold,
+      options.compaction?.fallbackTokenThreshold,
+    ),
     hooks,
     (status) => options.session.updateStatus(status).then(() => undefined),
     options.budget,
+    options.compaction?.contextWindowRatio,
   );
   return { agent, telemetry };
 }

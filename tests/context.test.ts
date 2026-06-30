@@ -119,6 +119,24 @@ describe("ContextBuilder", () => {
     ).toBe(false);
   });
 
+  it("can retain all events when the recent-event limit is disabled", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
+    const events = Array.from(
+      { length: 80 },
+      (_, index): SessionEvent => ({
+        type: "user_message",
+        ts: String(index),
+        text: `message-${index}`,
+      }),
+    );
+
+    const messages = await new ContextBuilder(root, null).build(events);
+    const serialized = JSON.stringify(messages);
+
+    expect(serialized).toContain("message-0");
+    expect(serialized).toContain("message-79");
+  });
+
   it("keeps automatic diff observations out of the system role", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
     const events: SessionEvent[] = [
