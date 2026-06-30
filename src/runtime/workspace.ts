@@ -1,6 +1,11 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
 
+export interface WorkspaceAccessOptions {
+  allowOutside?: boolean;
+  outsideRoot?: string;
+}
+
 export class Workspace {
   readonly root: string;
 
@@ -10,12 +15,17 @@ export class Workspace {
 
   resolve(
     userPath: string,
-    options: { allowOutside?: boolean } = {},
+    options: WorkspaceAccessOptions = {},
   ): string {
     const resolved = path.resolve(this.root, userPath);
 
     if (!options.allowOutside) {
       this.assertPathWithin(resolved, `Path outside workspace: ${userPath}`);
+    } else if (
+      options.outsideRoot &&
+      !isWithin(path.resolve(options.outsideRoot), resolved)
+    ) {
+      throw new Error(`Path outside approved folder: ${userPath}`);
     }
     assertNoSensitiveRelativePath(
       this.root,
@@ -31,7 +41,7 @@ export class Workspace {
 
   async assertRealPathWithin(
     absPath: string,
-    options: { allowOutside?: boolean } = {},
+    options: WorkspaceAccessOptions = {},
   ): Promise<void> {
     const [rootRealPath, targetRealPath] = await Promise.all([
       realpath(this.root),
@@ -44,6 +54,13 @@ export class Workspace {
         targetRealPath,
         `Real path outside workspace: ${absPath}`,
       );
+    } else if (options.outsideRoot) {
+      const approvedRealPath = await realpath(options.outsideRoot);
+      assertWithin(
+        approvedRealPath,
+        targetRealPath,
+        `Real path outside approved folder: ${absPath}`,
+      );
     }
     assertNoSensitiveRelativePath(
       rootRealPath,
@@ -54,7 +71,7 @@ export class Workspace {
 
   async resolveExistingDirectory(
     userPath: string,
-    options: { allowOutside?: boolean } = {},
+    options: WorkspaceAccessOptions = {},
   ): Promise<string> {
     const absPath = this.resolve(userPath, options);
     const info = await stat(absPath);
@@ -69,7 +86,7 @@ export class Workspace {
 
   async assertCreatablePathWithin(
     absPath: string,
-    options: { allowOutside?: boolean } = {},
+    options: WorkspaceAccessOptions = {},
   ): Promise<void> {
     if (!options.allowOutside) {
       this.assertPathWithin(absPath, `Path outside workspace: ${absPath}`);
@@ -95,6 +112,12 @@ export class Workspace {
             rootRealPath,
             ancestorRealPath,
             `Parent path resolves outside workspace: ${ancestor}`,
+          );
+        } else if (options.outsideRoot) {
+          assertWithin(
+            await realpath(options.outsideRoot),
+            ancestorRealPath,
+            `Parent path resolves outside approved folder: ${ancestor}`,
           );
         }
         assertNoSensitiveRelativePath(
@@ -154,6 +177,10 @@ function assertNoSensitiveRelativePath(
         segment === "node_modules" ||
         segment === ".env" ||
         segment.startsWith(".env."),
+    ) ||
+    segments.some(
+      (segment, index) =>
+        segment === ".harness" && segments[index + 1] === "permissions",
     )
   ) {
     throw new Error(message);

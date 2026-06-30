@@ -36,6 +36,7 @@ export class GlobTool implements Tool {
     const limit = normalizeLimit(args.limit, this.defaultLimit);
     const absPath = await this.workspace.resolveExistingDirectory(searchPath, {
       allowOutside: context?.userApproved === true,
+      outsideRoot: context?.approvedFolder,
     });
     const result = await this.executor.run({
       command: "rg",

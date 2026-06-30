@@ -1,5 +1,8 @@
 import path from "node:path";
+import { mkdtemp } from "node:fs/promises";
+import os from "node:os";
 import { describe, expect, it } from "vitest";
+import { FolderGrantManager } from "../src/permissions/folderGrants.js";
 import { PermissionGate } from "../src/permissions/gate.js";
 import { defaultPolicy } from "../src/permissions/policy.js";
 
@@ -112,6 +115,54 @@ describe("PermissionGate", () => {
     ).toMatchObject({ decision: "deny" });
   });
 
+  it("reuses recursive folder grants for matching access only", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-workspace-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "harness-shared-"));
+    const grants = await FolderGrantManager.load(
+      path.join(root, "folder-grants.json"),
+    );
+    const gate = new PermissionGate(defaultPolicy(), root, grants);
+    const first = gate.check({
+      id: "1",
+      name: "Read",
+      args: { file_path: path.join(outside, "first.txt") },
+    });
+
+    expect(first).toMatchObject({
+      decision: "ask",
+      folderGrant: { folder: outside, access: "read" },
+    });
+    await gate.grantFolder(first.folderGrant!, "session");
+
+    expect(
+      gate.check({
+        id: "2",
+        name: "Read",
+        args: { file_path: path.join(outside, "nested", "second.txt") },
+      }),
+    ).toMatchObject({ decision: "allow" });
+    expect(
+      gate.check({
+        id: "3",
+        name: "Edit",
+        args: {
+          file_path: path.join(outside, "nested", "second.txt"),
+          old_string: "a",
+          new_string: "b",
+        },
+      }),
+    ).toMatchObject({ decision: "ask" });
+    expect(
+      gate.check({
+        id: "4",
+        name: "Read",
+        args: {
+          file_path: path.join(`${outside}-sibling`, "third.txt"),
+        },
+      }),
+    ).toMatchObject({ decision: "ask" });
+  });
+
   it("allows readonly shell commands", () => {
     const gate = new PermissionGate(defaultPolicy());
 
@@ -188,6 +239,28 @@ describe("PermissionGate", () => {
         id: "5",
         name: "Bash",
         args: { command: "cat config", cwd: ".GIT", file_path: "safe" },
+      }),
+    ).toMatchObject({ decision: "deny" });
+
+    expect(
+      gate.check({
+        id: "6",
+        name: "Edit",
+        args: {
+          file_path: "/home/user/.harness/permissions/folder-grants.json",
+          old_string: "read",
+          new_string: "read_write",
+        },
+      }),
+    ).toMatchObject({ decision: "deny" });
+
+    expect(
+      gate.check({
+        id: "7",
+        name: "Bash",
+        args: {
+          command: "cat ~/.harness/permissions/folder-grants.json",
+        },
       }),
     ).toMatchObject({ decision: "deny" });
   });

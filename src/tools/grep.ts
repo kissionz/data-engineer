@@ -35,7 +35,10 @@ export class GrepTool implements Tool {
     }
 
     const searchPath = typeof args.path === "string" ? args.path : ".";
-    const accessOptions = { allowOutside: context?.userApproved === true };
+    const accessOptions = {
+      allowOutside: context?.userApproved === true,
+      outsideRoot: context?.approvedFolder,
+    };
     const absPath = this.workspace.resolve(searchPath, accessOptions);
     await this.workspace.assertRealPathWithin(absPath, accessOptions);
     const result = await this.executor.run({

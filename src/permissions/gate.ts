@@ -1,5 +1,10 @@
 import path from "node:path";
 import type { ToolCall } from "../agent/types.js";
+import {
+  type FolderGrantManager,
+  type FolderGrantRequest,
+  type FolderGrantScope,
+} from "./folderGrants.js";
 import type { PermissionPolicy } from "./policy.js";
 
 export type PermissionDecision = "allow" | "ask" | "deny";
@@ -7,12 +12,15 @@ export type PermissionDecision = "allow" | "ask" | "deny";
 export interface PermissionCheckResult {
   decision: PermissionDecision;
   reason: string;
+  folderGrant?: FolderGrantRequest;
+  authorizedByFolderGrant?: boolean;
 }
 
 export class PermissionGate {
   constructor(
     private readonly policy: PermissionPolicy,
     private readonly workspaceRoot?: string,
+    private readonly folderGrants?: FolderGrantManager,
   ) {}
 
   check(call: ToolCall): PermissionCheckResult {
@@ -35,11 +43,22 @@ export class PermissionGate {
       };
     }
 
+    const folderGrant = this.outsideFolderGrant(call);
+    if (folderGrant && this.folderGrants?.allows(folderGrant)) {
+      return {
+        decision: "allow",
+        reason: `Folder access was previously granted: ${folderGrant.folder}`,
+        folderGrant,
+        authorizedByFolderGrant: true,
+      };
+    }
+
     const outsidePath = this.outsideWorkspacePath(call);
     if (outsidePath) {
       return {
         decision: "ask",
         reason: `Access outside the workspace requires approval: ${outsidePath}`,
+        ...(folderGrant ? { folderGrant } : {}),
       };
     }
 
@@ -89,7 +108,7 @@ export class PermissionGate {
           segment === "node_modules" ||
           segment === ".env" ||
           segment.startsWith(".env."),
-      );
+      ) || containsPermissionStore(segments);
     });
   }
 
@@ -104,8 +123,13 @@ export class PermissionGate {
   private commandReferencesDeniedPath(call: ToolCall): boolean {
     const command = String(call.args.command ?? "").replaceAll("\\", "/");
 
-    return /(?:^|[\s"'=])(?:[^\s"';&|<>]*\/)*(?:\.git|node_modules|\.env(?:\.[^/\s"';&|<>]*)?)(?:\/|$|[\s"'])/i.test(
-      command,
+    return (
+      /(?:^|[\s"'=])(?:[^\s"';&|<>]*\/)*(?:\.git|node_modules|\.env(?:\.[^/\s"';&|<>]*)?)(?:\/|$|[\s"'])/i.test(
+        command,
+      ) ||
+      /(?:^|[\s"'=])(?:[^\s"';&|<>]*\/)*\.harness\/permissions(?:\/|$|[\s"'])/i.test(
+        command,
+      )
     );
   }
 
@@ -134,6 +158,47 @@ export class PermissionGate {
       .map((candidate) => path.resolve(this.workspaceRoot!, candidate))
       .find((candidate) => !isWithin(this.workspaceRoot!, candidate));
   }
+
+  private outsideFolderGrant(
+    call: ToolCall,
+  ): FolderGrantRequest | undefined {
+    if (!this.workspaceRoot) {
+      return undefined;
+    }
+
+    let candidate: string | undefined;
+    let access: FolderGrantRequest["access"] | undefined;
+    if (["Read", "Write", "Edit"].includes(call.name)) {
+      if (typeof call.args.file_path !== "string") {
+        return undefined;
+      }
+      candidate = path.dirname(
+        path.resolve(this.workspaceRoot, call.args.file_path),
+      );
+      access = call.name === "Read" ? "read" : "read_write";
+    } else if (["Grep", "Glob"].includes(call.name)) {
+      if (typeof call.args.path !== "string") {
+        return undefined;
+      }
+      candidate = path.resolve(this.workspaceRoot, call.args.path);
+      access = "read";
+    }
+
+    if (!candidate || !access || isWithin(this.workspaceRoot, candidate)) {
+      return undefined;
+    }
+    return { folder: candidate, access };
+  }
+
+  async grantFolder(
+    request: FolderGrantRequest,
+    scope: FolderGrantScope,
+  ): Promise<void> {
+    if (!this.folderGrants) {
+      throw new Error("Folder permission storage is unavailable.");
+    }
+    await this.folderGrants.grant(request, scope);
+  }
 }
 
 const READONLY_COMMANDS = [
@@ -161,5 +226,12 @@ function isWithin(root: string, target: string): boolean {
     (!relative.startsWith(`..${path.sep}`) &&
       relative !== ".." &&
       !path.isAbsolute(relative))
+  );
+}
+
+function containsPermissionStore(segments: string[]): boolean {
+  return segments.some(
+    (segment, index) =>
+      segment === ".harness" && segments[index + 1] === "permissions",
   );
 }

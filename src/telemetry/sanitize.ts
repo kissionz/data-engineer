@@ -219,7 +219,13 @@ export function sanitizeTelemetryEvent(value: unknown): TelemetryEvent {
         decision: requireEnum(
           event.decision,
           "decision",
-          ["reject", "allow_once", "allow_session"] as const,
+          [
+            "reject",
+            "allow_once",
+            "allow_session",
+            "allow_folder_session",
+            "allow_folder_always",
+          ] as const,
         ),
         durationMs: count(event.durationMs, "durationMs"),
       };

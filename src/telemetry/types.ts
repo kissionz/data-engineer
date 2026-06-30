@@ -12,7 +12,12 @@ export type TelemetryOutcome =
   | "rejected";
 
 export type ToolEffect = "readonly" | "side_effect" | "unknown";
-export type PermissionDecision = "reject" | "allow_once" | "allow_session";
+export type PermissionDecision =
+  | "reject"
+  | "allow_once"
+  | "allow_session"
+  | "allow_folder_session"
+  | "allow_folder_always";
 export type CompactionTrigger = "token_limit" | "manual" | "automatic";
 export type CancellationSource = "user" | "timeout" | "system" | "parent";
 export type CancellationPhase =

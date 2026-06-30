@@ -47,6 +47,7 @@ export class WriteTool implements Tool {
         args.content,
         {
           allowOutside: context?.userApproved === true,
+          outsideRoot: context?.approvedFolder,
           signal: context?.signal,
         },
       );

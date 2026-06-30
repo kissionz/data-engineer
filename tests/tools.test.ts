@@ -119,6 +119,35 @@ describe("P0 tools", () => {
     expect(await readFile(outsidePath, "utf8")).toBe("second version");
   });
 
+  it.runIf(process.platform !== "win32")(
+    "does not let a folder grant follow a symlink outside that folder",
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+      const approved = await mkdtemp(
+        path.join(os.tmpdir(), "harness-approved-"),
+      );
+      const unapproved = await mkdtemp(
+        path.join(os.tmpdir(), "harness-unapproved-"),
+      );
+      const secretPath = path.join(unapproved, "secret.txt");
+      const linkPath = path.join(approved, "linked-secret.txt");
+      await writeFile(secretPath, "outside approved folder", "utf8");
+      await symlink(secretPath, linkPath);
+
+      const result = await new ReadTool(new Workspace(root)).execute(
+        { file_path: linkPath },
+        {
+          toolCallId: "folder-grant-symlink",
+          userApproved: true,
+          approvedFolder: approved,
+        },
+      );
+
+      expect(result.ok).toBe(false);
+      expect(result.content).not.toContain("outside approved folder");
+    },
+  );
+
   it("edits only unique exact strings", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
     const filePath = path.join(root, "sample.txt");

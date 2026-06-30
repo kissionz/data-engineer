@@ -68,4 +68,29 @@ describe("restoreInputAfterApproval", () => {
       (approve as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? 0,
     );
   });
+
+  it("passes recursive folder scope through the approval wrapper", async () => {
+    const approve: ApprovalFunction = vi
+      .fn()
+      .mockResolvedValue("allow_folder_session");
+    const folderGrant = {
+      folder: "/shared/project",
+      access: "read" as const,
+    };
+    const wrapped = restoreInputAfterApproval(approve, vi.fn());
+
+    await wrapped(
+      call,
+      "External path requires approval.",
+      undefined,
+      folderGrant,
+    );
+
+    expect(approve).toHaveBeenCalledWith(
+      call,
+      "External path requires approval.",
+      undefined,
+      folderGrant,
+    );
+  });
 });

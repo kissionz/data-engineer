@@ -101,13 +101,26 @@ export type SessionEvent = SessionEventEnvelope &
       fingerprint: string;
       scope: string;
       reason: string;
+      folderGrant?: {
+        folder: string;
+        access: "read" | "read_write";
+      };
     }
   | {
       type: "approval_resolved";
       toolCallId: string;
       fingerprint: string;
       scope: string;
-      decision: "reject" | "allow_once" | "allow_session";
+      decision:
+        | "reject"
+        | "allow_once"
+        | "allow_session"
+        | "allow_folder_session"
+        | "allow_folder_always";
+      folderGrant?: {
+        folder: string;
+        access: "read" | "read_write";
+      };
     }
   | {
       type: "tool_execution_started";
@@ -180,13 +193,26 @@ export type SessionEventInput =
       fingerprint: string;
       scope: string;
       reason: string;
+      folderGrant?: {
+        folder: string;
+        access: "read" | "read_write";
+      };
     }
   | {
       type: "approval_resolved";
       toolCallId: string;
       fingerprint: string;
       scope: string;
-      decision: "reject" | "allow_once" | "allow_session";
+      decision:
+        | "reject"
+        | "allow_once"
+        | "allow_session"
+        | "allow_folder_session"
+        | "allow_folder_always";
+      folderGrant?: {
+        folder: string;
+        access: "read" | "read_write";
+      };
     }
   | {
       type: "tool_execution_started";

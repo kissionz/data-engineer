@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -25,6 +25,7 @@ import {
 } from "../src/model/base.js";
 import { HookManager } from "../src/hooks/manager.js";
 import { PermissionGate } from "../src/permissions/gate.js";
+import { FolderGrantManager } from "../src/permissions/folderGrants.js";
 import { defaultPolicy } from "../src/permissions/policy.js";
 import { Workspace } from "../src/runtime/workspace.js";
 import type {
@@ -93,6 +94,42 @@ class BashTwiceModel implements ModelClient {
       };
     }
 
+    return { finalText: "done" };
+  }
+}
+
+class ReadTwoExternalFilesModel implements ModelClient {
+  private step = 0;
+
+  constructor(
+    private readonly firstPath: string,
+    private readonly secondPath: string,
+  ) {}
+
+  async complete(): Promise<AgentResponse> {
+    this.step += 1;
+    if (this.step === 1) {
+      return {
+        toolCalls: [
+          {
+            id: "external-read-1",
+            name: "Read",
+            args: { file_path: this.firstPath },
+          },
+        ],
+      };
+    }
+    if (this.step === 2) {
+      return {
+        toolCalls: [
+          {
+            id: "external-read-2",
+            name: "Read",
+            args: { file_path: this.secondPath },
+          },
+        ],
+      };
+    }
     return { finalText: "done" };
   }
 }
@@ -769,6 +806,77 @@ describe("AgentLoop", () => {
     expect(approvalCount).toBe(2);
   });
 
+  it("reuses an approved folder for descendant file calls", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "harness-shared-"));
+    const nested = path.join(outside, "nested");
+    await mkdir(nested, { recursive: true });
+    const firstPath = path.join(outside, "first.txt");
+    const secondPath = path.join(nested, "second.txt");
+    await writeFile(firstPath, "first", "utf8");
+    await writeFile(secondPath, "second", "utf8");
+    const tools = new ToolRegistry();
+    tools.register(new ReadTool(new Workspace(root)));
+    const grants = await FolderGrantManager.load(
+      path.join(root, "folder-grants.json"),
+    );
+    let approvalCount = 0;
+
+    const loop = new AgentLoop(
+      new ReadTwoExternalFilesModel(firstPath, secondPath),
+      tools,
+      new PermissionGate(defaultPolicy(), root, grants),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async (_call, _reason, _signal, folderGrant) => {
+        approvalCount += 1;
+        expect(folderGrant).toEqual({
+          folder: outside,
+          access: "read",
+        });
+        return "allow_folder_session";
+      },
+    );
+
+    await expect(loop.run("read shared files")).resolves.toBe("done");
+    expect(approvalCount).toBe(1);
+  });
+
+  it("persists an always-allow folder decision across managers", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "harness-shared-"));
+    const filePath = path.join(outside, "first.txt");
+    const grantPath = path.join(root, "permissions", "folder-grants.json");
+    await writeFile(filePath, "first", "utf8");
+    const tools = new ToolRegistry();
+    tools.register(new ReadTool(new Workspace(root)));
+    const grants = await FolderGrantManager.load(grantPath);
+
+    const loop = new AgentLoop(
+      new SingleToolThenDoneModel({
+        id: "persistent-folder-read",
+        name: "Read",
+        args: { file_path: filePath },
+      }),
+      tools,
+      new PermissionGate(defaultPolicy(), root, grants),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, ".harness", "sessions", "test.jsonl")),
+      10,
+      async () => "allow_folder_always",
+    );
+
+    await expect(loop.run("remember shared folder")).resolves.toBe("done");
+    const reloaded = await FolderGrantManager.load(grantPath);
+    expect(
+      reloaded.allows({
+        folder: path.join(outside, "nested"),
+        access: "read",
+      }),
+    ).toBe(true);
+  });
+
   it("executes duplicate tool call ids only once in the same response", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
     const bash = new FakeBashTool();
@@ -1050,6 +1158,66 @@ describe("AgentLoop", () => {
     await expect(loop.run("reuse exact approval")).resolves.toBe("done");
     expect(approvals).toBe(0);
     expect(bash.executions).toBe(1);
+  });
+
+  it("restores a recursive folder approval for the resumed session", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "harness-shared-"));
+    const nested = path.join(outside, "nested");
+    await mkdir(nested);
+    const originalPath = path.join(outside, "first.txt");
+    const nextPath = path.join(nested, "second.txt");
+    await writeFile(originalPath, "first", "utf8");
+    await writeFile(nextPath, "second", "utf8");
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const store = new SessionStore(sessionPath);
+    const original = {
+      id: "folder-approved-original",
+      name: "Read",
+      args: { file_path: originalPath },
+    };
+    const fingerprint = testFingerprint(original);
+    await store.append({ type: "assistant_tool_calls", toolCalls: [original] });
+    await store.append({
+      type: "approval_resolved",
+      toolCallId: original.id,
+      fingerprint,
+      scope: fingerprint,
+      decision: "allow_folder_session",
+      folderGrant: { folder: outside, access: "read" },
+    });
+    await store.append({
+      type: "tool_result",
+      toolCallId: original.id,
+      name: original.name,
+      ok: true,
+      content: "previously completed",
+    });
+    const grants = await FolderGrantManager.load(
+      path.join(root, "folder-grants.json"),
+    );
+    const tools = new ToolRegistry();
+    tools.register(new ReadTool(new Workspace(root)));
+    let approvals = 0;
+    const loop = new AgentLoop(
+      new SingleToolThenDoneModel({
+        id: "folder-approved-reuse",
+        name: "Read",
+        args: { file_path: nextPath },
+      }),
+      tools,
+      new PermissionGate(defaultPolicy(), root, grants),
+      new ContextBuilder(root),
+      store,
+      10,
+      async () => {
+        approvals += 1;
+        return "reject";
+      },
+    );
+
+    await expect(loop.run("reuse folder approval")).resolves.toBe("done");
+    expect(approvals).toBe(0);
   });
 
   it("stops before a tool when its execution budget is exhausted", async () => {

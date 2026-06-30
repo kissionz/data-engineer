@@ -36,6 +36,10 @@ import {
 } from "./permissions/approval.js";
 import { defaultPolicy } from "./permissions/policy.js";
 import { PermissionGate } from "./permissions/gate.js";
+import {
+  defaultFolderGrantPath,
+  FolderGrantManager,
+} from "./permissions/folderGrants.js";
 import { loadEnvFile } from "./runtime/env.js";
 import { DockerAvailabilityChecker } from "./runtime/dockerAvailability.js";
 import { DockerShellExecutor } from "./runtime/dockerShellExecutor.js";
@@ -233,6 +237,9 @@ async function main(): Promise<void> {
   const memory = memoryEnabled
     ? new MemoryService(memoryPathsForWorkspace(workspaceRoot))
     : undefined;
+  const folderGrants = await FolderGrantManager.load(
+    defaultFolderGrantPath(),
+  );
   const telemetry =
     userConfig.telemetry?.enabled === false
       ? noopTelemetrySink
@@ -435,6 +442,7 @@ async function main(): Promise<void> {
       runtimeCapabilities,
       httpFetch: userConfig.httpFetch,
       compaction: userConfig.compaction,
+      folderGrants,
     });
     return { session, ...created };
   };
@@ -540,6 +548,7 @@ interface CreateAgentOptions {
   runtimeCapabilities: RuntimeCapabilities;
   httpFetch?: HttpFetchConfig;
   compaction?: UserConfig["compaction"];
+  folderGrants: FolderGrantManager;
 }
 
 async function createShellExecutorFactory(
@@ -698,7 +707,11 @@ function createAgent(
   const agent = new AgentLoop(
     model,
     tools,
-    new PermissionGate(permissionPolicy, options.workspaceRoot),
+    new PermissionGate(
+      permissionPolicy,
+      options.workspaceRoot,
+      options.folderGrants,
+    ),
     new ContextBuilder(
       options.workspaceRoot,
       maxRecentEvents,

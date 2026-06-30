@@ -505,9 +505,15 @@ export class AgentLoop {
                 fingerprint,
                 scope: fingerprint,
                 reason: check.reason,
+                folderGrant: check.folderGrant,
               });
               await this.recordStatus("waiting_for_approval");
-              const approval = await this.approve(call, check.reason, signal);
+              const approval = await this.approve(
+                call,
+                check.reason,
+                signal,
+                check.folderGrant,
+              );
               throwIfCancelled(signal);
               await this.session.append({
                 type: "approval_resolved",
@@ -515,6 +521,7 @@ export class AgentLoop {
                 fingerprint,
                 scope: fingerprint,
                 decision: approval,
+                folderGrant: check.folderGrant,
               });
               await this.recordStatus("running");
 
@@ -527,6 +534,7 @@ export class AgentLoop {
                 fingerprint,
                 signal,
                 budget,
+                check.folderGrant,
               );
             } else {
               this.reporter.onToolStatus(call, "running");
@@ -534,10 +542,14 @@ export class AgentLoop {
                 call,
                 fingerprint,
                 signal,
-                this.hasSessionApproval(call),
+                this.hasSessionApproval(call) ||
+                  check.authorizedByFolderGrant === true,
                 budget,
                 accountingNamespace,
                 explicitSubagentRequest,
+                check.authorizedByFolderGrant
+                  ? check.folderGrant?.folder
+                  : undefined,
               );
             }
 
@@ -727,6 +739,7 @@ export class AgentLoop {
     budget?: AgentBudgetTracker,
     taskRunId?: string,
     explicitSubagentRequest = false,
+    approvedFolder?: string,
   ): Promise<ToolExecutionResult> {
     try {
       return await this.tools.execute(name, args, {
@@ -735,6 +748,7 @@ export class AgentLoop {
         userApproved,
         taskRunId,
         explicitSubagentRequest,
+        approvedFolder,
         budget,
       });
     } catch (error: unknown) {
@@ -754,6 +768,10 @@ export class AgentLoop {
     fingerprint: string,
     signal?: AbortSignal,
     budget?: AgentBudgetTracker,
+    folderGrant?: {
+      folder: string;
+      access: "read" | "read_write";
+    },
   ): Promise<ToolExecutionResult> {
     if (approval === "reject") {
       return {
@@ -761,6 +779,33 @@ export class AgentLoop {
         content: "User rejected tool call.",
         data: { reason: "user_rejected" },
       };
+    }
+
+    if (
+      approval === "allow_folder_session" ||
+      approval === "allow_folder_always"
+    ) {
+      if (!folderGrant) {
+        return {
+          ok: false,
+          content: "Folder approval is unavailable for this tool call.",
+          data: { reason: "invalid_folder_approval" },
+        };
+      }
+      try {
+        await this.permissions.grantFolder(
+          folderGrant,
+          approval === "allow_folder_always" ? "always" : "session",
+        );
+      } catch (error: unknown) {
+        return {
+          ok: false,
+          content: `Unable to store folder approval: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          data: { reason: "folder_approval_store_failed" },
+        };
+      }
     }
 
     if (
@@ -776,6 +821,9 @@ export class AgentLoop {
       signal,
       true,
       budget,
+      undefined,
+      false,
+      folderGrant?.folder,
     );
   }
 
@@ -787,6 +835,7 @@ export class AgentLoop {
     budget?: AgentBudgetTracker,
     taskRunId?: string,
     explicitSubagentRequest = false,
+    approvedFolder?: string,
   ): Promise<ToolExecutionResult> {
     await this.session.append({
       type: "tool_execution_started",
@@ -803,6 +852,7 @@ export class AgentLoop {
       budget,
       taskRunId,
       explicitSubagentRequest,
+      approvedFolder,
     );
   }
 
@@ -891,6 +941,20 @@ export class AgentLoop {
         sessionApprovalAllowed(record.call)
       ) {
         this.sessionApprovals.add(event.scope);
+      } else if (
+        event.type === "approval_resolved" &&
+        event.decision === "allow_folder_session" &&
+        event.folderGrant &&
+        record?.fingerprint === event.fingerprint &&
+        !record.collision
+      ) {
+        const checked = this.permissions.check(record.call).folderGrant;
+        if (
+          checked?.folder === event.folderGrant.folder &&
+          checked.access === event.folderGrant.access
+        ) {
+          await this.permissions.grantFolder(checked, "session");
+        }
       }
     }
   }
@@ -988,6 +1052,7 @@ export class AgentLoop {
             record.call,
             request.reason,
             signal,
+            check.folderGrant,
           );
           throwIfCancelled(signal);
           await this.session.append({
@@ -996,29 +1061,19 @@ export class AgentLoop {
             fingerprint: record.fingerprint,
             scope: record.fingerprint,
             decision: approval,
+            folderGrant: check.folderGrant,
           });
 
-          if (approval === "reject") {
-            result = {
-              ok: false,
-              content: "User rejected recovered tool call.",
-              data: { reason: "user_rejected" },
-            };
-          } else {
-            if (
-              approval === "allow_session" &&
-              sessionApprovalAllowed(record.call)
-            ) {
-              this.sessionApprovals.add(record.fingerprint);
-            }
+          result = await this.executeApprovedTool(
+            approval,
+            record.call,
+            record.fingerprint,
+            signal,
+            budget,
+            check.folderGrant,
+          );
+          if (approval !== "reject") {
             this.reporter.onToolStatus(record.call, "running");
-            result = await this.executeTrackedTool(
-              record.call,
-              record.fingerprint,
-              signal,
-              true,
-              budget,
-            );
             if (!signal?.aborted) {
               result = await this.emitObservationalHook(
                 "AfterToolUse",

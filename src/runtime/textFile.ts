@@ -58,6 +58,7 @@ interface ReadOptions {
   maxBytes?: number;
   forEdit?: boolean;
   allowOutside?: boolean;
+  outsideRoot?: string;
   signal?: AbortSignal;
 }
 
@@ -68,6 +69,7 @@ interface ReplaceOptions {
 interface CreateOptions {
   maxBytes?: number;
   allowOutside?: boolean;
+  outsideRoot?: string;
   signal?: AbortSignal;
   mode?: number;
 }
@@ -85,7 +87,10 @@ export async function readTextFileSnapshot(
   try {
     throwIfCancelled(options.signal);
     const maxBytes = normalizeMaxBytes(options.maxBytes);
-    const accessOptions = { allowOutside: options.allowOutside === true };
+    const accessOptions = {
+      allowOutside: options.allowOutside === true,
+      outsideRoot: options.outsideRoot,
+    };
     const absolutePath = workspace.resolve(userPath, accessOptions);
     const accessRoot = traversalRoot(
       workspace.root,
@@ -253,7 +258,10 @@ export async function atomicCreateTextFile(
 ): Promise<TextFileSnapshot> {
   const maxBytes = normalizeMaxBytes(options.maxBytes);
   const bytes = encodeText(text, maxBytes, userPath);
-  const accessOptions = { allowOutside: options.allowOutside === true };
+  const accessOptions = {
+    allowOutside: options.allowOutside === true,
+    outsideRoot: options.outsideRoot,
+  };
   const absolutePath = workspace.resolve(userPath, accessOptions);
   const directory = path.dirname(absolutePath);
   const accessRoot = traversalRoot(workspace.root, directory, directory);
