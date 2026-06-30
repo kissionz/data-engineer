@@ -327,7 +327,7 @@ npm run eval -- --suite evals/deterministic.v1.json \
 
 Memory 与会话恢复不是同一机制：Memory 用于跨会话保留明确的信息；`.harness/sessions/` 中的事件日志用于当前任务的连续性和恢复。
 
-文件工具默认只能访问当前工作区。若 `Read`、`Write`、`Edit`、`Grep`、`Glob`
+文件工具默认只能访问当前工作区。若 `ListDirectory`、`Read`、`Write`、`Edit`、`Grep`、`Glob`
 或 Bash 的 `cwd` 明确指向工作区外路径，Harness 会先展示目标路径并请求用户批准。
 `.git`、`node_modules`、`.env*` 等敏感路径仍会直接拒绝，工作区内的 symlink
 也不能借此逃逸到外部目录。
@@ -338,6 +338,11 @@ Memory 与会话恢复不是同一机制：Memory 用于跨会话保留明确的
 但不会匹配名称前缀相同的兄弟目录。持久化授权保存在
 `~/.harness/permissions/folder-grants.json`，不受仓库控制。Bash 仍使用原有的
 逐调用或会话审批，不继承文件工具的文件夹授权。
+
+已授权的外部根目录会作为运行时能力元数据提供给模型，因此模型可以先用
+`ListDirectory` 查看直属文件和子目录，再用 `Glob` 递归发现文件。外部目录结果
+使用可直接传给后续工具的绝对路径。未授权且模型未知的目录不会被自动扫描；
+首次访问仍需用户给出起始路径并完成授权。
 
 ## MCP 集成
 
@@ -462,7 +467,7 @@ MCP tool 会获得稳定且符合 provider 要求的名称，并使用完整 JSO
 
 ### 工具与权限
 
-模型可用的内置工具包括 `Read`、`Grep`、`Glob`、`Write`、`Edit`、`Bash`（按 sandbox 配置决定是否注册）、`GitStatus`、`GitDiff`、Todo、Memory、Project Skills 和只读 `Task` 子代理。
+模型可用的内置工具包括 `ListDirectory`、`Read`、`Grep`、`Glob`、`Write`、`Edit`、`Bash`（按 sandbox 配置决定是否注册）、`GitStatus`、`GitDiff`、Todo、Memory、Project Skills 和只读 `Task` 子代理。
 
 工具名和参数会先按照发送给模型的同一份 JSON Schema 校验，再进入 hooks 和权限流程。未知工具或格式错误的调用会作为可恢复失败返回给模型，不会弹出授权请求。
 

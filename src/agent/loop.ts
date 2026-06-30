@@ -1339,6 +1339,7 @@ function stableSerialize(value: unknown): string {
 function toolEffect(name: string): "readonly" | "side_effect" {
   return [
     "Read",
+    "ListDirectory",
     "Grep",
     "Glob",
     "GitStatus",

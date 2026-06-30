@@ -12,6 +12,7 @@ export function defaultPolicy(): PermissionPolicy {
   return {
     allowedTools: new Set([
       "Read",
+      "ListDirectory",
       "Grep",
       "Glob",
       "Write",

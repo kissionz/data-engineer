@@ -16,7 +16,7 @@ import { fileOperationFailure } from "./fileErrors.js";
 export class EditTool implements Tool {
   name = "Edit";
   description =
-    "Atomically replace an exact string in a UTF-8 text file. Pass the sha256 from Read as expected_hash.";
+    "Atomically replace an exact string in a UTF-8 text file. Absolute paths outside the workspace may be requested and will use the folder approval flow. Pass the sha256 from Read as expected_hash.";
 
   inputSchema = {
     type: "object",

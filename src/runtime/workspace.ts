@@ -39,6 +39,10 @@ export class Workspace {
     return path.relative(this.root, absPath);
   }
 
+  contains(absPath: string): boolean {
+    return isWithin(this.root, path.resolve(absPath));
+  }
+
   async assertRealPathWithin(
     absPath: string,
     options: WorkspaceAccessOptions = {},

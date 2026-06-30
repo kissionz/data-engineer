@@ -11,7 +11,7 @@ import { fileOperationFailure } from "./fileErrors.js";
 export class WriteTool implements Tool {
   name = "Write";
   description =
-    "Atomically create a UTF-8 text file in an existing workspace directory. Existing files cannot be overwritten.";
+    "Atomically create a UTF-8 text file in an existing directory. Absolute paths outside the workspace may be requested and will use the folder approval flow. Existing files cannot be overwritten.";
 
   inputSchema = {
     type: "object",

@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ContextBuilder } from "../src/agent/context.js";
 import { MemoryService } from "../src/memory/service.js";
+import { FolderGrantManager } from "../src/permissions/folderGrants.js";
 import { SkillLoader } from "../src/skills/loader.js";
 import type { SessionEvent } from "../src/agent/types.js";
 
@@ -23,6 +24,34 @@ describe("ContextBuilder", () => {
         "Use npm test.",
       ].join("\n"),
     });
+  });
+
+  it("exposes authorized external folder roots as capability metadata", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
+    const outside = path.join(os.tmpdir(), "authorized-shared");
+    const grants = await FolderGrantManager.load(
+      path.join(root, "folder-grants.json"),
+    );
+    await grants.grant({ folder: outside, access: "read" }, "session");
+
+    const messages = await new ContextBuilder(
+      root,
+      30,
+      undefined,
+      undefined,
+      undefined,
+      grants,
+    ).build([]);
+    const serialized = JSON.stringify(messages);
+
+    expect(serialized).toContain("Runtime-authorized external folders");
+    expect(serialized).toContain(outside);
+    expect(serialized).toContain("ListDirectory");
+    expect(
+      messages.some((message) =>
+        message.content.includes('"scope": "session"'),
+      ),
+    ).toBe(true);
   });
 
   it("adds metadata-only skill recommendations without auto-loading content", async () => {

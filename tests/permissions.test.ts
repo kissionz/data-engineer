@@ -28,6 +28,7 @@ describe("PermissionGate", () => {
 
     for (const name of [
       "Glob",
+      "ListDirectory",
       "GitStatus",
       "GitDiff",
       "TodoRead",

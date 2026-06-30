@@ -29,6 +29,9 @@ describe("FolderGrantManager", () => {
         access: "read_write",
       }),
     ).toBe(false);
+    expect(manager.list()).toEqual([
+      { folder, access: "read", scope: "session" },
+    ]);
     expect(
       manager.allows({
         folder: path.join(root, "shared-copy"),

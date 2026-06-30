@@ -176,7 +176,7 @@ export class PermissionGate {
         path.resolve(this.workspaceRoot, call.args.file_path),
       );
       access = call.name === "Read" ? "read" : "read_write";
-    } else if (["Grep", "Glob"].includes(call.name)) {
+    } else if (["ListDirectory", "Grep", "Glob"].includes(call.name)) {
       if (typeof call.args.path !== "string") {
         return undefined;
       }

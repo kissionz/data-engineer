@@ -8,7 +8,8 @@ import type {
 
 export class GrepTool implements Tool {
   name = "Grep";
-  description = "Search text in workspace files using ripgrep.";
+  description =
+    "Search text with ripgrep. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
 
   inputSchema = {
     type: "object",

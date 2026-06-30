@@ -20,6 +20,10 @@ export interface FolderGrantRequest {
   access: FolderGrantAccess;
 }
 
+export interface VisibleFolderGrant extends FolderGrantRequest {
+  scope: FolderGrantScope;
+}
+
 interface FolderGrantRecord extends FolderGrantRequest {
   createdAt: string;
 }
@@ -60,6 +64,29 @@ export class FolderGrantManager {
       (grant) =>
         accessAllows(grant.access, normalized.access) &&
         isWithin(grant.folder, normalized.folder),
+    );
+  }
+
+  list(): VisibleFolderGrant[] {
+    const visible = new Map<string, VisibleFolderGrant>();
+    for (const grant of this.sessionGrants) {
+      visible.set(`${grant.folder}\0${grant.access}`, {
+        folder: grant.folder,
+        access: grant.access,
+        scope: "session",
+      });
+    }
+    for (const grant of this.globalGrants) {
+      visible.set(`${grant.folder}\0${grant.access}`, {
+        folder: grant.folder,
+        access: grant.access,
+        scope: "always",
+      });
+    }
+    return [...visible.values()].sort(
+      (left, right) =>
+        left.folder.localeCompare(right.folder) ||
+        left.access.localeCompare(right.access),
     );
   }
 

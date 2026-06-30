@@ -8,7 +8,8 @@ import type {
 
 export class GlobTool implements Tool {
   name = "Glob";
-  description = "Find workspace files by glob pattern.";
+  description =
+    "Find files recursively by glob pattern. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
 
   inputSchema = {
     type: "object",
@@ -73,7 +74,9 @@ export class GlobTool implements Tool {
     const files = result.stdout
       .split(/\r?\n/)
       .filter(Boolean)
-      .map((file) => this.workspace.relative(file))
+      .map((file) =>
+        this.workspace.contains(file) ? this.workspace.relative(file) : file,
+      )
       .slice(0, limit);
     const totalLines = result.stdout.split(/\r?\n/).filter(Boolean).length;
 

@@ -12,7 +12,8 @@ import { fileOperationFailure } from "./fileErrors.js";
 
 export class ReadTool implements Tool {
   name = "Read";
-  description = "Read a text file from the workspace.";
+  description =
+    "Read a UTF-8 text file. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
 
   inputSchema = {
     type: "object",

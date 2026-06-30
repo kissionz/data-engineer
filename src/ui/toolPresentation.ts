@@ -11,6 +11,10 @@ export function summarizeToolCall(call: ToolCall): string {
     return `Grep "${pattern}" in ${searchPath}`;
   }
 
+  if (call.name === "ListDirectory") {
+    return `List directory ${compact(String(call.args.path ?? "."))}`;
+  }
+
   if (call.name === "Glob") {
     const pattern = compact(String(call.args.pattern ?? "**/*"), 60);
     const searchPath = compact(String(call.args.path ?? "."));

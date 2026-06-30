@@ -62,6 +62,7 @@ import { EditTool } from "./tools/edit.js";
 import { GitDiffTool, GitStatusTool } from "./tools/git.js";
 import { GlobTool } from "./tools/glob.js";
 import { GrepTool } from "./tools/grep.js";
+import { ListDirectoryTool } from "./tools/listDirectory.js";
 import { ReadTool } from "./tools/read.js";
 import { SkillListTool, SkillLoadTool } from "./tools/skill.js";
 import { EphemeralTaskTool, TaskTool } from "./tools/task.js";
@@ -624,6 +625,7 @@ function createAgent(
   hooks.register("BeforeToolUse", protectSensitiveWrites);
 
   tools.register(new ReadTool(options.workspace));
+  tools.register(new ListDirectoryTool(options.workspace));
   if (options.httpFetch?.enabled) {
     tools.register(
       new HttpFetchTool({
@@ -718,6 +720,7 @@ function createAgent(
       undefined,
       options.memory,
       skillLoader,
+      options.folderGrants,
     ),
     sessionStore,
     options.maxTurns,
