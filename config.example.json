@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "envFile": "/absolute/path/to/trusted/harness.env",
   "model": {
     "provider": "openai",
     "name": "gpt-4.1",

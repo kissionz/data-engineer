@@ -29,7 +29,7 @@ cp .env.example .env
 npm start -- --task "Inspect this project"
 ```
 
-`harness-ts` 默认加载 `--cwd` 工作区根目录中的 `.env`；文件不存在时继续使用当前进程环境。`--env-file` 可显式选择其他可信文件，相对路径仍以工作区为基准。shell 中已经设置的环境变量优先，不会被 env 文件覆盖。
+`harness-ts` 默认加载 `--cwd` 工作区根目录中的 `.env`；文件不存在时继续使用当前进程环境。`--env-file` 可显式选择其他可信文件，相对路径仍以工作区为基准。也可以在可信用户配置中设置 `envFile`，让从任意工作区启动的 `harness` 都加载同一个 env 文件。优先级为 `--env-file`、用户配置 `envFile`、工作区 `.env`；shell 中已经设置的环境变量始终优先，不会被 env 文件覆盖。
 
 默认使用真实的 OpenAI provider，必须提供 `OPENAI_API_KEY`。只想测试 Agent 循环而不发起 API 请求时，需要明确启用 mock provider：
 
@@ -146,6 +146,7 @@ npm start -- --resume 20260627-120000-a1b2c3
 ```json
 {
   "version": 1,
+  "envFile": "/absolute/path/to/trusted/harness.env",
   "model": {
     "provider": "openai",
     "name": "gpt-4.1",
@@ -169,7 +170,7 @@ npm start -- --resume 20260627-120000-a1b2c3
 }
 ```
 
-可通过 `--config <path>` 或 `HARNESS_CONFIG` 改用其他可信配置文件。API Key 和 MCP token 不得写入 JSON 配置，必须通过环境变量提供。
+可通过 `--config <path>` 或 `HARNESS_CONFIG` 改用其他可信配置文件。`envFile` 可以是绝对路径；相对路径以用户配置文件所在目录为基准。在 Windows JSON 中需要把反斜杠写成 `\\`，例如 `"envFile": "D:\\project\\data-engineer\\.env"`。API Key 和 MCP token 不得直接写入 JSON 配置，必须通过环境变量或 `envFile` 指向的可信文件提供。
 
 在 macOS 和 Linux 上，配置文件必须由当前用户拥有，并且不能对 group 或 others 开放写权限。Windows 不执行 Unix 文件所有者和 mode 检查，但仍应使用仅当前用户可访问的位置保存配置。
 
@@ -189,7 +190,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 npm start -- --env-file .env
 ```
 
-env-file 只负责把值加入进程环境，不会把它变成用户配置。不要提交含有真实密钥的 `.env`，也不要加载不可信仓库提供的 env-file。
+env-file 只负责把值加入进程环境，不会把它变成普通 JSON 配置。CLI `--env-file` 的优先级高于用户配置中的 `envFile`；两者都未设置时才尝试工作区 `.env`。显式设置在 shell 中的变量仍然具有最高优先级。不要提交含有真实密钥的 `.env`，也不要加载不可信仓库提供的 env-file。
 
 ### 配置优先级
 

@@ -135,6 +135,7 @@ const compactionSchema = z
 export const userConfigSchema = z
   .object({
     version: z.literal(1).default(1),
+    envFile: z.string().trim().min(1).max(4_000).optional(),
     model: z
       .object({
         provider: z.enum(["openai", "mock"]).optional(),

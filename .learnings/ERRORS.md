@@ -31,6 +31,38 @@ Locate the exact neighboring test before constructing an insertion patch.
 
 ---
 
+## [ERR-20260630-002] git_stage_sandbox_permission
+
+**Logged**: 2026-06-30T09:56:53Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Staging failed because the workspace sandbox denied creation of `.git/index.lock`.
+
+### Error
+```
+fatal: Unable to create '/Users/kissionz/Documents/data engineer/.git/index.lock': Operation not permitted
+```
+
+### Context
+- `git add` was run after build and test validation.
+- Source files were writable, but Git metadata writes required scoped escalation.
+
+### Suggested Fix
+Retry repository-mutating Git commands with the approved scoped Git prefix when the sandbox denies `.git` writes.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .git/index
+
+### Resolution
+- **Resolved**: 2026-06-30T09:56:53Z
+- **Notes**: Retried `git add` with scoped escalation; staging succeeded.
+
+---
+
 ## [ERR-20260629-002] ephemeral_subagent_contract
 
 **Logged**: 2026-06-29T07:28:47Z

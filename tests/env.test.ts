@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadEnvFile } from "../src/runtime/env.js";
+import { loadEnvFile, selectEnvFile } from "../src/runtime/env.js";
 
 const touchedKeys = ["HARNESS_TEST_KEY", "HARNESS_EXISTING_KEY"];
 
@@ -48,5 +48,58 @@ describe("loadEnvFile", () => {
     await expect(
       loadEnvFile(path.join(root, ".env"), { allowMissing: true }),
     ).resolves.toBeUndefined();
+  });
+
+  it("selects CLI, user-config, and workspace env files in precedence order", () => {
+    const workspaceRoot = path.join(os.tmpdir(), "workspace");
+    const configPath = path.join(os.tmpdir(), "home", ".harness", "config.json");
+
+    expect(
+      selectEnvFile({
+        workspaceRoot,
+        userConfigPath: configPath,
+        cliEnvFile: "task.env",
+        userEnvFile: "global.env",
+      }),
+    ).toEqual({
+      filePath: path.join(workspaceRoot, "task.env"),
+      allowMissing: false,
+      source: "cli",
+    });
+
+    expect(
+      selectEnvFile({
+        workspaceRoot,
+        userConfigPath: configPath,
+        userEnvFile: "global.env",
+      }),
+    ).toEqual({
+      filePath: path.join(os.tmpdir(), "home", ".harness", "global.env"),
+      allowMissing: false,
+      source: "user_config",
+    });
+
+    expect(
+      selectEnvFile({
+        workspaceRoot,
+        userConfigPath: configPath,
+      }),
+    ).toEqual({
+      filePath: path.join(workspaceRoot, ".env"),
+      allowMissing: true,
+      source: "workspace",
+    });
+  });
+
+  it("keeps an absolute user-config env file path unchanged", () => {
+    const envPath = path.resolve(os.tmpdir(), "shared", ".env");
+
+    expect(
+      selectEnvFile({
+        workspaceRoot: path.join(os.tmpdir(), "workspace"),
+        userConfigPath: path.join(os.tmpdir(), "home", ".harness", "config.json"),
+        userEnvFile: envPath,
+      }).filePath,
+    ).toBe(envPath);
   });
 });

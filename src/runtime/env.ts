@@ -1,7 +1,46 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 export interface LoadEnvFileOptions {
   allowMissing?: boolean;
+}
+
+export interface EnvFileSelection {
+  filePath: string;
+  allowMissing: boolean;
+  source: "cli" | "user_config" | "workspace";
+}
+
+export function selectEnvFile(options: {
+  workspaceRoot: string;
+  userConfigPath: string;
+  cliEnvFile?: string;
+  userEnvFile?: string;
+}): EnvFileSelection {
+  if (options.cliEnvFile) {
+    return {
+      filePath: path.resolve(options.workspaceRoot, options.cliEnvFile),
+      allowMissing: false,
+      source: "cli",
+    };
+  }
+
+  if (options.userEnvFile) {
+    return {
+      filePath: path.resolve(
+        path.dirname(path.resolve(options.userConfigPath)),
+        options.userEnvFile,
+      ),
+      allowMissing: false,
+      source: "user_config",
+    };
+  }
+
+  return {
+    filePath: path.join(path.resolve(options.workspaceRoot), ".env"),
+    allowMissing: true,
+    source: "workspace",
+  };
 }
 
 export async function loadEnvFile(

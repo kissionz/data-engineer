@@ -40,7 +40,7 @@ import {
   defaultFolderGrantPath,
   FolderGrantManager,
 } from "./permissions/folderGrants.js";
-import { loadEnvFile } from "./runtime/env.js";
+import { loadEnvFile, selectEnvFile } from "./runtime/env.js";
 import { DockerAvailabilityChecker } from "./runtime/dockerAvailability.js";
 import { DockerShellExecutor } from "./runtime/dockerShellExecutor.js";
 import { LocalCommandExecutor } from "./runtime/localExecutor.js";
@@ -189,15 +189,16 @@ async function main(): Promise<void> {
 
   const opts = program.opts<CliOptions>();
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
-  await loadEnvFile(
-    opts.envFile
-      ? path.resolve(sourceWorkspaceRoot, opts.envFile)
-      : path.join(sourceWorkspaceRoot, ".env"),
-    { allowMissing: !opts.envFile },
-  );
-  const userConfig = await loadUserConfig(
-    opts.config ?? process.env.HARNESS_CONFIG ?? defaultUserConfigPath(),
-  );
+  const userConfigPath =
+    opts.config ?? process.env.HARNESS_CONFIG ?? defaultUserConfigPath();
+  const userConfig = await loadUserConfig(userConfigPath);
+  const envFile = selectEnvFile({
+    workspaceRoot: sourceWorkspaceRoot,
+    userConfigPath,
+    cliEnvFile: opts.envFile,
+    userEnvFile: userConfig.envFile,
+  });
+  await loadEnvFile(envFile.filePath, { allowMissing: envFile.allowMissing });
   const provider = resolveStringOption(
     program,
     "provider",
@@ -970,9 +971,9 @@ function assertModelConfiguration(provider: string): void {
         "OPENAI_API_KEY is required for real model use.",
         "",
         "Set up your local environment:",
-        "  1. cp .env.example .env",
-        "  2. edit .env and set OPENAI_API_KEY=sk-...",
-        "  3. npm start -- --env-file .env --task \"Inspect this project\"",
+        "  1. Set OPENAI_API_KEY in the shell, or add it to a trusted env file.",
+        "  2. Select that file with --env-file or user config envFile.",
+        "  3. Otherwise, Harness loads .env from the workspace root.",
         "",
         "For loop-only development without an API call, run:",
         "  npm start -- --provider mock --task \"Inspect README.md\"",

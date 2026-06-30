@@ -27,6 +27,7 @@ describe("user config", () => {
       configPath,
       JSON.stringify({
         version: 1,
+        envFile: "/trusted/harness.env",
         model: {
           provider: "openai",
           name: "production-model",
@@ -84,6 +85,7 @@ describe("user config", () => {
     );
 
     await expect(loadUserConfig(configPath)).resolves.toMatchObject({
+      envFile: "/trusted/harness.env",
       model: {
         name: "production-model",
         pricing: { inputPerMillionTokens: 1.5 },
@@ -125,6 +127,7 @@ describe("user config", () => {
 
   it.each([
     [{ extra: true }, "Unrecognized key"],
+    [{ envFile: "   " }, "Too small"],
     [
       {
         httpFetch: {
