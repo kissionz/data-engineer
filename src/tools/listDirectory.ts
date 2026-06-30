@@ -1,5 +1,6 @@
 import { readdir } from "node:fs/promises";
 import path from "node:path";
+import { throwIfCancelled } from "../agent/cancellation.js";
 import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
@@ -12,12 +13,13 @@ interface DirectoryEntryResult {
   name: string;
   path: string;
   type: "directory" | "file" | "symlink" | "other";
+  depth: number;
 }
 
 export class ListDirectoryTool implements Tool {
   name = "ListDirectory";
   description =
-    "List immediate files and subdirectories. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
+    "List a directory tree, including nested files and subdirectories. Defaults to 3 levels; use max_depth to control recursion. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
   effect = "readonly" as const;
 
   inputSchema = {
@@ -25,6 +27,7 @@ export class ListDirectoryTool implements Tool {
     properties: {
       path: { type: "string" },
       limit: { type: "number" },
+      max_depth: { type: "number" },
     },
     additionalProperties: false,
   };
@@ -32,6 +35,7 @@ export class ListDirectoryTool implements Tool {
   constructor(
     private readonly workspace: Workspace,
     private readonly defaultLimit = 300,
+    private readonly defaultMaxDepth = 3,
   ) {}
 
   async execute(
@@ -41,8 +45,10 @@ export class ListDirectoryTool implements Tool {
     const requestedPath =
       typeof args.path === "string" && args.path ? args.path : ".";
     const limit = normalizeLimit(args.limit, this.defaultLimit);
+    const maxDepth = normalizeDepth(args.max_depth, this.defaultMaxDepth);
 
     try {
+      throwIfCancelled(context?.signal);
       const absolutePath = await this.workspace.resolveExistingDirectory(
         requestedPath,
         {
@@ -50,49 +56,33 @@ export class ListDirectoryTool implements Tool {
           outsideRoot: context?.approvedFolder,
         },
       );
-      const entries = (await readdir(absolutePath, { withFileTypes: true }))
-        .filter((entry) => !isSensitiveEntry(absolutePath, entry.name))
-        .map((entry): DirectoryEntryResult => {
-          const entryPath = path.join(absolutePath, entry.name);
-          return {
-            name: entry.name,
-            path: this.workspace.contains(entryPath)
-              ? this.workspace.relative(entryPath)
-              : entryPath,
-            type: entry.isDirectory()
-              ? "directory"
-              : entry.isFile()
-                ? "file"
-                : entry.isSymbolicLink()
-                  ? "symlink"
-                  : "other",
-          };
-        })
-        .sort(
-          (left, right) =>
-            typeOrder(left.type) - typeOrder(right.type) ||
-            left.name.localeCompare(right.name),
-        );
-      const selected = entries.slice(0, limit);
+      const { entries, truncated } = await listTree(
+        absolutePath,
+        maxDepth,
+        limit,
+        this.workspace,
+        context?.signal,
+      );
 
       return {
         ok: true,
         content:
-          selected.length === 0
+          entries.length === 0
             ? "[Empty directory]"
-            : selected
+            : entries
                 .map(
                   (entry) =>
-                    `${entry.type === "directory" ? "[D]" : entry.type === "file" ? "[F]" : entry.type === "symlink" ? "[L]" : "[?]"} ${entry.path}`,
+                    `${"  ".repeat(entry.depth - 1)}${entry.type === "directory" ? "[D]" : entry.type === "file" ? "[F]" : entry.type === "symlink" ? "[L]" : "[?]"} ${entry.path}`,
                 )
                 .join("\n"),
         data: {
           path: this.workspace.contains(absolutePath)
             ? this.workspace.relative(absolutePath) || "."
             : absolutePath,
-          entries: selected,
-          count: selected.length,
-          truncated: entries.length > limit,
+          entries,
+          count: entries.length,
+          maxDepth,
+          truncated,
         },
       };
     } catch (error: unknown) {
@@ -101,11 +91,82 @@ export class ListDirectoryTool implements Tool {
   }
 }
 
+async function listTree(
+  root: string,
+  maxDepth: number,
+  limit: number,
+  workspace: Workspace,
+  signal?: AbortSignal,
+): Promise<{ entries: DirectoryEntryResult[]; truncated: boolean }> {
+  const results: DirectoryEntryResult[] = [];
+  let truncated = false;
+
+  const visit = async (directory: string, depth: number): Promise<void> => {
+    throwIfCancelled(signal);
+    const entries = (await readdir(directory, { withFileTypes: true }))
+      .filter((entry) => !isSensitiveEntry(directory, entry.name))
+      .sort(
+        (left, right) =>
+          typeOrder(directoryEntryType(left)) -
+            typeOrder(directoryEntryType(right)) ||
+          left.name.localeCompare(right.name),
+      );
+
+    for (const entry of entries) {
+      throwIfCancelled(signal);
+      if (results.length >= limit) {
+        truncated = true;
+        return;
+      }
+      const entryPath = path.join(directory, entry.name);
+      const type = directoryEntryType(entry);
+      results.push({
+        name: entry.name,
+        path: workspace.contains(entryPath)
+          ? workspace.relative(entryPath)
+          : entryPath,
+        type,
+        depth,
+      });
+      if (type === "directory" && depth < maxDepth) {
+        await visit(entryPath, depth + 1);
+        if (truncated) {
+          return;
+        }
+      }
+    }
+  };
+
+  await visit(root, 1);
+  return { entries: results, truncated };
+}
+
 function normalizeLimit(value: unknown, fallback: number): number {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return fallback;
   }
   return Math.min(Math.max(Math.floor(value), 1), 2_000);
+}
+
+function normalizeDepth(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(Math.max(Math.floor(value), 1), 10);
+}
+
+function directoryEntryType(entry: {
+  isDirectory(): boolean;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+}): DirectoryEntryResult["type"] {
+  return entry.isDirectory()
+    ? "directory"
+    : entry.isFile()
+      ? "file"
+      : entry.isSymbolicLink()
+        ? "symlink"
+        : "other";
 }
 
 function typeOrder(type: DirectoryEntryResult["type"]): number {
