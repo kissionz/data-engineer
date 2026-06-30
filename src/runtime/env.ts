@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 export interface LoadEnvFileOptions {
   allowMissing?: boolean;
@@ -9,6 +10,26 @@ export interface EnvFileSelection {
   filePath: string;
   allowMissing: boolean;
   source: "cli" | "user_config" | "workspace";
+}
+
+export function runtimeEnvFilePath(moduleUrl: string): string {
+  return path.resolve(path.dirname(fileURLToPath(moduleUrl)), "..", ".env");
+}
+
+export async function loadStartupEnv(
+  selection: EnvFileSelection,
+  moduleUrl: string,
+): Promise<void> {
+  if (selection.source === "workspace") {
+    const runtimeEnvFile = runtimeEnvFilePath(moduleUrl);
+    if (runtimeEnvFile !== selection.filePath) {
+      await loadEnvFile(runtimeEnvFile, { allowMissing: true });
+    }
+  }
+
+  await loadEnvFile(selection.filePath, {
+    allowMissing: selection.allowMissing,
+  });
 }
 
 export function selectEnvFile(options: {

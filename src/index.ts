@@ -40,7 +40,10 @@ import {
   defaultFolderGrantPath,
   FolderGrantManager,
 } from "./permissions/folderGrants.js";
-import { loadEnvFile, selectEnvFile } from "./runtime/env.js";
+import {
+  loadStartupEnv,
+  selectEnvFile,
+} from "./runtime/env.js";
 import { DockerAvailabilityChecker } from "./runtime/dockerAvailability.js";
 import { DockerShellExecutor } from "./runtime/dockerShellExecutor.js";
 import { LocalCommandExecutor } from "./runtime/localExecutor.js";
@@ -198,7 +201,7 @@ async function main(): Promise<void> {
     cliEnvFile: opts.envFile,
     userEnvFile: userConfig.envFile,
   });
-  await loadEnvFile(envFile.filePath, { allowMissing: envFile.allowMissing });
+  await loadStartupEnv(envFile, import.meta.url);
   const provider = resolveStringOption(
     program,
     "provider",

@@ -1,10 +1,20 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
-import { loadEnvFile, selectEnvFile } from "../src/runtime/env.js";
+import {
+  loadEnvFile,
+  loadStartupEnv,
+  runtimeEnvFilePath,
+  selectEnvFile,
+} from "../src/runtime/env.js";
 
-const touchedKeys = ["HARNESS_TEST_KEY", "HARNESS_EXISTING_KEY"];
+const touchedKeys = [
+  "HARNESS_TEST_KEY",
+  "HARNESS_EXISTING_KEY",
+  "HARNESS_WORKSPACE_KEY",
+];
 
 describe("loadEnvFile", () => {
   afterEach(() => {
@@ -101,5 +111,55 @@ describe("loadEnvFile", () => {
         userEnvFile: envPath,
       }).filePath,
     ).toBe(envPath);
+  });
+
+  it("finds the env file beside the runtime source or dist directory", () => {
+    const projectRoot = path.join(os.tmpdir(), "harness-install");
+    const moduleUrl = pathToFileURL(
+      path.join(projectRoot, "dist", "index.js"),
+    ).href;
+
+    expect(runtimeEnvFilePath(moduleUrl)).toBe(
+      path.join(projectRoot, ".env"),
+    );
+  });
+
+  it("automatically loads runtime env and supplements it from workspace env", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-env-startup-"));
+    const runtimeRoot = path.join(root, "runtime");
+    const workspaceRoot = path.join(root, "workspace");
+    const moduleUrl = pathToFileURL(
+      path.join(runtimeRoot, "dist", "index.js"),
+    ).href;
+    await Promise.all([
+      mkdir(runtimeRoot, { recursive: true }),
+      mkdir(workspaceRoot, { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        path.join(runtimeRoot, ".env"),
+        "HARNESS_TEST_KEY=runtime\n",
+        "utf8",
+      ),
+      writeFile(
+        path.join(workspaceRoot, ".env"),
+        [
+          "HARNESS_TEST_KEY=workspace",
+          "HARNESS_WORKSPACE_KEY=workspace",
+        ].join("\n"),
+        "utf8",
+      ),
+    ]);
+
+    await loadStartupEnv(
+      selectEnvFile({
+        workspaceRoot,
+        userConfigPath: path.join(root, "home", ".harness", "config.json"),
+      }),
+      moduleUrl,
+    );
+
+    expect(process.env.HARNESS_TEST_KEY).toBe("runtime");
+    expect(process.env.HARNESS_WORKSPACE_KEY).toBe("workspace");
   });
 });

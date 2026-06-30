@@ -29,7 +29,7 @@ cp .env.example .env
 npm start -- --task "Inspect this project"
 ```
 
-`harness-ts` 默认加载 `--cwd` 工作区根目录中的 `.env`；文件不存在时继续使用当前进程环境。`--env-file` 可显式选择其他可信文件，相对路径仍以工作区为基准。也可以在可信用户配置中设置 `envFile`，让从任意工作区启动的 `harness` 都加载同一个 env 文件。优先级为 `--env-file`、用户配置 `envFile`、工作区 `.env`；shell 中已经设置的环境变量始终优先，不会被 env 文件覆盖。
+`harness-ts` 默认自动查找 Harness 安装或源码根目录中的 `.env`，因此通过 `npm link` 从其他项目启动时无需复制 API Key 或创建额外配置；随后还会从 `--cwd` 工作区根目录的 `.env` 补充尚未设置的项目变量。`--env-file` 可显式选择其他可信文件，相对路径仍以工作区为基准。也可以在可信用户配置中设置 `envFile`。显式 `--env-file`、用户配置 `envFile`、自动发现策略三者依次优先；shell 中已经设置的环境变量始终优先，不会被 env 文件覆盖。
 
 默认使用真实的 OpenAI provider，必须提供 `OPENAI_API_KEY`。只想测试 Agent 循环而不发起 API 请求时，需要明确启用 mock provider：
 
@@ -190,7 +190,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 npm start -- --env-file .env
 ```
 
-env-file 只负责把值加入进程环境，不会把它变成普通 JSON 配置。CLI `--env-file` 的优先级高于用户配置中的 `envFile`；两者都未设置时才尝试工作区 `.env`。显式设置在 shell 中的变量仍然具有最高优先级。不要提交含有真实密钥的 `.env`，也不要加载不可信仓库提供的 env-file。
+env-file 只负责把值加入进程环境，不会把它变成普通 JSON 配置。CLI `--env-file` 的优先级高于用户配置中的 `envFile`；两者都未设置时，Harness 先加载安装或源码根目录 `.env`，再从工作区 `.env` 补充缺失变量。显式设置在 shell 中的变量仍然具有最高优先级。不要提交含有真实密钥的 `.env`，也不要加载不可信仓库提供的 env-file。
 
 ### 配置优先级
 
