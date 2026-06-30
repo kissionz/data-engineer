@@ -571,6 +571,108 @@ describe("P0 tools", () => {
     );
   });
 
+  it("finds files natively when ripgrep is unavailable", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    await Promise.all([
+      mkdir(path.join(root, "sql", "reports"), { recursive: true }),
+      mkdir(path.join(root, "node_modules", "ignored"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(path.join(root, "sql", "orders.sql"), "select 1", "utf8"),
+      writeFile(
+        path.join(root, "sql", "reports", "customers.sql"),
+        "select 2",
+        "utf8",
+      ),
+      writeFile(
+        path.join(root, "node_modules", "ignored", "hidden.sql"),
+        "select 3",
+        "utf8",
+      ),
+    ]);
+    const executor: CommandExecutor = {
+      async run() {
+        throw new Error("native Glob must not invoke an external command");
+      },
+    };
+
+    const result = await new GlobTool(
+      new Workspace(root),
+      executor,
+      300,
+      false,
+    ).execute({ pattern: "**/*.sql" });
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain(path.join("sql", "orders.sql"));
+    expect(result.content).toContain(
+      path.join("sql", "reports", "customers.sql"),
+    );
+    expect(result.content).not.toContain("hidden.sql");
+    expect(result.data).toMatchObject({
+      count: 2,
+      truncated: false,
+      engine: "native",
+    });
+  });
+
+  it("searches file contents natively when ripgrep is unavailable", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    await Promise.all([
+      mkdir(path.join(root, "sql"), { recursive: true }),
+      mkdir(path.join(root, "node_modules"), { recursive: true }),
+    ]);
+    await Promise.all([
+      writeFile(
+        path.join(root, "sql", "orders.sql"),
+        "select order_id\nfrom orders\nwhere customer_id = 42",
+        "utf8",
+      ),
+      writeFile(
+        path.join(root, "node_modules", "ignored.sql"),
+        "customer_id",
+        "utf8",
+      ),
+    ]);
+    const executor: CommandExecutor = {
+      async run() {
+        throw new Error("native Grep must not invoke an external command");
+      },
+    };
+
+    const result = await new GrepTool(
+      new Workspace(root),
+      executor,
+      12_000,
+      false,
+    ).execute({ pattern: "customer_id", path: "." });
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain(
+      `${path.join("sql", "orders.sql")}:3:where customer_id = 42`,
+    );
+    expect(result.content).not.toContain("node_modules");
+    expect(result.data).toMatchObject({
+      exitCode: 0,
+      truncated: false,
+      engine: "native",
+    });
+
+    const singleFile = await new GrepTool(
+      new Workspace(root),
+      executor,
+      12_000,
+      false,
+    ).execute({
+      pattern: "order_id",
+      path: path.join("sql", "orders.sql"),
+    });
+    expect(singleFile.ok).toBe(true);
+    expect(singleFile.content).toContain(
+      `${path.join("sql", "orders.sql")}:1:select order_id`,
+    );
+  });
+
   it("runs Git status and diff without a shell", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
     const calls: CommandOptions[] = [];

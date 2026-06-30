@@ -1,10 +1,14 @@
 import type { CommandExecutor } from "../runtime/commandExecutor.js";
+import {
+  isCancellationError,
+} from "../agent/cancellation.js";
 import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
   ToolExecutionResult,
 } from "./base.js";
+import { matchesGlob, walkSearchFiles } from "./fileSearch.js";
 
 export class GlobTool implements Tool {
   name = "Glob";
@@ -25,6 +29,7 @@ export class GlobTool implements Tool {
     private readonly workspace: Workspace,
     private readonly executor: CommandExecutor,
     private readonly defaultLimit = 300,
+    private readonly useRipgrep = true,
   ) {}
 
   async execute(
@@ -39,6 +44,9 @@ export class GlobTool implements Tool {
       allowOutside: context?.userApproved === true,
       outsideRoot: context?.approvedFolder,
     });
+    if (!this.useRipgrep) {
+      return this.executeNative(absPath, pattern, limit, context);
+    }
     const result = await this.executor.run({
       command: "rg",
       args: [
@@ -87,6 +95,55 @@ export class GlobTool implements Tool {
         count: files.length,
         pattern,
         truncated: totalLines > limit,
+        engine: "ripgrep",
+      },
+    };
+  }
+
+  private async executeNative(
+    searchRoot: string,
+    pattern: string,
+    limit: number,
+    context?: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    const files: string[] = [];
+    let truncated = false;
+
+    try {
+      for await (const file of walkSearchFiles(searchRoot, context?.signal)) {
+        if (!matchesGlob(searchRoot, file, pattern)) {
+          continue;
+        }
+        if (files.length >= limit) {
+          truncated = true;
+          break;
+        }
+        files.push(
+          this.workspace.contains(file) ? this.workspace.relative(file) : file,
+        );
+      }
+    } catch (error: unknown) {
+      if (isCancellationError(error, context?.signal)) {
+        return {
+          ok: false,
+          content: "File search cancelled.",
+          data: { code: "cancelled", retryable: false },
+        };
+      }
+      return {
+        ok: false,
+        content: error instanceof Error ? error.message : String(error),
+      };
+    }
+
+    return {
+      ok: true,
+      content: files.join("\n") || "[No files]",
+      data: {
+        count: files.length,
+        pattern,
+        truncated,
+        engine: "native",
       },
     };
   }

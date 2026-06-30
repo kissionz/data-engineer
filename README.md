@@ -6,7 +6,7 @@
 
 - Node.js 22.12 或更高版本
 - Git：供 `GitStatus`、`GitDiff` 和 worktree 隔离模式使用
-- ripgrep (`rg`)：供 `Grep` 和 `Glob` 使用
+- ripgrep (`rg`)：可选，用于加速 `Grep` 和 `Glob`；缺失时自动使用原生搜索
 - Docker（Linux 容器模式）：用于隔离执行 Bash
 - 如果明确使用 host 模式，则本机需要安装 Bash
 
@@ -548,7 +548,7 @@ npm start -- --sandbox-network bridge
 
 长会话始终保留完整的 append-only event log。当新增事件达到阈值后，运行时会追加一份有界的事实摘要，并结合近期事件构建模型上下文。`BeforeToolUse`、`AfterToolUse`、`AfterEdit` 和 `BeforeAgentStop` hooks 提供确定性的拦截和观察点；默认写入 hook 会阻止敏感路径和过大的单文件写入。
 
-启动时会探测 Git、当前 Git repository 和 ripgrep。缺失 Git 时不注册 GitStatus/GitDiff，缺失 ripgrep 时不注册 Grep/Glob；Read 和文件编辑能力仍可使用。生命周期还提供 `SessionStart` 与 `PreCompact` hook 事件点。
+启动时会探测 Git、当前 Git repository 和 ripgrep。缺失 Git 时不注册 GitStatus/GitDiff；缺失 ripgrep 时 Grep/Glob 自动使用有界的 Node.js 原生搜索，仍保持可用。原生搜索会跳过 `.git`、`node_modules`、`dist`、`.env*`、符号链接、二进制文件和超大文件，并限制扫描与输出规模。生命周期还提供 `SessionStart` 与 `PreCompact` hook 事件点。
 
 这些 hooks 当前是进程内的受信扩展点，不从项目配置或外部 shell/JavaScript 加载。这样可避免不可信仓库借 hook 获得代码执行权限或读取完整工具参数、结果与环境秘密。
 

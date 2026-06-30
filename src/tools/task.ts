@@ -311,11 +311,15 @@ function createReviewerTools(
   if (requested.has("Read")) {
     tools.register(new ReadTool(workspace));
   }
-  if (capabilities.ripgrep && requested.has("Grep")) {
-    tools.register(new GrepTool(workspace, executor));
+  if (requested.has("Grep")) {
+    tools.register(
+      new GrepTool(workspace, executor, 12_000, capabilities.ripgrep),
+    );
   }
-  if (capabilities.ripgrep && requested.has("Glob")) {
-    tools.register(new GlobTool(workspace, executor));
+  if (requested.has("Glob")) {
+    tools.register(
+      new GlobTool(workspace, executor, 300, capabilities.ripgrep),
+    );
   }
   if (capabilities.git && capabilities.gitRepository) {
     if (requested.has("GitStatus")) {

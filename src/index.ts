@@ -419,6 +419,7 @@ async function main(): Promise<void> {
       `httpFetch=${userConfig.httpFetch?.enabled ? "on" : "off"}`,
       `git=${runtimeCapabilities.gitRepository ? "repository" : runtimeCapabilities.git ? "available" : "unavailable"}`,
       `rg=${runtimeCapabilities.ripgrep ? "available" : "unavailable"}`,
+      `search=${runtimeCapabilities.ripgrep ? "ripgrep" : "native"}`,
       `projectConfig=${projectConfig.budget || projectConfig.memory ? "restricted" : "none"}`,
       `budget(turns=${budget.maxTurns}, tools=${budget.maxToolCalls}, wallMs=${budget.maxWallTimeMs})`,
     ].join(" "),
@@ -643,10 +644,22 @@ function createAgent(
       }),
     );
   }
-  if (options.runtimeCapabilities.ripgrep) {
-    tools.register(new GrepTool(options.workspace, options.executor));
-    tools.register(new GlobTool(options.workspace, options.executor));
-  }
+  tools.register(
+    new GrepTool(
+      options.workspace,
+      options.executor,
+      12_000,
+      options.runtimeCapabilities.ripgrep,
+    ),
+  );
+  tools.register(
+    new GlobTool(
+      options.workspace,
+      options.executor,
+      300,
+      options.runtimeCapabilities.ripgrep,
+    ),
+  );
   tools.register(new WriteTool(options.workspace));
   tools.register(new EditTool(options.workspace));
   if (options.shellExecutor) {
