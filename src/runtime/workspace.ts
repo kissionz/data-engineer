@@ -8,10 +8,15 @@ export class Workspace {
     this.root = path.resolve(root);
   }
 
-  resolve(userPath: string): string {
+  resolve(
+    userPath: string,
+    options: { allowOutside?: boolean } = {},
+  ): string {
     const resolved = path.resolve(this.root, userPath);
 
-    this.assertPathWithin(resolved, `Path outside workspace: ${userPath}`);
+    if (!options.allowOutside) {
+      this.assertPathWithin(resolved, `Path outside workspace: ${userPath}`);
+    }
     assertNoSensitiveRelativePath(
       this.root,
       resolved,
@@ -24,13 +29,22 @@ export class Workspace {
     return path.relative(this.root, absPath);
   }
 
-  async assertRealPathWithin(absPath: string): Promise<void> {
+  async assertRealPathWithin(
+    absPath: string,
+    options: { allowOutside?: boolean } = {},
+  ): Promise<void> {
     const [rootRealPath, targetRealPath] = await Promise.all([
       realpath(this.root),
       realpath(absPath),
     ]);
 
-    assertWithin(rootRealPath, targetRealPath, `Real path outside workspace: ${absPath}`);
+    if (isWithin(this.root, absPath) || !options.allowOutside) {
+      assertWithin(
+        rootRealPath,
+        targetRealPath,
+        `Real path outside workspace: ${absPath}`,
+      );
+    }
     assertNoSensitiveRelativePath(
       rootRealPath,
       targetRealPath,
@@ -38,20 +52,28 @@ export class Workspace {
     );
   }
 
-  async resolveExistingDirectory(userPath: string): Promise<string> {
-    const absPath = this.resolve(userPath);
+  async resolveExistingDirectory(
+    userPath: string,
+    options: { allowOutside?: boolean } = {},
+  ): Promise<string> {
+    const absPath = this.resolve(userPath, options);
     const info = await stat(absPath);
 
     if (!info.isDirectory()) {
       throw new Error(`Not a directory: ${userPath}`);
     }
 
-    await this.assertRealPathWithin(absPath);
+    await this.assertRealPathWithin(absPath, options);
     return absPath;
   }
 
-  async assertCreatablePathWithin(absPath: string): Promise<void> {
-    this.assertPathWithin(absPath, `Path outside workspace: ${absPath}`);
+  async assertCreatablePathWithin(
+    absPath: string,
+    options: { allowOutside?: boolean } = {},
+  ): Promise<void> {
+    if (!options.allowOutside) {
+      this.assertPathWithin(absPath, `Path outside workspace: ${absPath}`);
+    }
 
     let ancestor = path.dirname(absPath);
 
@@ -68,11 +90,13 @@ export class Workspace {
           realpath(ancestor),
         ]);
 
-        assertWithin(
-          rootRealPath,
-          ancestorRealPath,
-          `Parent path resolves outside workspace: ${ancestor}`,
-        );
+        if (isWithin(this.root, absPath) || !options.allowOutside) {
+          assertWithin(
+            rootRealPath,
+            ancestorRealPath,
+            `Parent path resolves outside workspace: ${ancestor}`,
+          );
+        }
         assertNoSensitiveRelativePath(
           rootRealPath,
           ancestorRealPath,
@@ -97,11 +121,19 @@ export class Workspace {
 }
 
 function assertWithin(root: string, target: string, message: string): void {
-  const relative = path.relative(root, target);
-
-  if (relative.startsWith("..") || path.isAbsolute(relative)) {
+  if (!isWithin(root, target)) {
     throw new Error(message);
   }
+}
+
+function isWithin(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+  );
 }
 
 function assertNoSensitiveRelativePath(

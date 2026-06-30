@@ -76,6 +76,49 @@ describe("P0 tools", () => {
     expect(first.data?.truncated).toBe(true);
   });
 
+  it("requires approval before reading outside the workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "harness-outside-"));
+    const outsidePath = path.join(outside, "shared.txt");
+    await writeFile(outsidePath, "shared content", "utf8");
+    const tool = new ReadTool(new Workspace(root));
+
+    const denied = await tool.execute({ file_path: outsidePath });
+    const approved = await tool.execute(
+      { file_path: outsidePath },
+      { toolCallId: "approved-read", userApproved: true },
+    );
+
+    expect(denied.ok).toBe(false);
+    expect(approved.ok).toBe(true);
+    expect(approved.content).toContain("shared content");
+  });
+
+  it("allows approved writes and edits outside the workspace", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const outside = await mkdtemp(path.join(os.tmpdir(), "harness-outside-"));
+    const outsidePath = path.join(outside, "shared.txt");
+    const context = { toolCallId: "approved-write", userApproved: true };
+    const workspace = new Workspace(root);
+
+    const created = await new WriteTool(workspace).execute(
+      { file_path: outsidePath, content: "first version" },
+      context,
+    );
+    const edited = await new EditTool(workspace).execute(
+      {
+        file_path: outsidePath,
+        old_string: "first",
+        new_string: "second",
+      },
+      { toolCallId: "approved-edit", userApproved: true },
+    );
+
+    expect(created.ok).toBe(true);
+    expect(edited.ok).toBe(true);
+    expect(await readFile(outsidePath, "utf8")).toBe("second version");
+  });
+
   it("edits only unique exact strings", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
     const filePath = path.join(root, "sample.txt");
@@ -223,6 +266,9 @@ describe("P0 tools", () => {
 
     const result = await new ReadTool(workspace).execute({
       file_path: "target.txt",
+    }, {
+      toolCallId: "approved-inside-symlink",
+      userApproved: true,
     });
 
     expect(result).toMatchObject({

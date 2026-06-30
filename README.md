@@ -327,6 +327,11 @@ npm run eval -- --suite evals/deterministic.v1.json \
 
 Memory 与会话恢复不是同一机制：Memory 用于跨会话保留明确的信息；`.harness/sessions/` 中的事件日志用于当前任务的连续性和恢复。
 
+文件工具默认只能访问当前工作区。若 `Read`、`Write`、`Edit`、`Grep`、`Glob`
+或 Bash 的 `cwd` 明确指向工作区外路径，Harness 会先展示目标路径并请求用户批准。
+`.git`、`node_modules`、`.env*` 等敏感路径仍会直接拒绝，工作区内的 symlink
+也不能借此逃逸到外部目录。
+
 ## MCP 集成
 
 ### 当前支持范围

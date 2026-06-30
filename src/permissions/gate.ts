@@ -10,7 +10,10 @@ export interface PermissionCheckResult {
 }
 
 export class PermissionGate {
-  constructor(private readonly policy: PermissionPolicy) {}
+  constructor(
+    private readonly policy: PermissionPolicy,
+    private readonly workspaceRoot?: string,
+  ) {}
 
   check(call: ToolCall): PermissionCheckResult {
     if (this.policy.deniedTools.has(call.name)) {
@@ -29,6 +32,14 @@ export class PermissionGate {
       return {
         decision: "deny",
         reason: "Dangerous shell command denied by policy.",
+      };
+    }
+
+    const outsidePath = this.outsideWorkspacePath(call);
+    if (outsidePath) {
+      return {
+        decision: "ask",
+        reason: `Access outside the workspace requires approval: ${outsidePath}`,
       };
     }
 
@@ -107,6 +118,22 @@ export class PermissionGate {
 
     return READONLY_COMMANDS.some((pattern) => pattern.test(command));
   }
+
+  private outsideWorkspacePath(call: ToolCall): string | undefined {
+    if (!this.workspaceRoot) {
+      return undefined;
+    }
+
+    const candidates = [
+      call.args.file_path,
+      call.args.path,
+      call.args.cwd,
+    ].filter((value): value is string => typeof value === "string");
+
+    return candidates
+      .map((candidate) => path.resolve(this.workspaceRoot!, candidate))
+      .find((candidate) => !isWithin(this.workspaceRoot!, candidate));
+  }
 }
 
 const READONLY_COMMANDS = [
@@ -125,4 +152,14 @@ function hasShellMutationSyntax(command: string): boolean {
 
 function normalizePolicyPath(value: string): string {
   return path.posix.normalize(value.replaceAll("\\", "/")).replace(/^\.\//, "");
+}
+
+function isWithin(root: string, target: string): boolean {
+  const relative = path.relative(root, target);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+  );
 }

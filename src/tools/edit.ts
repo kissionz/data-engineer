@@ -56,6 +56,7 @@ export class EditTool implements Tool {
     try {
       const snapshot = await readTextFileSnapshot(this.workspace, filePath, {
         forEdit: true,
+        allowOutside: context?.userApproved === true,
         signal: context?.signal,
       });
       const expectedHash =

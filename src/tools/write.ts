@@ -45,7 +45,10 @@ export class WriteTool implements Tool {
         this.workspace,
         filePath,
         args.content,
-        { signal: context?.signal },
+        {
+          allowOutside: context?.userApproved === true,
+          signal: context?.signal,
+        },
       );
 
       return {

@@ -686,7 +686,7 @@ function createAgent(
   const agent = new AgentLoop(
     model,
     tools,
-    new PermissionGate(permissionPolicy),
+    new PermissionGate(permissionPolicy, options.workspaceRoot),
     new ContextBuilder(
       options.workspaceRoot,
       undefined,

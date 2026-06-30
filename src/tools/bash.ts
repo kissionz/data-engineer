@@ -36,7 +36,9 @@ export class BashTool implements Tool {
     }
 
     const cwdArg = typeof args.cwd === "string" ? args.cwd : ".";
-    const cwd = await this.workspace.resolveExistingDirectory(cwdArg);
+    const cwd = await this.workspace.resolveExistingDirectory(cwdArg, {
+      allowOutside: context?.userApproved === true,
+    });
     const timeoutSeconds =
       typeof args.timeout_seconds === "number" && Number.isFinite(args.timeout_seconds)
         ? args.timeout_seconds

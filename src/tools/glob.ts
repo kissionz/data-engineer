@@ -34,7 +34,9 @@ export class GlobTool implements Tool {
       typeof args.pattern === "string" && args.pattern ? args.pattern : "**/*";
     const searchPath = typeof args.path === "string" ? args.path : ".";
     const limit = normalizeLimit(args.limit, this.defaultLimit);
-    const absPath = await this.workspace.resolveExistingDirectory(searchPath);
+    const absPath = await this.workspace.resolveExistingDirectory(searchPath, {
+      allowOutside: context?.userApproved === true,
+    });
     const result = await this.executor.run({
       command: "rg",
       args: [

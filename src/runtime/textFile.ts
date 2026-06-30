@@ -57,6 +57,7 @@ export interface TextFileSnapshot {
 interface ReadOptions {
   maxBytes?: number;
   forEdit?: boolean;
+  allowOutside?: boolean;
   signal?: AbortSignal;
 }
 
@@ -66,6 +67,7 @@ interface ReplaceOptions {
 
 interface CreateOptions {
   maxBytes?: number;
+  allowOutside?: boolean;
   signal?: AbortSignal;
   mode?: number;
 }
@@ -83,14 +85,20 @@ export async function readTextFileSnapshot(
   try {
     throwIfCancelled(options.signal);
     const maxBytes = normalizeMaxBytes(options.maxBytes);
-    const absolutePath = workspace.resolve(userPath);
+    const accessOptions = { allowOutside: options.allowOutside === true };
+    const absolutePath = workspace.resolve(userPath, accessOptions);
+    const accessRoot = traversalRoot(
+      workspace.root,
+      absolutePath,
+      path.dirname(absolutePath),
+    );
     const initialLinkInfo = await lstat(absolutePath);
 
     if (options.forEdit) {
-      await assertNoSymlinkComponents(workspace.root, absolutePath, userPath);
+      await assertNoSymlinkComponents(accessRoot, absolutePath, userPath);
     }
 
-    await workspace.assertRealPathWithin(absolutePath);
+    await workspace.assertRealPathWithin(absolutePath, accessOptions);
     const initialRealPath = await realpath(absolutePath);
     const handle = await open(absolutePath, "r");
 
@@ -110,7 +118,7 @@ export async function readTextFileSnapshot(
         initialLinkInfo.isSymbolicLink(),
         options.forEdit === true,
       );
-      await workspace.assertRealPathWithin(absolutePath);
+      await workspace.assertRealPathWithin(absolutePath, accessOptions);
       const bytes = await readBytes(handle, maxBytes, options.signal);
       const finalInfo = await handle.stat();
       await verifyOpenedPath(
@@ -120,7 +128,7 @@ export async function readTextFileSnapshot(
         initialLinkInfo.isSymbolicLink(),
         options.forEdit === true,
       );
-      await workspace.assertRealPathWithin(absolutePath);
+      await workspace.assertRealPathWithin(absolutePath, accessOptions);
 
       if (
         !sameIdentity(openedInfo, finalInfo) ||
@@ -135,7 +143,7 @@ export async function readTextFileSnapshot(
 
       const text = decodeText(bytes, userPath);
       return snapshotFromBytes(
-        workspace.root,
+        accessRoot,
         userPath,
         absolutePath,
         text,
@@ -245,8 +253,10 @@ export async function atomicCreateTextFile(
 ): Promise<TextFileSnapshot> {
   const maxBytes = normalizeMaxBytes(options.maxBytes);
   const bytes = encodeText(text, maxBytes, userPath);
-  const absolutePath = workspace.resolve(userPath);
+  const accessOptions = { allowOutside: options.allowOutside === true };
+  const absolutePath = workspace.resolve(userPath, accessOptions);
   const directory = path.dirname(absolutePath);
+  const accessRoot = traversalRoot(workspace.root, directory, directory);
   let tempPath: string | undefined;
   let tempInfo: Awaited<ReturnType<FileHandle["stat"]>> | undefined;
   let published = false;
@@ -262,8 +272,8 @@ export async function atomicCreateTextFile(
       });
     }
 
-    await workspace.assertRealPathWithin(directory);
-    await assertNoSymlinkComponents(workspace.root, directory, userPath);
+    await workspace.assertRealPathWithin(directory, accessOptions);
+    await assertNoSymlinkComponents(accessRoot, directory, userPath);
     const directoryRealPath = await realpath(directory);
     const directoryIdentity = await stat(directoryRealPath);
     throwIfCancelled(options.signal);
@@ -282,7 +292,7 @@ export async function atomicCreateTextFile(
     }
 
     await assertTemporaryIdentity(temp.path, tempInfo!);
-    await workspace.assertRealPathWithin(directory);
+    await workspace.assertRealPathWithin(directory, accessOptions);
     if (
       (await realpath(directory)) !== directoryRealPath ||
       !sameIdentity(await stat(directoryRealPath), directoryIdentity)
@@ -300,7 +310,7 @@ export async function atomicCreateTextFile(
     await syncDirectoryBestEffort(directory);
 
     return snapshotFromBytes(
-      workspace.root,
+      accessRoot,
       userPath,
       absolutePath,
       text,
@@ -312,7 +322,7 @@ export async function atomicCreateTextFile(
     if (published) {
       const info = await stat(absolutePath).catch(() => undefined);
       return snapshotFromBytes(
-        workspace.root,
+        accessRoot,
         userPath,
         absolutePath,
         text,
@@ -753,6 +763,20 @@ async function assertNoSymlinkComponents(
       });
     }
   }
+}
+
+function traversalRoot(
+  workspaceRoot: string,
+  targetPath: string,
+  outsideRoot: string,
+): string {
+  const relative = path.relative(workspaceRoot, targetPath);
+  return relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) &&
+      relative !== ".." &&
+      !path.isAbsolute(relative))
+    ? workspaceRoot
+    : outsideRoot;
 }
 
 async function renameWithRetry(

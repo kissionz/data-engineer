@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { PermissionGate } from "../src/permissions/gate.js";
 import { defaultPolicy } from "../src/permissions/policy.js";
@@ -64,6 +65,51 @@ describe("PermissionGate", () => {
         },
       }),
     ).toMatchObject({ decision: "ask" });
+  });
+
+  it("asks before accessing a path outside the workspace", () => {
+    const root = path.resolve("/workspace/project");
+    const gate = new PermissionGate(defaultPolicy(), root);
+
+    for (const call of [
+      {
+        id: "read",
+        name: "Read",
+        args: { file_path: "../shared/config.json" },
+      },
+      {
+        id: "glob",
+        name: "Glob",
+        args: { path: "/workspace/shared", pattern: "**/*" },
+      },
+      {
+        id: "bash",
+        name: "Bash",
+        args: { command: "pwd", cwd: "../shared" },
+      },
+    ]) {
+      expect(gate.check(call)).toMatchObject({
+        decision: "ask",
+      });
+      expect(gate.check(call).reason).toContain(
+        "Access outside the workspace requires approval",
+      );
+    }
+  });
+
+  it("still denies sensitive paths outside the workspace", () => {
+    const gate = new PermissionGate(
+      defaultPolicy(),
+      path.resolve("/workspace/project"),
+    );
+
+    expect(
+      gate.check({
+        id: "1",
+        name: "Read",
+        args: { file_path: "../shared/.env.production" },
+      }),
+    ).toMatchObject({ decision: "deny" });
   });
 
   it("allows readonly shell commands", () => {

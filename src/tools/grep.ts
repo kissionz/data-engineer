@@ -35,8 +35,9 @@ export class GrepTool implements Tool {
     }
 
     const searchPath = typeof args.path === "string" ? args.path : ".";
-    const absPath = this.workspace.resolve(searchPath);
-    await this.workspace.assertRealPathWithin(absPath);
+    const accessOptions = { allowOutside: context?.userApproved === true };
+    const absPath = this.workspace.resolve(searchPath, accessOptions);
+    await this.workspace.assertRealPathWithin(absPath, accessOptions);
     const result = await this.executor.run({
       command: "rg",
       args: [

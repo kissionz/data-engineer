@@ -44,6 +44,7 @@ export class ReadTool implements Tool {
     try {
       snapshot = await readTextFileSnapshot(this.workspace, filePath, {
         maxBytes: this.maxFileBytes,
+        allowOutside: context?.userApproved === true,
         signal: context?.signal,
       });
     } catch (error: unknown) {
