@@ -19,7 +19,9 @@ describe("ListDirectoryTool", () => {
     );
     await writeFile(path.join(root, ".env.local"), "secret", "utf8");
 
-    const result = await new ListDirectoryTool(new Workspace(root)).execute({});
+    const result = await new ListDirectoryTool(new Workspace(root)).execute({
+      max_depth: 2,
+    });
 
     expect(result.ok).toBe(true);
     expect(result.content).toContain("[D] nested");
@@ -32,7 +34,7 @@ describe("ListDirectoryTool", () => {
     expect(result.content).not.toContain(".env.local");
   });
 
-  it("honors max_depth while keeping recursive discovery as the default", async () => {
+  it("lists one level by default and expands only when max_depth requests it", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-list-"));
     await mkdir(path.join(root, "first", "second"), { recursive: true });
     await writeFile(
@@ -42,12 +44,13 @@ describe("ListDirectoryTool", () => {
     );
     const tool = new ListDirectoryTool(new Workspace(root));
 
-    const shallow = await tool.execute({ max_depth: 1 });
-    const recursive = await tool.execute({});
+    const shallow = await tool.execute({});
+    const recursive = await tool.execute({ max_depth: 3 });
 
     expect(shallow.content).toContain("[D] first");
     expect(shallow.content).not.toContain("deep.txt");
     expect(recursive.content).toContain("deep.txt");
+    expect(shallow.data?.maxDepth).toBe(1);
     expect(recursive.data?.maxDepth).toBe(3);
   });
 

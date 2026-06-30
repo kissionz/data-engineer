@@ -19,7 +19,7 @@ interface DirectoryEntryResult {
 export class ListDirectoryTool implements Tool {
   name = "ListDirectory";
   description =
-    "Browse a directory tree when its structure matters. Do not use this to locate a file by name; use Glob with a recursive pattern instead. Defaults to 3 levels; use max_depth to control recursion. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
+    "List the immediate contents of a directory. Do not use this to locate a file by name; use Glob with a recursive pattern instead. Defaults to 1 level; set max_depth above 1 only when an explicit directory tree is needed. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
   effect = "readonly" as const;
 
   inputSchema = {
@@ -35,7 +35,7 @@ export class ListDirectoryTool implements Tool {
   constructor(
     private readonly workspace: Workspace,
     private readonly defaultLimit = 300,
-    private readonly defaultMaxDepth = 3,
+    private readonly defaultMaxDepth = 1,
   ) {}
 
   async execute(
