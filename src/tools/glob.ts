@@ -9,7 +9,7 @@ import type {
 export class GlobTool implements Tool {
   name = "Glob";
   description =
-    "Find files recursively by glob pattern. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
+    "Find files recursively by exact or partial filename pattern. Prefer this over ListDirectory when locating a file; for example pattern **/*config* or **/AGENTS.md with path set to the workspace or an authorized external root. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
 
   inputSchema = {
     type: "object",

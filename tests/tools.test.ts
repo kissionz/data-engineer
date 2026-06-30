@@ -566,6 +566,9 @@ describe("P0 tools", () => {
       command: "rg",
     });
     expect(calls[0]?.args).toContain("**/*.ts");
+    expect(new GlobTool(new Workspace(root), executor).description).toContain(
+      "Prefer this over ListDirectory",
+    );
   });
 
   it("runs Git status and diff without a shell", async () => {

@@ -47,6 +47,8 @@ describe("ContextBuilder", () => {
     expect(serialized).toContain("Runtime-authorized external folders");
     expect(serialized).toContain(outside);
     expect(serialized).toContain("ListDirectory");
+    expect(serialized).toContain("Glob");
+    expect(serialized).toContain("**/*name*");
     expect(
       messages.some((message) =>
         message.content.includes('"scope": "session"'),

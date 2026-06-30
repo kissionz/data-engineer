@@ -19,7 +19,7 @@ interface DirectoryEntryResult {
 export class ListDirectoryTool implements Tool {
   name = "ListDirectory";
   description =
-    "List a directory tree, including nested files and subdirectories. Defaults to 3 levels; use max_depth to control recursion. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
+    "Browse a directory tree when its structure matters. Do not use this to locate a file by name; use Glob with a recursive pattern instead. Defaults to 3 levels; use max_depth to control recursion. Absolute paths outside the workspace may be requested and will use the folder approval flow.";
   effect = "readonly" as const;
 
   inputSchema = {
