@@ -8,7 +8,7 @@ import type { ModelPricing } from "../model/base.js";
 const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024;
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
-const positiveFiniteNumber = z.number().finite().positive();
+const positiveFiniteNumber = z.number().positive();
 
 const projectBudgetSchema = z
   .object({

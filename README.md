@@ -21,6 +21,19 @@ npm install
 npm run build
 ```
 
+提交前的完整质量检查包括类型构建、ESLint、全量测试和覆盖率门槛：
+
+```bash
+npm run check
+```
+
+真实 Docker 集成测试仅在 Docker daemon 可用且本地已有 sandbox image 时执行；
+否则 Vitest 会明确标记为 skipped：
+
+```bash
+npm run test:integration:docker
+```
+
 复制环境变量示例并填入真实 API Key：
 
 ```bash

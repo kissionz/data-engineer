@@ -6,8 +6,8 @@ import { canonicalHostname } from "../runtime/httpSafety.js";
 
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
-const positiveFiniteNumber = z.number().finite().positive();
-const nonNegativeFiniteNumber = z.number().finite().nonnegative();
+const positiveFiniteNumber = z.number().positive();
+const nonNegativeFiniteNumber = z.number().nonnegative();
 const environmentName = z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/);
 const networkPort = z.number().int().min(1).max(65_535);
 const exactHostname = z.string().min(1).max(253).refine(
@@ -39,7 +39,7 @@ const stdioTransportSchema = z
 const httpTransportSchema = z
   .object({
     type: z.literal("http"),
-    url: z.string().url(),
+    url: z.url(),
     allowedHosts: z
       .array(exactHostname)
       .min(1)
@@ -128,7 +128,7 @@ const compactionSchema = z
     fallbackTokenThreshold: positiveInteger
       .max(1_000_000_000)
       .default(24_000),
-    contextWindowRatio: z.number().finite().min(0.1).max(0.95).default(0.6),
+    contextWindowRatio: z.number().min(0.1).max(0.95).default(0.6),
   })
   .strict();
 
@@ -140,7 +140,7 @@ export const userConfigSchema = z
       .object({
         provider: z.enum(["openai", "mock"]).optional(),
         name: z.string().min(1).max(200).optional(),
-        baseUrl: z.string().url().optional(),
+        baseUrl: z.url().optional(),
         pricing: z
           .object({
             inputPerMillionTokens: nonNegativeFiniteNumber,

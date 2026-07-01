@@ -10,7 +10,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { acquireFileLock } from "../runtime/fileLock.js";
 import { isPathWithin } from "../runtime/pathSafety.js";
 
 export type FolderGrantAccess = "read" | "read_write";
@@ -254,8 +254,9 @@ async function persistGrant(
   if (!directoryInfo.isDirectory() || directoryInfo.isSymbolicLink()) {
     throw new Error("Refusing an unsafe folder grant store directory.");
   }
-  const lockPath = `${filePath}.lock`;
-  const release = await acquireLock(lockPath);
+  const release = await acquireFileLock(filePath, {
+    label: "folder grant store",
+  });
   const tempPath = `${filePath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
   try {
     const grants = await loadGrantFile(filePath);
@@ -283,30 +284,6 @@ async function persistGrant(
   } finally {
     await unlink(tempPath).catch(() => undefined);
     await release();
-  }
-}
-
-async function acquireLock(lockPath: string): Promise<() => Promise<void>> {
-  const deadline = Date.now() + 10_000;
-  while (true) {
-    try {
-      await writeFile(lockPath, `${process.pid}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      });
-      return async () => {
-        await unlink(lockPath).catch(() => undefined);
-      };
-    } catch (error: unknown) {
-      if (!hasCode(error, "EEXIST")) {
-        throw error;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error("Timed out waiting for the folder grant store lock.");
-      }
-      await delay(20);
-    }
   }
 }
 

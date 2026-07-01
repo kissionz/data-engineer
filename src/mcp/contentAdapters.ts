@@ -260,7 +260,7 @@ function promptContentText(content: Record<string, unknown>): string {
 
 function safeLabel(value: string): string {
   return value
-    .replaceAll(/[\p{Cc}\p{Cf}\s\[\]]+/gu, " ")
+    .replaceAll(/[\p{Cc}\p{Cf}\s[\]]+/gu, " ")
     .trim()
     .slice(0, 512);
 }

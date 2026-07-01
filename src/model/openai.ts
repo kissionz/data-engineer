@@ -7,6 +7,7 @@ import {
   type ModelPricing,
   type ModelStreamHandler,
 } from "./base.js";
+import { parseJsonSse } from "./jsonSse.js";
 
 const MAX_JSON_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_STREAM_BYTES = 64 * 1024 * 1024;
@@ -328,7 +329,11 @@ async function parseStreamingResponse(
     { id: string; name: string; arguments: string }
   >();
 
-  for await (const event of parseServerSentEvents(response.body)) {
+  for await (const event of parseJsonSse<OpenAIStreamEvent>(response.body, {
+    maxStreamBytes: MAX_STREAM_BYTES,
+    maxEventBytes: MAX_STREAM_EVENT_BYTES,
+    source: "OpenAI",
+  })) {
     if (event.type === "response.output_text.delta" && event.delta) {
       if (finalText.length + event.delta.length > maxTextChars) {
         throw new Error("OpenAI streamed text exceeded the safety limit.");
@@ -518,79 +523,6 @@ function boundedToolArguments(value: string): string {
     );
   }
   return value;
-}
-
-async function* parseServerSentEvents(
-  stream: ReadableStream<Uint8Array>,
-): AsyncGenerator<OpenAIStreamEvent> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let receivedBytes = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      receivedBytes += value?.byteLength ?? 0;
-      if (receivedBytes > MAX_STREAM_BYTES) {
-        throw new Error("OpenAI stream exceeded the 64 MiB safety limit.");
-      }
-      buffer += decoder.decode(value, { stream: !done });
-      buffer = buffer.replaceAll("\r\n", "\n");
-      if (
-        buffer.length > MAX_STREAM_EVENT_BYTES &&
-        !buffer.includes("\n\n")
-      ) {
-        throw new Error("OpenAI stream event exceeded the safety limit.");
-      }
-
-      let boundary = buffer.indexOf("\n\n");
-
-      while (boundary !== -1) {
-        const block = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        const event = parseEventBlock(block);
-
-        if (event) {
-          yield event;
-        }
-
-        boundary = buffer.indexOf("\n\n");
-      }
-      if (buffer.length > MAX_STREAM_EVENT_BYTES) {
-        throw new Error("OpenAI stream event exceeded the safety limit.");
-      }
-
-      if (done) {
-        const event = parseEventBlock(buffer);
-
-        if (event) {
-          yield event;
-        }
-        return;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function parseEventBlock(block: string): OpenAIStreamEvent | null {
-  const data = block
-    .split("\n")
-    .filter((line) => line.startsWith("data:"))
-    .map((line) => line.slice(5).trimStart())
-    .join("\n");
-
-  if (!data || data === "[DONE]") {
-    return null;
-  }
-
-  try {
-    return JSON.parse(data) as OpenAIStreamEvent;
-  } catch {
-    throw new Error("OpenAI returned an invalid streaming event.");
-  }
 }
 
 async function readJsonResponse(
@@ -1192,7 +1124,14 @@ async function parseChatStreamingResponse(
   let lastBody: ChatCompletionsResponseBody | undefined;
   let finishReason: string | null | undefined;
 
-  for await (const event of parseChatSSEStream(response.body)) {
+  for await (const event of parseJsonSse<ChatCompletionsResponseBody>(
+    response.body,
+    {
+      maxStreamBytes: MAX_STREAM_BYTES,
+      maxEventBytes: MAX_STREAM_EVENT_BYTES,
+      source: "API",
+    },
+  )) {
     lastBody = event;
     if (event.error) {
       throw classifyProviderError(
@@ -1298,68 +1237,4 @@ async function parseChatStreamingResponse(
     usage: lastBody ? parseChatUsage(lastBody) : undefined,
     requestId: lastBody?.id,
   };
-}
-
-async function* parseChatSSEStream(
-  stream: ReadableStream<Uint8Array>,
-): AsyncGenerator<ChatCompletionsResponseBody> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let receivedBytes = 0;
-
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      receivedBytes += value?.byteLength ?? 0;
-      if (receivedBytes > MAX_STREAM_BYTES) {
-        throw new Error("Chat stream exceeded the 64 MiB safety limit.");
-      }
-      buffer += decoder.decode(value, { stream: !done });
-      buffer = buffer.replaceAll("\r\n", "\n");
-
-      let boundary = buffer.indexOf("\n\n");
-      while (boundary !== -1) {
-        const block = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-
-        const data = block
-          .split("\n")
-          .filter((line) => line.startsWith("data:"))
-          .map((line) => line.slice(5).trimStart())
-          .join("\n");
-
-        if (data && data !== "[DONE]") {
-          try {
-            yield JSON.parse(data) as ChatCompletionsResponseBody;
-          } catch {
-            throw new Error("API returned an invalid streaming event.");
-          }
-        }
-
-        boundary = buffer.indexOf("\n\n");
-      }
-
-      if (done) {
-        // Handle remaining buffer
-        if (buffer.trim()) {
-          const data = buffer
-            .split("\n")
-            .filter((line) => line.startsWith("data:"))
-            .map((line) => line.slice(5).trimStart())
-            .join("\n");
-          if (data && data !== "[DONE]") {
-            try {
-              yield JSON.parse(data) as ChatCompletionsResponseBody;
-            } catch {
-              throw new Error("API returned an invalid trailing streaming event.");
-            }
-          }
-        }
-        return;
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
 }

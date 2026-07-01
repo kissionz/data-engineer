@@ -119,6 +119,8 @@ describe("MCP integration", () => {
     async () => {
     const app = createMcpExpressApp({ host: "127.0.0.1" });
     app.post("/mcp", async (request, response) => {
+      // The low-level server is intentional here: this test exercises transport wiring.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
       const server = new Server(
         { name: "http-test-server", version: "1.0.0" },
         { capabilities: { tools: {} } },

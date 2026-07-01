@@ -1,20 +1,16 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
   open,
-  unlink,
-  writeFile,
   type FileHandle,
 } from "node:fs/promises";
 import type { Stats } from "node:fs";
-import { hostname } from "node:os";
 import { basename, dirname, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { acquireFileLock } from "../runtime/fileLock.js";
 import type { SessionEvent, SessionEventInput } from "./types.js";
 
 const appendQueues = new Map<string, Promise<unknown>>();
-const ownedAppendLocks = new Map<string, string>();
 const MAX_SESSION_RECORD_BYTES = 16 * 1024 * 1024;
 const MAX_SESSION_FILE_BYTES = 256 * 1024 * 1024;
 
@@ -58,7 +54,10 @@ export class SessionStore {
 
   private async appendNow(event: SessionEventInput): Promise<SessionEvent> {
     await mkdir(dirname(this.filePath), { recursive: true });
-    const releaseAppendLock = await acquireAppendLock(this.filePath);
+    const releaseAppendLock = await acquireFileLock(this.filePath, {
+      lockPath: `${this.filePath}.append.lock`,
+      label: "session append",
+    });
     let committed = false;
 
     try {
@@ -190,178 +189,6 @@ export class SessionStore {
       this.cachedIdentity.ctimeMs === info.ctimeMs
     );
   }
-}
-
-interface AppendLock {
-  pid: number;
-  hostname: string;
-  createdAt: string;
-  token: string;
-}
-
-async function acquireAppendLock(filePath: string): Promise<() => Promise<void>> {
-  const lockPath = `${filePath}.append.lock`;
-  const deadline = Date.now() + 10_000;
-
-  while (true) {
-    const lock: AppendLock = {
-      pid: process.pid,
-      hostname: hostname(),
-      createdAt: new Date().toISOString(),
-      token: randomBytes(16).toString("hex"),
-    };
-
-    try {
-      await writeFile(lockPath, `${JSON.stringify(lock)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      });
-      ownedAppendLocks.set(lockPath, lock.token);
-      return async () => {
-        await removeOwnedAppendLock(lockPath, lock.token);
-      };
-    } catch (error: unknown) {
-      if (!hasCode(error, "EEXIST")) {
-        throw error;
-      }
-      const locallyOwned = ownedAppendLocks.get(lockPath);
-      if (
-        (locallyOwned &&
-          (await removeOwnedAppendLock(lockPath, locallyOwned).catch(
-            () => false,
-          ))) ||
-        (await removeStaleAppendLock(lockPath))
-      ) {
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for session append lock: ${filePath}`);
-      }
-      await delay(10 + Math.floor(Math.random() * 20));
-    }
-  }
-}
-
-async function readAppendLock(lockPath: string): Promise<AppendLock> {
-  const parsed = JSON.parse(
-    await readSafeSessionFile(lockPath),
-  ) as Partial<AppendLock>;
-
-  if (
-    !Number.isInteger(parsed.pid) ||
-    typeof parsed.hostname !== "string" ||
-    typeof parsed.createdAt !== "string" ||
-    typeof parsed.token !== "string"
-  ) {
-    throw new Error("Session append lock is invalid.");
-  }
-  return parsed as AppendLock;
-}
-
-async function removeStaleAppendLock(lockPath: string): Promise<boolean> {
-  let lock: AppendLock;
-  try {
-    lock = await readAppendLock(lockPath);
-  } catch {
-    return removeAgedInvalidLock(lockPath);
-  }
-
-  if (lock.hostname !== hostname() || isProcessAlive(lock.pid)) {
-    return false;
-  }
-  const current = await readAppendLock(lockPath).catch(() => null);
-  if (!current || current.token !== lock.token) {
-    return false;
-  }
-  await unlinkWithRetry(lockPath);
-  return true;
-}
-
-async function removeOwnedAppendLock(
-  lockPath: string,
-  token: string,
-): Promise<boolean> {
-  try {
-    const current = await readAppendLock(lockPath);
-    if (current.token === token) {
-      await unlinkWithRetry(lockPath);
-      if (ownedAppendLocks.get(lockPath) === token) {
-        ownedAppendLocks.delete(lockPath);
-      }
-      return true;
-    }
-    return false;
-  } catch (error: unknown) {
-    if (hasCode(error, "ENOENT")) {
-      if (ownedAppendLocks.get(lockPath) === token) {
-        ownedAppendLocks.delete(lockPath);
-      }
-      return true;
-    }
-    throw error;
-  }
-}
-
-async function removeAgedInvalidLock(lockPath: string): Promise<boolean> {
-  let first: Stats;
-  try {
-    first = await lstat(lockPath);
-  } catch {
-    return false;
-  }
-  if (
-    first.isSymbolicLink() ||
-    !first.isFile() ||
-    Date.now() - first.mtimeMs < 30_000
-  ) {
-    return false;
-  }
-  const current = await lstat(lockPath).catch(() => null);
-  if (!current || !sameFile(first, current) || current.mtimeMs !== first.mtimeMs) {
-    return false;
-  }
-  await unlinkWithRetry(lockPath);
-  return true;
-}
-
-async function unlinkWithRetry(filePath: string): Promise<void> {
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    try {
-      await unlink(filePath);
-      return;
-    } catch (error: unknown) {
-      if (
-        attempt === 4 ||
-        (!hasCode(error, "EPERM") &&
-          !hasCode(error, "EACCES") &&
-          !hasCode(error, "EBUSY"))
-      ) {
-        throw error;
-      }
-      await delay(10 * (attempt + 1));
-    }
-  }
-}
-
-function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 0) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error: unknown) {
-    return !hasCode(error, "ESRCH");
-  }
-}
-
-function hasCode(error: unknown, code: string): boolean {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    (error as NodeJS.ErrnoException).code === code
-  );
 }
 
 async function readLastSequence(handle: FileHandle): Promise<number> {
@@ -496,10 +323,6 @@ async function repairUnterminatedTail(handle: FileHandle): Promise<string> {
 
 function sameFile(left: Stats, right: Stats): boolean {
   return left.dev === right.dev && left.ino === right.ino;
-}
-
-async function readSafeSessionFile(filePath: string): Promise<string> {
-  return (await readSafeSessionSnapshot(filePath)).text;
 }
 
 async function readSafeSessionSnapshot(

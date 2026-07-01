@@ -1,18 +1,12 @@
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import {
   lstat,
   mkdir,
   open,
-  readFile,
-  stat,
-  unlink,
-  writeFile,
   type FileHandle,
 } from "node:fs/promises";
-import type { Stats } from "node:fs";
-import { hostname } from "node:os";
 import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
+import { acquireFileLock } from "../runtime/fileLock.js";
 import {
   MemoryValidationError,
   type MemoryRecord,
@@ -126,7 +120,9 @@ export class MemoryStore {
 
   private async appendNow(event: MemoryEvent): Promise<void> {
     await ensureSafeParent(this.filePath);
-    const release = await acquireLock(this.filePath);
+    const release = await acquireFileLock(this.filePath, {
+      label: "memory",
+    });
     let committed = false;
 
     try {
@@ -207,7 +203,9 @@ export async function withMemoryTransaction<T>(
   const key = `transaction:${path.resolve(transactionPath)}`;
   return serializeMemoryOperation(key, async () => {
     await ensureSafeParent(transactionPath);
-    const release = await acquireLock(transactionPath);
+    const release = await acquireFileLock(transactionPath, {
+      label: "memory transaction",
+    });
     try {
       return await operation();
     } finally {
@@ -524,115 +522,6 @@ async function assertSafeOpenFile(filePath: string, handle: FileHandle): Promise
     pathInfo.ino !== handleInfo.ino
   ) {
     throw new Error("Refusing a symbolic link or replaced memory store.");
-  }
-}
-
-interface LockData {
-  pid: number;
-  hostname: string;
-  createdAt: string;
-  token: string;
-}
-
-async function acquireLock(filePath: string): Promise<() => Promise<void>> {
-  const lockPath = `${filePath}.lock`;
-  const deadline = Date.now() + 10_000;
-
-  while (true) {
-    const data: LockData = {
-      pid: process.pid,
-      hostname: hostname(),
-      createdAt: new Date().toISOString(),
-      token: randomBytes(16).toString("hex"),
-    };
-    try {
-      await writeFile(lockPath, `${JSON.stringify(data)}\n`, {
-        encoding: "utf8",
-        flag: "wx",
-        mode: 0o600,
-      });
-      return () => releaseLock(lockPath, data.token);
-    } catch (error: unknown) {
-      if (!hasCode(error, "EEXIST")) {
-        throw error;
-      }
-      if (await removeStaleLock(lockPath)) {
-        continue;
-      }
-      if (Date.now() >= deadline) {
-        throw new Error(`Timed out waiting for memory lock: ${filePath}`);
-      }
-      await delay(10 + Math.floor(Math.random() * 20));
-    }
-  }
-}
-
-async function releaseLock(lockPath: string, token: string): Promise<void> {
-  try {
-    const current = await readLock(lockPath);
-    if (current.token === token) {
-      await unlink(lockPath);
-    }
-  } catch (error: unknown) {
-    if (!hasCode(error, "ENOENT")) {
-      throw error;
-    }
-  }
-}
-
-async function removeStaleLock(lockPath: string): Promise<boolean> {
-  try {
-    const lock = await readLock(lockPath);
-    if (lock.hostname !== hostname() || isProcessAlive(lock.pid)) {
-      return false;
-    }
-    const current = await readLock(lockPath);
-    if (current.token !== lock.token) {
-      return false;
-    }
-    await unlink(lockPath);
-    return true;
-  } catch {
-    try {
-      const info = await lstat(lockPath);
-      if (
-        info.isSymbolicLink() ||
-        !info.isFile() ||
-        Date.now() - info.mtimeMs < 30_000
-      ) {
-        return false;
-      }
-      const current = await stat(lockPath);
-      if (current.dev !== info.dev || current.ino !== info.ino) {
-        return false;
-      }
-      await unlink(lockPath);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
-
-async function readLock(lockPath: string): Promise<LockData> {
-  const value = JSON.parse(await readFile(lockPath, "utf8")) as Partial<LockData>;
-  if (
-    !Number.isInteger(value.pid) ||
-    typeof value.hostname !== "string" ||
-    typeof value.createdAt !== "string" ||
-    typeof value.token !== "string"
-  ) {
-    throw new Error("Memory lock is invalid.");
-  }
-  return value as LockData;
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error: unknown) {
-    return hasCode(error, "EPERM");
   }
 }
 

@@ -17,8 +17,12 @@
     "worktrees": "node dist/cli/worktreeReport.js",
     "telemetry:report": "node dist/cli/telemetryReport.js",
     "test": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:integration:docker": "vitest run tests/dockerIntegration.test.ts",
     "test:acceptance": "vitest run tests/acceptance.test.ts",
     "test:contract": "vitest run tests/openai.test.ts tests/mcp.test.ts",
+    "lint": "eslint src tests eslint.config.js vitest.config.ts --max-warnings=0",
+    "check": "npm run lint && npm run build && npm test -- --run && npm run test:coverage",
     "eval": "npm run build --silent && node dist/eval/cli.js"
   },
   "dependencies": {
@@ -31,9 +35,13 @@
     "zod": "4.1.12"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.4",
     "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "eslint": "^9.39.4",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.62.1",
     "vitest": "^4.1.9"
   }
 }

@@ -290,8 +290,10 @@ export async function atomicCreateTextFile(
     tempPath = temp.path;
     try {
       await writeCompleteFile(temp.handle, bytes, options.signal);
-      const createMode =
-        normalizeMode(options.mode ?? 0o666) & ~process.umask();
+      // Node exposes no race-free cross-platform API for reading the umask.
+      // eslint-disable-next-line @typescript-eslint/no-deprecated
+      const currentUmask = process.umask();
+      const createMode = normalizeMode(options.mode ?? 0o666) & ~currentUmask;
       await temp.handle.chmod(createMode);
       await temp.handle.sync();
       tempInfo = await temp.handle.stat();

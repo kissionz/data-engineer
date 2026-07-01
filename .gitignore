@@ -1,5 +1,6 @@
 node_modules/
 dist/
+coverage/
 .harness/*
 !.harness/skills/
 !.harness/skills/**

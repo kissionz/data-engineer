@@ -57,7 +57,6 @@ export class LocalCommandExecutor implements CommandExecutor {
       let childClosed = false;
       let closeCode: number | null = null;
       let forceKillSent = false;
-      let timeout: NodeJS.Timeout | undefined;
       let forceKillTimer: NodeJS.Timeout | undefined;
 
       const requestTermination = (cause: "timeout" | "cancelled") => {
@@ -88,9 +87,7 @@ export class LocalCommandExecutor implements CommandExecutor {
         settled = true;
         activeChildren.delete(child);
 
-        if (timeout) {
-          clearTimeout(timeout);
-        }
+        clearTimeout(timeout);
 
         if (forceKillTimer) {
           clearTimeout(forceKillTimer);
@@ -129,7 +126,7 @@ export class LocalCommandExecutor implements CommandExecutor {
         }
       });
 
-      timeout = setTimeout(
+      const timeout = setTimeout(
         () => requestTermination("timeout"),
         Math.max(1, options.timeoutMs),
       );

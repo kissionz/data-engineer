@@ -617,7 +617,7 @@ describe("OpenAIModel", () => {
         messages: [{ role: "user", content: "hello" }],
         tools: [],
       }),
-    ).rejects.toThrow("invalid trailing streaming event");
+    ).rejects.toThrow("invalid streaming event");
   });
 
   it("rejects oversized JSON responses before buffering the body", async () => {

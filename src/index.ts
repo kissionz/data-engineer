@@ -1,14 +1,9 @@
 #!/usr/bin/env node
 
-import { Command } from "commander";
 import { homedir } from "node:os";
 import path from "node:path";
-import { createInterface } from "node:readline/promises";
 import { AgentLoop } from "./agent/loop.js";
-import {
-  DEFAULT_AGENT_BUDGET,
-  type AgentBudget,
-} from "./agent/budget.js";
+import type { AgentBudget } from "./agent/budget.js";
 import { CANCELLED_TEXT } from "./agent/cancellation.js";
 import { ContextBuilder } from "./agent/context.js";
 import { SessionCompactor } from "./agent/compaction.js";
@@ -83,6 +78,16 @@ import {
 import { WriteTool } from "./tools/write.js";
 import { HttpFetchTool } from "./tools/httpFetch.js";
 import { ConsoleReporter } from "./ui/consoleReporter.js";
+import { InteractivePrompt } from "./cli/interactivePrompt.js";
+import {
+  numericConfig,
+  optionOrEnv,
+  parseCli,
+  parseNonNegativeInteger,
+  parsePositiveInteger,
+  resolveOptionalStringOption,
+  resolveStringOption,
+} from "./cli/program.js";
 import {
   defaultUserConfigPath,
   loadUserConfig,
@@ -101,100 +106,11 @@ import {
   type TelemetrySink,
 } from "./telemetry/index.js";
 
-interface CliOptions {
-  task?: string;
-  config?: string;
-  envFile?: string;
-  cwd: string;
-  provider: string;
-  model?: string;
-  baseUrl?: string;
-  apiStyle?: string;
-  maxTurns: string;
-  maxWallTimeMs: string;
-  maxInputTokens: string;
-  maxOutputTokens: string;
-  maxToolCalls: string;
-  maxModelRetries: string;
-  resume?: string;
-  bashSandbox: string;
-  sandboxImage: string;
-  sandboxPull: string;
-  sandboxNetwork: string;
-  sandboxMemory: string;
-  sandboxCpus: string;
-  sandboxPids: string;
-  worktree: boolean;
-  worktreeBase: string;
-}
-
 let activeMcpManager: McpManager | undefined;
 let activeTelemetrySink: TelemetrySink = noopTelemetrySink;
 
 async function main(): Promise<void> {
-  const program = new Command();
-
-  program
-    .name("harness")
-    .description("TypeScript local coding agent harness")
-    .option("-t, --task <task>", "Task to run")
-    .option("--config <path>", "Trusted user config file")
-    .option("--env-file <path>", "Explicit environment file to load")
-    .option("--cwd <cwd>", "Workspace directory", process.cwd())
-    .option("--provider <provider>", "Model provider: openai or mock", "openai")
-    .option("--model <model>", "Model name")
-    .option("--base-url <baseUrl>", "OpenAI-compatible API base URL")
-    .option(
-      "--api-style <style>",
-      "API style: responses (OpenAI native) or chat_completions (compatible)",
-    )
-    .option("--max-turns <turns>", "Maximum agent turns per user message", "50")
-    .option(
-      "--max-wall-time-ms <milliseconds>",
-      "Maximum wall time per user message",
-      String(DEFAULT_AGENT_BUDGET.maxWallTimeMs),
-    )
-    .option(
-      "--max-input-tokens <tokens>",
-      "Maximum provider input tokens per user message",
-      String(DEFAULT_AGENT_BUDGET.maxInputTokens),
-    )
-    .option(
-      "--max-output-tokens <tokens>",
-      "Maximum provider output tokens per user message",
-      String(DEFAULT_AGENT_BUDGET.maxOutputTokens),
-    )
-    .option(
-      "--max-tool-calls <calls>",
-      "Maximum tool calls per user message",
-      String(DEFAULT_AGENT_BUDGET.maxToolCalls),
-    )
-    .option(
-      "--max-model-retries <retries>",
-      "Maximum model retries per user message",
-      String(DEFAULT_AGENT_BUDGET.maxModelRetries),
-    )
-    .option("--resume <session>", "Resume a session id or latest")
-    .option(
-      "--bash-sandbox <mode>",
-      "Bash execution: auto, docker, host, or off",
-      "auto",
-    )
-    .option(
-      "--sandbox-image <image>",
-      "Docker sandbox image",
-      "node:22-bookworm",
-    )
-    .option("--sandbox-pull <policy>", "Image pull: missing or never", "never")
-    .option("--sandbox-network <mode>", "Container network: none or bridge", "none")
-    .option("--sandbox-memory <limit>", "Container memory limit", "1g")
-    .option("--sandbox-cpus <count>", "Container CPU limit", "2")
-    .option("--sandbox-pids <count>", "Container process limit", "256")
-    .option("--worktree", "Run the agent in a new isolated git worktree")
-    .option("--worktree-base <ref>", "Git ref used for a new worktree", "HEAD")
-    .parse();
-
-  const opts = program.opts<CliOptions>();
+  const { program, options: opts } = parseCli();
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
   const userConfigPath =
     opts.config ?? process.env.HARNESS_CONFIG ?? defaultUserConfigPath();
@@ -481,47 +397,6 @@ async function main(): Promise<void> {
     createRuntime,
   );
   printWorktreeReminder(worktree);
-}
-
-function optionOrEnv(
-  program: Command,
-  optionName: string,
-  optionValue: string,
-  environmentName: string,
-): string {
-  return program.getOptionValueSource(optionName) === "default"
-    ? process.env[environmentName] ?? optionValue
-    : optionValue;
-}
-
-function resolveStringOption(
-  program: Command,
-  optionName: string,
-  optionValue: string,
-  environmentName: string,
-  configValue?: string,
-): string {
-  return (
-    program.getOptionValueSource(optionName) === "cli"
-      ? optionValue
-      : process.env[environmentName] ?? configValue ?? optionValue
-  );
-}
-
-function resolveOptionalStringOption(
-  program: Command,
-  optionName: string,
-  optionValue: string | undefined,
-  environmentName: string,
-  configValue?: string,
-): string | undefined {
-  return program.getOptionValueSource(optionName) === "cli"
-    ? optionValue
-    : process.env[environmentName] ?? configValue ?? optionValue;
-}
-
-function numericConfig(value: number | undefined): string | undefined {
-  return value === undefined ? undefined : String(value);
 }
 
 interface SessionRuntime {
@@ -996,140 +871,6 @@ function assertModelConfiguration(provider: string): void {
         "  npm start -- --provider mock --task \"Inspect README.md\"",
       ].join("\n"),
     );
-  }
-}
-
-function parsePositiveInteger(value: string, optionName: string): number {
-  const parsed = Number.parseInt(value, 10);
-
-  if (!Number.isInteger(parsed) || parsed < 1 || String(parsed) !== value.trim()) {
-    throw new Error(`${optionName} must be a positive integer.`);
-  }
-
-  return parsed;
-}
-
-function parseNonNegativeInteger(value: string, optionName: string): number {
-  const parsed = Number.parseInt(value, 10);
-
-  if (!Number.isInteger(parsed) || parsed < 0 || String(parsed) !== value.trim()) {
-    throw new Error(`${optionName} must be a non-negative integer.`);
-  }
-
-  return parsed;
-}
-
-class InteractivePrompt {
-  private rl: ReturnType<typeof createInterface>;
-  private terminationPending = false;
-  private activeTask?: AbortController;
-  private inputSuspended = false;
-
-  constructor() {
-    this.rl = this.createReadline();
-  }
-
-  async question(prompt: string): Promise<string> {
-    return this.rl.question(`${prompt}> `);
-  }
-
-  resumeInput(): void {
-    if (this.inputSuspended) {
-      this.rl = this.createReadline();
-      this.inputSuspended = false;
-      return;
-    }
-
-    this.rl.resume();
-  }
-
-  pauseInput(): void {
-    if (this.inputSuspended) {
-      return;
-    }
-
-    this.rl.close();
-    this.inputSuspended = true;
-  }
-
-  beginTask(): AbortController {
-    const controller = new AbortController();
-    this.activeTask = controller;
-    return controller;
-  }
-
-  endTask(controller: AbortController): void {
-    if (this.activeTask === controller) {
-      this.activeTask = undefined;
-    }
-    this.resumeInput();
-  }
-
-  markTaskCancelled(): void {
-    if (this.terminationPending) {
-      return;
-    }
-
-    this.terminationPending = true;
-    this.rl.write(
-      "\nTask cancelled. Type y to terminate the session or n to continue. Press Ctrl+C again to exit immediately.\n",
-    );
-  }
-
-  handleTerminationAnswer(
-    answer: string,
-  ): "none" | "exit" | "continue" | "pending" {
-    if (!this.terminationPending) {
-      return "none";
-    }
-
-    const normalized = answer.trim().toLowerCase();
-
-    if (["y", "yes"].includes(normalized)) {
-      return "exit";
-    }
-
-    if (["n", "no"].includes(normalized)) {
-      this.terminationPending = false;
-      return "continue";
-    }
-
-    return "pending";
-  }
-
-  close(): void {
-    this.rl.close();
-  }
-
-  private createReadline(): ReturnType<typeof createInterface> {
-    const rl = createInterface({
-      input: process.stdin,
-      output: process.stdout,
-      terminal: true,
-    });
-
-    rl.on("SIGINT", () => {
-      if (this.activeTask && !this.activeTask.signal.aborted) {
-        this.terminationPending = true;
-        this.activeTask.abort();
-        rl.write(
-          "\nCancelling current task. Type y to terminate the session after cleanup, n to continue. Press Ctrl+C again to exit immediately.\n",
-        );
-        return;
-      }
-
-      if (this.terminationPending) {
-        this.close();
-        process.exit(130);
-      }
-
-      this.terminationPending = true;
-      rl.write(
-        "\nTerminate session? Type y to exit, n to continue. Press Ctrl+C again to exit immediately.\n",
-      );
-    });
-
-    return rl;
   }
 }
 
