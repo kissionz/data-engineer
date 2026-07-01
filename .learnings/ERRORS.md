@@ -31,6 +31,38 @@ Locate the exact neighboring test before constructing an insertion patch.
 
 ---
 
+## [ERR-20260701-001] git_switch_sandbox
+
+**Logged**: 2026-07-01T09:18:20Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+Git branch switching required escalated access because the sandbox could not create `.git/index.lock`.
+
+### Error
+```
+fatal: Unable to create '/Users/kissionz/Documents/data engineer/.git/index.lock': Operation not permitted
+```
+
+### Context
+- Attempted `git switch main` after committing a reviewed fix.
+- Repository content was writable, but branch switching needed additional Git metadata access.
+
+### Suggested Fix
+When this managed workspace rejects a branch-changing Git command at `.git/index.lock`, rerun that narrowly scoped command with escalated permissions.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .git/index
+
+### Resolution
+- **Resolved**: 2026-07-01T09:18:20Z
+- **Notes**: Continued with a narrowly scoped escalation request for the required branch switch.
+
+---
+
 ## [ERR-20260630-002] git_stage_sandbox_permission
 
 **Logged**: 2026-06-30T09:56:53Z
