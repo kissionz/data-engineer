@@ -429,7 +429,56 @@ Windows 的绝对路径可使用 JSON 转义形式，例如 `"C:\\path\\to\\serv
 
 - 配置精确的 `allowedHosts`，不支持通配符。
 - 使用 HTTPS；只有同时明确允许 localhost 时才能使用 HTTP。
-- 通过 `tokenEnv` 从环境变量读取 bearer token，不能把 token 写入配置。
+- 使用无认证、环境变量 bearer token 或标准 MCP OAuth，不能把 token 写入配置。
+
+静态 bearer token 示例：
+
+```json
+{
+  "id": "remote_docs",
+  "transport": {
+    "type": "http",
+    "url": "https://mcp.example.com/mcp",
+    "allowedHosts": ["mcp.example.com"],
+    "auth": {
+      "type": "bearer",
+      "tokenEnv": "MCP_ACCESS_TOKEN"
+    }
+  }
+}
+```
+
+`tokenEnv` 仍兼容旧配置，但不能与新的 `auth` 字段同时使用。
+
+标准 OAuth 示例（MaxCompute Remote MCP）：
+
+```json
+{
+  "id": "maxcompute",
+  "transport": {
+    "type": "http",
+    "url": "https://mcp.cn-hangzhou.maxcompute.aliyun.com/mcp",
+    "allowedHosts": ["mcp.cn-hangzhou.maxcompute.aliyun.com"],
+    "auth": {
+      "type": "oauth",
+      "redirectMode": "browser",
+      "callbackPort": 33418,
+      "callbackTimeoutMs": 180000
+    }
+  },
+  "timeoutMs": 30000,
+  "maxTools": 128
+}
+```
+
+首次连接时 Harness 会输出授权 URL，并在 `browser` 模式下尝试打开浏览器。
+OAuth 使用 loopback callback、PKCE 和 MCP SDK 的授权服务器发现流程；授权状态按
+server ID 与 URL 隔离保存在 `~/.harness/mcp-oauth/`，文件权限限制为当前用户可读写。
+无图形环境可将 `redirectMode` 改为 `manual`，在其他浏览器中打开输出的 URL；
+浏览器最终仍须能回调当前主机的 `127.0.0.1:<callbackPort>`。
+
+OAuth 的 metadata、registration 和 token endpoint 也必须落在 `allowedHosts`
+及相同协议、端口约束内，所有目标仍会执行 DNS 和目标 IP 安全检查。
 
 ## 模型能力与上下文恢复
 

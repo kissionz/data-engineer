@@ -35,5 +35,25 @@
     "maxResponseBytes": 1000000,
     "timeoutMs": 30000
   },
-  "mcpServers": []
+  "mcpServers": [
+    {
+      "id": "maxcompute",
+      "enabled": false,
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.cn-hangzhou.maxcompute.aliyun.com/mcp",
+        "allowedHosts": [
+          "mcp.cn-hangzhou.maxcompute.aliyun.com"
+        ],
+        "auth": {
+          "type": "oauth",
+          "redirectMode": "browser"
+        }
+      },
+      "timeoutMs": 30000,
+      "maxTools": 128,
+      "maxResources": 64,
+      "maxPrompts": 64
+    }
+  ]
 }

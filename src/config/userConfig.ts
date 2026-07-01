@@ -36,6 +36,30 @@ const stdioTransportSchema = z
   })
   .strict();
 
+const mcpHttpAuthSchema = z.discriminatedUnion("type", [
+  z
+    .object({
+      type: z.literal("none"),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("bearer"),
+      tokenEnv: environmentName,
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal("oauth"),
+      redirectMode: z.enum(["browser", "manual"]).default("browser"),
+      callbackPort: z.number().int().min(1_024).max(65_535).default(33_418),
+      callbackTimeoutMs: positiveInteger
+        .max(10 * 60_000)
+        .default(3 * 60_000),
+    })
+    .strict(),
+]);
+
 const httpTransportSchema = z
   .object({
     type: z.literal("http"),
@@ -49,9 +73,19 @@ const httpTransportSchema = z
         "allowedHosts must not contain duplicates",
       ),
     tokenEnv: environmentName.optional(),
+    auth: mcpHttpAuthSchema.optional(),
     allowLocalhost: z.boolean().default(false),
   })
-  .strict();
+  .strict()
+  .superRefine((transport, context) => {
+    if (transport.tokenEnv && transport.auth) {
+      context.addIssue({
+        code: "custom",
+        path: ["auth"],
+        message: "auth cannot be combined with legacy tokenEnv",
+      });
+    }
+  });
 
 const mcpServerSchema = z
   .object({

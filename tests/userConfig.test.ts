@@ -79,6 +79,18 @@ describe("user config", () => {
               tokenEnv: "MCP_TOKEN",
             },
           },
+          {
+            id: "remote_oauth",
+            transport: {
+              type: "http",
+              url: "https://oauth-mcp.example/mcp",
+              allowedHosts: ["oauth-mcp.example"],
+              auth: {
+                type: "oauth",
+                redirectMode: "manual",
+              },
+            },
+          },
         ],
       }),
       "utf8",
@@ -121,6 +133,17 @@ describe("user config", () => {
           maxTools: 64,
         },
         { id: "remote" },
+        {
+          id: "remote_oauth",
+          transport: {
+            auth: {
+              type: "oauth",
+              redirectMode: "manual",
+              callbackPort: 33_418,
+              callbackTimeoutMs: 180_000,
+            },
+          },
+        },
       ],
     });
   });
@@ -193,6 +216,23 @@ describe("user config", () => {
         ],
       },
       "allowedHosts",
+    ],
+    [
+      {
+        mcpServers: [
+          {
+            id: "ambiguous_auth",
+            transport: {
+              type: "http",
+              url: "https://mcp.example",
+              allowedHosts: ["mcp.example"],
+              tokenEnv: "MCP_TOKEN",
+              auth: { type: "oauth" },
+            },
+          },
+        ],
+      },
+      "cannot be combined",
     ],
     [
       {

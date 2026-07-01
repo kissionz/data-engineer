@@ -11,6 +11,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import type { McpServerConfig } from "../src/config/userConfig.js";
 import {
+  applyMcpHttpAuthorization,
   isPrivateIp,
   McpManager,
   validateMcpHttpRequestTarget,
@@ -63,6 +64,34 @@ describe("MCP integration", () => {
         "https://user:secret@mcp.example:8443/next",
       ),
     ).toThrow("allowlist");
+  });
+
+  it("preserves SDK OAuth credentials without leaking static bearer tokens", () => {
+    const oauthHeaders = applyMcpHttpAuthorization(
+      new Headers({ authorization: "Bearer oauth-token" }),
+      "oauth",
+      undefined,
+      true,
+    );
+    expect(oauthHeaders.get("authorization")).toBe("Bearer oauth-token");
+
+    const staticHeaders = applyMcpHttpAuthorization(
+      new Headers({ authorization: "Bearer untrusted" }),
+      "bearer",
+      "configured-token",
+      true,
+    );
+    expect(staticHeaders.get("authorization")).toBe(
+      "Bearer configured-token",
+    );
+
+    const crossOriginHeaders = applyMcpHttpAuthorization(
+      new Headers({ authorization: "Bearer configured-token" }),
+      "bearer",
+      "configured-token",
+      false,
+    );
+    expect(crossOriginHeaders.has("authorization")).toBe(false);
   });
 
   it("discovers and invokes a real stdio MCP tool through the official SDK", async () => {

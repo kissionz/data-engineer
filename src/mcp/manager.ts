@@ -2,6 +2,7 @@ import type { LookupOptions } from "node:dns";
 import { isIP, type LookupFunction } from "node:net";
 import { homedir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import {
   StdioClientTransport,
   getDefaultEnvironment,
@@ -21,6 +22,7 @@ import {
   type McpToolCaller,
 } from "./toolAdapter.js";
 import { discoverContentAdapters } from "./contentAdapters.js";
+import { McpOAuthProvider } from "./oauthProvider.js";
 
 interface McpConnection {
   config: McpServerConfig;
@@ -85,17 +87,36 @@ async function connectServer(config: McpServerConfig): Promise<McpConnection> {
     config.transport.type === "http"
       ? await createHttpTransport(config.id, config.transport)
       : undefined;
-  const transport =
+  let transport =
     config.transport.type === "stdio"
       ? createStdioTransport(config.transport)
-      : httpSetup!.transport;
+      : httpSetup!.createTransport();
   const cleanup = httpSetup?.cleanup ?? (async () => undefined);
 
   try {
-    await client.connect(transport, {
-      timeout: config.timeoutMs,
-      signal: AbortSignal.timeout(config.timeoutMs),
-    });
+    try {
+      await client.connect(transport, {
+        timeout: config.timeoutMs,
+        signal: AbortSignal.timeout(config.timeoutMs),
+      });
+    } catch (error: unknown) {
+      if (
+        !(error instanceof UnauthorizedError) ||
+        !httpSetup?.oauthProvider ||
+        !(transport instanceof StreamableHTTPClientTransport)
+      ) {
+        throw error;
+      }
+      const authorizationCode =
+        await httpSetup.oauthProvider.waitForAuthorizationCode();
+      await transport.finishAuth(authorizationCode);
+      await transport.close().catch(() => undefined);
+      transport = httpSetup.createTransport();
+      await client.connect(transport, {
+        timeout: config.timeoutMs,
+        signal: AbortSignal.timeout(config.timeoutMs),
+      });
+    }
   } catch (error: unknown) {
     await cleanup();
     throw error;
@@ -170,19 +191,36 @@ async function createHttpTransport(
   serverId: string,
   transportConfig: HttpTransportConfig,
 ): Promise<{
-  transport: StreamableHTTPClientTransport;
+  createTransport: () => StreamableHTTPClientTransport;
+  oauthProvider?: McpOAuthProvider;
   cleanup: () => Promise<void>;
 }> {
   const url = new URL(transportConfig.url);
   await assertNetworkDestination(url, transportConfig.allowLocalhost);
-  const token = transportConfig.tokenEnv
-    ? process.env[transportConfig.tokenEnv]
+  const auth =
+    transportConfig.auth ??
+    (transportConfig.tokenEnv
+      ? { type: "bearer" as const, tokenEnv: transportConfig.tokenEnv }
+      : { type: "none" as const });
+  const token = auth.type === "bearer"
+    ? process.env[auth.tokenEnv]
     : undefined;
-  if (transportConfig.tokenEnv && !token) {
+  if (auth.type === "bearer" && !token) {
     throw new Error(
-      `MCP server ${serverId} requires environment variable ${transportConfig.tokenEnv}.`,
+      `MCP server ${serverId} requires environment variable ${auth.tokenEnv}.`,
     );
   }
+  const oauthProvider =
+    auth.type === "oauth"
+      ? new McpOAuthProvider({
+          serverId,
+          serverUrl: url,
+          allowedHosts: new Set(transportConfig.allowedHosts),
+          callbackPort: auth.callbackPort,
+          callbackTimeoutMs: auth.callbackTimeoutMs,
+          redirectMode: auth.redirectMode,
+        })
+      : undefined;
   const allowedHosts = new Set(
     transportConfig.allowedHosts,
   );
@@ -200,12 +238,12 @@ async function createHttpTransport(
     );
     const target = validated.url;
     await assertNetworkDestination(target, transportConfig.allowLocalhost);
-    const headers = new Headers(init?.headers);
-    if (token && validated.includeCredential) {
-      headers.set("authorization", `Bearer ${token}`);
-    } else {
-      headers.delete("authorization");
-    }
+    const headers = applyMcpHttpAuthorization(
+      new Headers(init?.headers),
+      auth.type,
+      token,
+      validated.includeCredential,
+    );
     return fetch(target, {
       ...init,
       headers,
@@ -215,17 +253,37 @@ async function createHttpTransport(
   };
 
   return {
-    transport: new StreamableHTTPClientTransport(url, {
-      fetch: secureFetch,
-      reconnectionOptions: {
-        initialReconnectionDelay: 500,
-        maxReconnectionDelay: 5_000,
-        reconnectionDelayGrowFactor: 2,
-        maxRetries: 2,
-      },
-    }),
-    cleanup: () => dispatcher.close(),
+    createTransport: () =>
+      new StreamableHTTPClientTransport(url, {
+        fetch: secureFetch,
+        ...(oauthProvider ? { authProvider: oauthProvider } : {}),
+        reconnectionOptions: {
+          initialReconnectionDelay: 500,
+          maxReconnectionDelay: 5_000,
+          reconnectionDelayGrowFactor: 2,
+          maxRetries: 2,
+        },
+      }),
+    oauthProvider,
+    cleanup: async () => {
+      await oauthProvider?.close();
+      await dispatcher.close();
+    },
   };
+}
+
+export function applyMcpHttpAuthorization(
+  headers: Headers,
+  authType: "none" | "bearer" | "oauth",
+  bearerToken: string | undefined,
+  includeCredential: boolean,
+): Headers {
+  if (authType === "bearer" && bearerToken && includeCredential) {
+    headers.set("authorization", `Bearer ${bearerToken}`);
+  } else if (authType !== "oauth") {
+    headers.delete("authorization");
+  }
+  return headers;
 }
 
 export function validateMcpHttpRequestTarget(

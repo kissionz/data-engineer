@@ -88,10 +88,12 @@ Retry repository-mutating Git commands with the approved scoped Git prefix when 
 ### Metadata
 - Reproducible: yes
 - Related Files: .git/index
+- Recurrence-Count: 2
+- Last-Seen: 2026-07-01
 
 ### Resolution
 - **Resolved**: 2026-06-30T09:56:53Z
-- **Notes**: Retried `git add` with scoped escalation; staging succeeded.
+- **Notes**: Retried `git add` with scoped escalation; staging succeeded. The same restriction recurred while staging the MCP OAuth change on 2026-07-01.
 
 ---
 
@@ -221,5 +223,70 @@ Inspect the graph before choosing fast-forward-only, then use a normal merge whe
 ### Resolution
 - **Resolved**: 2026-06-28T13:41:00Z
 - **Notes**: Merged with the `ort` strategy; both branches were preserved without conflicts.
+
+---
+
+## [ERR-20260701-002] oauth_loopback_test_sandbox
+
+**Logged**: 2026-07-01T10:16:26Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The managed sandbox blocked a loopback listener required by the MCP OAuth callback test.
+
+### Error
+```
+Error: listen EPERM: operation not permitted 127.0.0.1
+```
+
+### Context
+- Ran the focused Vitest suite for the new MCP OAuth provider.
+- The test intentionally binds an ephemeral loopback port to verify state-bound OAuth callbacks.
+- Configuration and non-network MCP tests passed in the same run.
+
+### Suggested Fix
+Run loopback integration tests with narrowly scoped elevated test permissions in this managed environment.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/mcpOAuth.test.ts, src/mcp/oauthProvider.ts
+
+### Resolution
+- **Resolved**: 2026-07-01T10:16:26Z
+- **Notes**: Re-ran the same focused test command with elevated permissions.
+
+---
+
+## [ERR-20260701-003] oauth_test_await_thenable
+
+**Logged**: 2026-07-01T10:20:30Z
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The final OAuth quality check found an unnecessary await on a synchronous Vitest assertion.
+
+### Error
+```
+Unexpected `await` of a non-Promise (non-"Thenable") value
+```
+
+### Context
+- Added coverage for calling `waitForAuthorizationCode` before OAuth begins.
+- `expect(...).toThrow(...)` is synchronous and should not be awaited.
+
+### Suggested Fix
+Use `expect(fn).toThrow(...)` for synchronous exceptions and reserve `await expect(promise)` for asynchronous assertions.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/mcpOAuth.test.ts
+
+### Resolution
+- **Resolved**: 2026-07-01T10:20:30Z
+- **Notes**: Removed the unnecessary await before rerunning the full quality gate.
 
 ---
