@@ -11,6 +11,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isPathWithin } from "../runtime/pathSafety.js";
 
 export type FolderGrantAccess = "read" | "read_write";
 export type FolderGrantScope = "session" | "always";
@@ -63,7 +64,7 @@ export class FolderGrantManager {
     return [...this.sessionGrants, ...this.globalGrants].some(
       (grant) =>
         accessAllows(grant.access, normalized.access) &&
-        isWithin(grant.folder, normalized.folder),
+        isPathWithin(grant.folder, normalized.folder),
     );
   }
 
@@ -161,16 +162,6 @@ function accessAllows(
   requested: FolderGrantAccess,
 ): boolean {
   return granted === "read_write" || requested === "read";
-}
-
-function isWithin(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) &&
-      relative !== ".." &&
-      !path.isAbsolute(relative))
-  );
 }
 
 async function loadGrantFile(filePath: string): Promise<FolderGrantRecord[]> {

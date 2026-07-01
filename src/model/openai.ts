@@ -15,6 +15,18 @@ const MAX_TOOL_ARGUMENT_CHARS = 1024 * 1024;
 
 export type ApiStyle = "responses" | "chat_completions";
 
+export function parseApiStyle(value: string | undefined): ApiStyle | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value === "responses" || value === "chat_completions") {
+    return value;
+  }
+  throw new Error(
+    'API style must be either "responses" or "chat_completions".',
+  );
+}
+
 export interface OpenAIModelOptions {
   apiKey: string;
   model: string;
@@ -396,13 +408,20 @@ async function parseStreamingResponse(
       event.item?.type === "function_call" &&
       typeof event.output_index === "number"
     ) {
+      const previous = streamedTools.get(event.output_index);
       streamedTools.set(event.output_index, {
-        id: event.item.call_id ?? event.item.id ?? `call_${event.output_index + 1}`,
+        id:
+          event.item.call_id ??
+          event.item.id ??
+          previous?.id ??
+          `call_${event.output_index + 1}`,
         name: requiredString(
-          event.item.name,
+          event.item.name ?? previous?.name,
           "OpenAI streamed function call missing name.",
         ),
-        arguments: boundedToolArguments(event.item.arguments ?? ""),
+        arguments: boundedToolArguments(
+          event.item.arguments ?? previous?.arguments ?? "",
+        ),
       });
       continue;
     }
@@ -1208,7 +1227,7 @@ async function parseChatStreamingResponse(
           streamedTools.set(idx, {
             id: toolId,
             name: toolName,
-            arguments: tc.function?.arguments ?? "",
+            arguments: boundedToolArguments(tc.function?.arguments ?? ""),
           });
           onStreamEvent?.({ type: "tool_call_start", toolCallId: toolId, name: toolName });
           if (tc.function?.arguments) {
@@ -1333,7 +1352,7 @@ async function* parseChatSSEStream(
             try {
               yield JSON.parse(data) as ChatCompletionsResponseBody;
             } catch {
-              // ignore trailing invalid data
+              throw new Error("API returned an invalid trailing streaming event.");
             }
           }
         }

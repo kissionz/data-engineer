@@ -25,7 +25,11 @@ import type {
 } from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
 import { MockModel } from "./model/mock.js";
-import { OpenAIModel, type ApiStyle } from "./model/openai.js";
+import {
+  OpenAIModel,
+  parseApiStyle,
+  type ApiStyle,
+} from "./model/openai.js";
 import { memoryPathsForWorkspace } from "./memory/paths.js";
 import { MemoryService } from "./memory/service.js";
 import { McpManager } from "./mcp/manager.js";
@@ -327,10 +331,7 @@ async function main(): Promise<void> {
     "OPENAI_API_STYLE",
     undefined,
   );
-  const apiStyle: ApiStyle | undefined =
-    apiStyleRaw === "responses" || apiStyleRaw === "chat_completions"
-      ? apiStyleRaw
-      : undefined;
+  const apiStyle = parseApiStyle(apiStyleRaw);
   const maxTurns = parsePositiveInteger(
     resolveStringOption(
       program,

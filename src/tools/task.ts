@@ -359,7 +359,12 @@ function readonlyPolicy(
     allowReadonly: true,
     askForBash: false,
     askForWrite: false,
-    deniedPathPrefixes: [".git", ".env", "node_modules"],
+    deniedPathPrefixes: [
+      ".git",
+      ".env",
+      "node_modules",
+      ".harness/permissions",
+    ],
     deniedCommandFragments: [],
   };
 }

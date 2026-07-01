@@ -164,7 +164,7 @@ describe("PermissionGate", () => {
     ).toMatchObject({ decision: "ask" });
   });
 
-  it("allows readonly shell commands", () => {
+  it("asks before every shell command because shell syntax is not safely classifiable", () => {
     const gate = new PermissionGate(defaultPolicy());
 
     for (const command of [
@@ -173,10 +173,14 @@ describe("PermissionGate", () => {
       "rg --files",
       "git status --short",
       "node --version",
+      "cat $(touch pwned)",
+      "git status\ntouch pwned",
+      "cat `touch pwned`",
+      "rg x --glob=$(touch pwned)",
     ]) {
       expect(
         gate.check({ id: command, name: "Bash", args: { command } }),
-      ).toMatchObject({ decision: "allow" });
+      ).toMatchObject({ decision: "ask" });
     }
   });
 
@@ -194,6 +198,27 @@ describe("PermissionGate", () => {
         gate.check({ id: command, name: "Bash", args: { command } }),
       ).toMatchObject({ decision: "ask" });
     }
+  });
+
+  it("uses configured denied path prefixes instead of hard-coded names", () => {
+    const policy = defaultPolicy();
+    policy.deniedPathPrefixes = ["private/cache"];
+    const gate = new PermissionGate(policy);
+
+    expect(
+      gate.check({
+        id: "custom-denied",
+        name: "Read",
+        args: { file_path: "nested/private/cache/token.txt" },
+      }),
+    ).toMatchObject({ decision: "deny" });
+    expect(
+      gate.check({
+        id: "formerly-denied",
+        name: "Read",
+        args: { file_path: ".git/config" },
+      }),
+    ).toMatchObject({ decision: "allow" });
   });
 
   it("denies dangerous shell commands", () => {

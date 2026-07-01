@@ -146,6 +146,9 @@ describe("DockerShellExecutor", () => {
     );
     expect(args.join("\n")).toContain("dst=/workspace/.git");
     expect(args.join("\n")).toContain("dst=/workspace/node_modules");
+    expect(
+      args.find((arg) => arg.includes("dst=/workspace/node_modules")),
+    ).toContain("readonly");
     expect(args.join("\n")).toContain("dst=/workspace/.env.local");
     expect(args.join("\n")).toContain("dst=/workspace/.npmrc");
     expect(args.join("\n")).toContain("dst=/workspace/.ssh");
@@ -179,6 +182,31 @@ describe("DockerShellExecutor", () => {
     });
 
     expect(executor.calls[1]?.args.slice(0, 2)).toEqual(["rm", "--force"]);
+  });
+
+  it("uses a writable isolated dependency directory when host dependencies are absent", async () => {
+    const root = await makeRoot();
+    await writeFile(path.join(root, "package.json"), "{}", "utf8");
+    const executor = new ScriptedExecutor([ok("done")]);
+    const shell = new DockerShellExecutor(
+      executor,
+      new Workspace(root),
+      "session-no-deps",
+      config(),
+    );
+
+    await shell.runScript({
+      script: "npm install",
+      cwd: root,
+      timeoutMs: 5_000,
+    });
+
+    const dependencyMount = executor.calls[0]?.args.find((arg) =>
+      arg.includes("dst=/workspace/node_modules"),
+    );
+    expect(dependencyMount).toBeDefined();
+    expect(dependencyMount).not.toContain("readonly");
+    expect(dependencyMount).toContain(".harness/sandbox/session-no-deps/deps/0");
   });
 
   it("passes cancellation to docker run and cleans up without that signal", async () => {

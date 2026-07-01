@@ -148,10 +148,31 @@ export class DockerShellExecutor implements ShellExecutor {
     }
 
     for (const [index, packageRoot] of plan.packageRoots.entries()) {
-      const source = path.join(depsRoot, String(index));
-      await ensureDirectory(source);
+      const hostDependencies = path.join(
+        this.workspace.root,
+        packageRoot,
+        "node_modules",
+      );
+      const hostInfo = await lstat(hostDependencies).catch(() => null);
       const destination = containerPath(path.join(packageRoot, "node_modules"));
-      args.push("--mount", mount("bind", source, destination));
+      if (hostInfo) {
+        if (hostInfo.isSymbolicLink() || !hostInfo.isDirectory()) {
+          throw new Error(
+            `Package dependency path must be a real directory: ${hostDependencies}`,
+          );
+        }
+        args.push(
+          "--mount",
+          `${mount("bind", hostDependencies, destination)},readonly`,
+        );
+      } else {
+        const isolatedDependencies = path.join(depsRoot, String(index));
+        await ensureDirectory(isolatedDependencies);
+        args.push(
+          "--mount",
+          mount("bind", isolatedDependencies, destination),
+        );
+      }
     }
 
     for (const maskedFile of plan.maskedFiles) {

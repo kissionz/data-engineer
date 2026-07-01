@@ -30,7 +30,12 @@ export function defaultPolicy(): PermissionPolicy {
     allowReadonly: true,
     askForBash: true,
     askForWrite: true,
-    deniedPathPrefixes: [".git", ".git/", ".env", "node_modules", "node_modules/"],
+    deniedPathPrefixes: [
+      ".git",
+      ".env",
+      "node_modules",
+      ".harness/permissions",
+    ],
     deniedCommandFragments: [
       "rm -rf /",
       "rm -rf ~",

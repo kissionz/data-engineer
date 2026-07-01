@@ -3,9 +3,19 @@ import {
   ContextWindowExceededError,
   ModelRequestError,
 } from "../src/model/base.js";
-import { OpenAIModel } from "../src/model/openai.js";
+import {
+  OpenAIModel,
+  parseApiStyle,
+} from "../src/model/openai.js";
 
 describe("OpenAIModel", () => {
+  it("validates explicitly configured API styles", () => {
+    expect(parseApiStyle(undefined)).toBeUndefined();
+    expect(parseApiStyle("responses")).toBe("responses");
+    expect(parseApiStyle("chat_completions")).toBe("chat_completions");
+    expect(() => parseApiStyle("response")).toThrow("API style");
+  });
+
   it("sends tools as OpenAI function tools and returns function calls", async () => {
     let requestBody: unknown;
     const fetchImpl: typeof fetch = async (_input, init) => {
@@ -586,6 +596,30 @@ describe("OpenAIModel", () => {
     ).rejects.toBeInstanceOf(ContextWindowExceededError);
   });
 
+  it("rejects a truncated compatible streaming event", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      baseUrl: "https://gateway.example/v1",
+      fetchImpl: async () =>
+        new Response(
+          'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n' +
+            'data: {"choices":',
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        ),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "hello" }],
+        tools: [],
+      }),
+    ).rejects.toThrow("invalid trailing streaming event");
+  });
+
   it("rejects oversized JSON responses before buffering the body", async () => {
     const model = new OpenAIModel({
       apiKey: "test-key",
@@ -734,6 +768,54 @@ describe("OpenAIModel", () => {
       type: "tool_call_args_delta",
       toolCallId: "call_streamed",
       delta: '{"file_path":"README.md"}',
+    });
+  });
+
+  it("keeps streamed arguments when output_item.done omits them", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl: async () =>
+        sseResponse([
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              call_id: "call_streamed",
+              name: "Read",
+            },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            delta: '{"file_path":"README.md"}',
+          },
+          {
+            type: "response.output_item.done",
+            output_index: 0,
+            item: {
+              type: "function_call",
+              call_id: "call_streamed",
+              name: "Read",
+            },
+          },
+        ]),
+    });
+
+    await expect(
+      model.complete({
+        messages: [{ role: "user", content: "read README" }],
+        tools: [],
+      }),
+    ).resolves.toMatchObject({
+      toolCalls: [
+        {
+          id: "call_streamed",
+          name: "Read",
+          args: { file_path: "README.md" },
+        },
+      ],
     });
   });
 });

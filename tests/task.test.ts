@@ -503,6 +503,45 @@ describe("TaskTool", () => {
     expect(result.content).toBe("Stopped: tool-call budget reached.");
     expect(budget.usage.toolCalls).toBe(1);
   });
+
+  it("enforces the configured child turn limit while sharing the parent budget", async () => {
+    const root = await makeRoot();
+    await mkdir(path.join(root, ".harness", "agents"), { recursive: true });
+    await writeFile(
+      path.join(root, ".harness", "agents", "one-turn.yaml"),
+      [
+        "name: one-turn",
+        "description: Stop after one model turn.",
+        "systemPrompt: Read the requested file once.",
+        "tools:",
+        "  - Read",
+        "maxTurns: 1",
+        "maxResultChars: 1000",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    await writeFile(path.join(root, "README.md"), "hello", "utf8");
+    const budget = new AgentBudgetTracker({ maxTurns: 10 });
+    const result = await new TaskTool(
+      new ReviewerModel("read"),
+      new Workspace(root),
+      unusedExecutor(),
+      "parent-session",
+    ).execute(
+      {
+        subagent: "one-turn",
+        task: "Review README",
+      },
+      {
+        toolCallId: "task-call",
+        budget,
+      },
+    );
+
+    expect(result.content).toBe("Stopped: turn budget reached.");
+    expect(budget.usage.turns).toBe(1);
+  });
 });
 
 function ephemeralSpec(): Record<string, unknown> {

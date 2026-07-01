@@ -1263,6 +1263,36 @@ describe("AgentLoop", () => {
     );
   });
 
+  it("keeps a stricter configured turn budget than the loop default", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    const loop = new AgentLoop(
+      new SingleToolThenDoneModel({
+        id: "first-turn-tool",
+        name: "Bash",
+        args: { command: "npm test" },
+      }),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(path.join(root, "session.jsonl")),
+      10,
+      async () => "allow_once",
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { maxTurns: 1 },
+    );
+
+    await expect(loop.run("use only one model turn")).resolves.toBe(
+      "Stopped: turn budget reached.",
+    );
+    expect(bash.executions).toBe(1);
+  });
+
   it("uses provider token usage to stop before executing returned tools", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
     const bash = new FakeBashTool();

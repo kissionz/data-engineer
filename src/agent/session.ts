@@ -15,9 +15,21 @@ import type { SessionEvent, SessionEventInput } from "./types.js";
 
 const appendQueues = new Map<string, Promise<unknown>>();
 const ownedAppendLocks = new Map<string, string>();
+const MAX_SESSION_RECORD_BYTES = 16 * 1024 * 1024;
+const MAX_SESSION_FILE_BYTES = 256 * 1024 * 1024;
+
+interface SessionFileIdentity {
+  dev: number;
+  ino: number;
+  size: number;
+  mtimeMs: number;
+  ctimeMs: number;
+}
 
 export class SessionStore {
   private readonly sessionId: string;
+  private cachedEvents?: SessionEvent[];
+  private cachedIdentity?: SessionFileIdentity;
 
   constructor(
     private readonly filePath: string,
@@ -66,6 +78,11 @@ export class SessionStore {
             "Refusing to append to a symbolic link or replaced session file.",
           );
         }
+        const cacheCurrent = this.cacheMatches(fileInfo);
+        if (!cacheCurrent) {
+          this.cachedEvents = undefined;
+          this.cachedIdentity = undefined;
+        }
 
         const prefix = await repairUnterminatedTail(handle);
         const sequence = await readLastSequence(handle);
@@ -78,8 +95,25 @@ export class SessionStore {
           ts: timestamp,
           ...event,
         } as SessionEvent;
-        await handle.writeFile(`${prefix}${JSON.stringify(fullEvent)}\n`, "utf8");
+        const serialized = `${prefix}${JSON.stringify(fullEvent)}\n`;
+        const serializedBytes = Buffer.byteLength(serialized, "utf8");
+        const currentSize = (await handle.stat()).size;
+        if (serializedBytes > MAX_SESSION_RECORD_BYTES) {
+          throw new Error("Session record exceeds the 16 MiB safety limit.");
+        }
+        if (currentSize + serializedBytes > MAX_SESSION_FILE_BYTES) {
+          throw new Error("Session log exceeds the 256 MiB safety limit.");
+        }
+        await handle.writeFile(serialized, "utf8");
         await handle.sync();
+        const finalInfo = await handle.stat();
+        if (cacheCurrent && this.cachedEvents) {
+          this.cachedEvents.push(fullEvent);
+          this.cachedIdentity = identityOf(finalInfo);
+        } else if (sequence === 0) {
+          this.cachedEvents = [fullEvent];
+          this.cachedIdentity = identityOf(finalInfo);
+        }
         committed = true;
         return fullEvent;
       } finally {
@@ -98,7 +132,11 @@ export class SessionStore {
 
   async load(): Promise<SessionEvent[]> {
     try {
-      const text = await readSafeSessionFile(this.filePath);
+      const initial = await lstat(this.filePath);
+      if (this.cacheMatches(initial) && this.cachedEvents) {
+        return [...this.cachedEvents];
+      }
+      const { text, identity } = await readSafeSessionSnapshot(this.filePath);
       const lines = text.split("\n");
       const events: SessionEvent[] = [];
 
@@ -126,7 +164,9 @@ export class SessionStore {
         }
       }
 
-      return events;
+      this.cachedEvents = events;
+      this.cachedIdentity = identity;
+      return [...events];
     } catch (error: unknown) {
       if (
         error instanceof Error &&
@@ -138,6 +178,17 @@ export class SessionStore {
 
       throw error;
     }
+  }
+
+  private cacheMatches(info: SessionFileIdentity): boolean {
+    return (
+      this.cachedIdentity !== undefined &&
+      this.cachedIdentity.dev === info.dev &&
+      this.cachedIdentity.ino === info.ino &&
+      this.cachedIdentity.size === info.size &&
+      this.cachedIdentity.mtimeMs === info.mtimeMs &&
+      this.cachedIdentity.ctimeMs === info.ctimeMs
+    );
   }
 }
 
@@ -314,23 +365,58 @@ function hasCode(error: unknown, code: string): boolean {
 }
 
 async function readLastSequence(handle: FileHandle): Promise<number> {
-  const text = await handle.readFile({ encoding: "utf8" });
-  const lines = text.split("\n");
-
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
-    if (!line) {
-      continue;
+  const info = await handle.stat();
+  let end = info.size;
+  const lastByte = Buffer.alloc(1);
+  while (end > 0) {
+    await handle.read(lastByte, 0, 1, end - 1);
+    if (lastByte[0] !== 0x0a && lastByte[0] !== 0x0d) {
+      break;
     }
-    const parsed = JSON.parse(line) as { sequence?: unknown };
-    return typeof parsed.sequence === "number" &&
-      Number.isSafeInteger(parsed.sequence) &&
-      parsed.sequence > 0
-      ? parsed.sequence
-      : countRecords(lines.slice(0, index + 1));
+    end -= 1;
+  }
+  if (end === 0) {
+    return 0;
   }
 
-  return 0;
+  const chunks: Buffer[] = [];
+  let recordBytes = 0;
+  let position = end;
+  while (position > 0) {
+    const readSize = Math.min(64 * 1024, position);
+    const start = position - readSize;
+    const chunk = Buffer.allocUnsafe(readSize);
+    await handle.read(chunk, 0, readSize, start);
+    const newline = chunk.lastIndexOf(0x0a);
+    const recordChunk =
+      newline === -1 ? chunk : chunk.subarray(newline + 1);
+    chunks.unshift(recordChunk);
+    recordBytes += recordChunk.length;
+    if (recordBytes > MAX_SESSION_RECORD_BYTES) {
+      throw new Error("Session record exceeds the 16 MiB safety limit.");
+    }
+    if (newline !== -1 || start === 0) {
+      break;
+    }
+    position = start;
+  }
+
+  const parsed = JSON.parse(Buffer.concat(chunks, recordBytes).toString("utf8")) as {
+    sequence?: unknown;
+  };
+  if (
+    typeof parsed.sequence === "number" &&
+    Number.isSafeInteger(parsed.sequence) &&
+    parsed.sequence > 0
+  ) {
+    return parsed.sequence;
+  }
+  return readLegacyLastSequence(handle);
+}
+
+async function readLegacyLastSequence(handle: FileHandle): Promise<number> {
+  const text = await handle.readFile({ encoding: "utf8" });
+  return countRecords(text.split("\n"));
 }
 
 function countRecords(lines: string[]): number {
@@ -413,9 +499,18 @@ function sameFile(left: Stats, right: Stats): boolean {
 }
 
 async function readSafeSessionFile(filePath: string): Promise<string> {
+  return (await readSafeSessionSnapshot(filePath)).text;
+}
+
+async function readSafeSessionSnapshot(
+  filePath: string,
+): Promise<{ text: string; identity: SessionFileIdentity }> {
   const pathInfo = await lstat(filePath);
   if (pathInfo.isSymbolicLink() || !pathInfo.isFile()) {
     throw new Error("Refusing to read a symbolic link or non-file session path.");
+  }
+  if (pathInfo.size > MAX_SESSION_FILE_BYTES) {
+    throw new Error("Session log exceeds the 256 MiB safety limit.");
   }
 
   const handle = await open(filePath, "r");
@@ -427,12 +522,32 @@ async function readSafeSessionFile(filePath: string): Promise<string> {
     if (
       currentPathInfo.isSymbolicLink() ||
       !currentPathInfo.isFile() ||
-      !sameFile(currentPathInfo, fileInfo)
+      !sameFile(currentPathInfo, fileInfo) ||
+      fileInfo.size > MAX_SESSION_FILE_BYTES
     ) {
       throw new Error("Refusing to read a symbolic link or replaced session file.");
     }
-    return await handle.readFile("utf8");
+    const text = await handle.readFile("utf8");
+    const finalInfo = await handle.stat();
+    if (
+      finalInfo.dev !== fileInfo.dev ||
+      finalInfo.ino !== fileInfo.ino ||
+      finalInfo.size !== fileInfo.size
+    ) {
+      throw new Error("Session file changed while it was being read.");
+    }
+    return { text, identity: identityOf(finalInfo) };
   } finally {
     await handle.close();
   }
+}
+
+function identityOf(info: SessionFileIdentity): SessionFileIdentity {
+  return {
+    dev: info.dev,
+    ino: info.ino,
+    size: info.size,
+    mtimeMs: info.mtimeMs,
+    ctimeMs: info.ctimeMs,
+  };
 }

@@ -1,5 +1,6 @@
 import path from "node:path";
 import type { ToolCall } from "../agent/types.js";
+import { isPathWithin } from "../runtime/pathSafety.js";
 import {
   type FolderGrantManager,
   type FolderGrantRequest,
@@ -77,10 +78,6 @@ export class PermissionGate {
       };
     }
 
-    if (call.name === "Bash" && this.readonlyCommand(call)) {
-      return { decision: "allow", reason: "Readonly shell command." };
-    }
-
     if (call.name === "Bash" && this.policy.askForBash) {
       return { decision: "ask", reason: "Bash command requires approval." };
     }
@@ -102,13 +99,9 @@ export class PermissionGate {
         .filter(Boolean)
         .map((segment) => segment.toLowerCase());
 
-      return segments.some(
-        (segment) =>
-          segment === ".git" ||
-          segment === "node_modules" ||
-          segment === ".env" ||
-          segment.startsWith(".env."),
-      ) || containsPermissionStore(segments);
+      return this.policy.deniedPathPrefixes.some((prefix) =>
+        containsDeniedPath(segments, prefix),
+      );
     });
   }
 
@@ -123,24 +116,22 @@ export class PermissionGate {
   private commandReferencesDeniedPath(call: ToolCall): boolean {
     const command = String(call.args.command ?? "").replaceAll("\\", "/");
 
-    return (
-      /(?:^|[\s"'=])(?:[^\s"';&|<>]*\/)*(?:\.git|node_modules|\.env(?:\.[^/\s"';&|<>]*)?)(?:\/|$|[\s"'])/i.test(
-        command,
-      ) ||
-      /(?:^|[\s"'=])(?:[^\s"';&|<>]*\/)*\.harness\/permissions(?:\/|$|[\s"'])/i.test(
-        command,
-      )
-    );
-  }
-
-  private readonlyCommand(call: ToolCall): boolean {
-    const command = String(call.args.command ?? "").trim();
-
-    if (!command || hasShellMutationSyntax(command)) {
-      return false;
-    }
-
-    return READONLY_COMMANDS.some((pattern) => pattern.test(command));
+    return this.policy.deniedPathPrefixes.some((rawPrefix) => {
+      const normalized = normalizePolicyPath(rawPrefix)
+        .replace(/^\/+|\/+$/g, "")
+        .toLowerCase();
+      if (!normalized) {
+        return false;
+      }
+      const pathPattern =
+        normalized === ".env"
+          ? String.raw`\.env(?:\.[^/\s"';&|<>]*)?`
+          : escapeRegExp(normalized);
+      return new RegExp(
+        String.raw`(?:^|[\s"'=])(?:[^\s"';&|<>]*\/)*${pathPattern}(?:\/|$|[\s"'])`,
+        "i",
+      ).test(command);
+    });
   }
 
   private outsideWorkspacePath(call: ToolCall): string | undefined {
@@ -156,7 +147,7 @@ export class PermissionGate {
 
     return candidates
       .map((candidate) => path.resolve(this.workspaceRoot!, candidate))
-      .find((candidate) => !isWithin(this.workspaceRoot!, candidate));
+      .find((candidate) => !isPathWithin(this.workspaceRoot!, candidate));
   }
 
   private outsideFolderGrant(
@@ -184,7 +175,11 @@ export class PermissionGate {
       access = "read";
     }
 
-    if (!candidate || !access || isWithin(this.workspaceRoot, candidate)) {
+    if (
+      !candidate ||
+      !access ||
+      isPathWithin(this.workspaceRoot, candidate)
+    ) {
       return undefined;
     }
     return { folder: candidate, access };
@@ -201,37 +196,33 @@ export class PermissionGate {
   }
 }
 
-const READONLY_COMMANDS = [
-  /^(?:pwd|cd(?:\s+[^;&|<>]+)?|ls|dir)(?:\s+[^;&|<>]+)*$/i,
-  /^(?:rg|grep|cat|type|head|tail|wc|diff)(?:\s+[^;&|<>]+)*$/i,
-  /^git\s+(?:status|diff|log|show|rev-parse|ls-files|grep)(?:\s+[^;&|<>]+)*$/i,
-  /^(?:node|npm|npx|pnpm|yarn|bun|deno)\s+(?:--version|-v)$/i,
-];
-
-function hasShellMutationSyntax(command: string): boolean {
-  return (
-    /(?:^|[^<])>{1,2}|[;&|]/.test(command) ||
-    /(?:^|\s)--output(?:=|\s)/i.test(command)
-  );
-}
-
 function normalizePolicyPath(value: string): string {
   return path.posix.normalize(value.replaceAll("\\", "/")).replace(/^\.\//, "");
 }
 
-function isWithin(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) &&
-      relative !== ".." &&
-      !path.isAbsolute(relative))
-  );
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-function containsPermissionStore(segments: string[]): boolean {
-  return segments.some(
-    (segment, index) =>
-      segment === ".harness" && segments[index + 1] === "permissions",
-  );
+function containsDeniedPath(segments: string[], rawPrefix: string): boolean {
+  const prefix = normalizePolicyPath(rawPrefix)
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => segment.toLowerCase());
+  if (prefix.length === 0) {
+    return false;
+  }
+
+  return segments.some((segment, start) => {
+    if (
+      prefix.length === 1 &&
+      prefix[0] === ".env" &&
+      segment.startsWith(".env.")
+    ) {
+      return true;
+    }
+    return prefix.every(
+      (prefixSegment, offset) => segments[start + offset] === prefixSegment,
+    );
+  });
 }

@@ -478,7 +478,7 @@ MCP tool 会获得稳定且符合 provider 要求的名称，并使用完整 JSO
 - `Read` 和 `Grep` 默认允许。
 - `Write` 可以无批准创建新文件，但不能覆盖已有文件。
 - 使用 `Edit` 更新文件需要批准。
-- 明确只读的 shell 命令默认允许；可能改变状态的命令需要批准。
+- 所有 shell 命令都需要批准。Shell 展开语义无法仅靠字符串检查可靠地区分只读与副作用命令。
 - 危险 shell 片段以及 `.git`、`.env`、`node_modules` 等敏感路径会在执行前拒绝。
 - 有副作用的 MCP tool 默认需要批准；MCP Resource 与 Prompt 适配器是只读的，
   可在已启用的可信 server 上直接读取。
@@ -526,7 +526,7 @@ host 模式是明确的兼容选项，不提供操作系统级隔离：
 npm start -- --bash-sandbox host
 ```
 
-Docker 模式默认禁用网络，并使用只读 container root、移除 capabilities、限制 process/memory/CPU、隐藏 `.harness`、遮蔽 `.env*`、只读挂载 `.git`，同时为每个会话使用独立的 Linux `node_modules`。只有任务确实需要联网时才开启：
+Docker 模式默认禁用网络，并使用只读 container root、移除 capabilities、限制 process/memory/CPU、隐藏 `.harness`、遮蔽 `.env*`、只读挂载 `.git`。已有的宿主机 `node_modules` 会只读挂载到容器中；尚未安装依赖的 package root 使用会话独立的空依赖目录。macOS/Windows 上含原生模块的宿主依赖可能与 Linux 容器不兼容，此时应在允许网络的沙箱中安装 Linux 依赖，或明确使用 host 模式。只有任务确实需要联网时才开启：
 
 ```bash
 npm start -- --sandbox-network bridge

@@ -1,5 +1,6 @@
 import { realpath, stat } from "node:fs/promises";
 import path from "node:path";
+import { isPathWithin } from "./pathSafety.js";
 
 export interface WorkspaceAccessOptions {
   allowOutside?: boolean;
@@ -23,7 +24,7 @@ export class Workspace {
       this.assertPathWithin(resolved, `Path outside workspace: ${userPath}`);
     } else if (
       options.outsideRoot &&
-      !isWithin(path.resolve(options.outsideRoot), resolved)
+      !isPathWithin(path.resolve(options.outsideRoot), resolved)
     ) {
       throw new Error(`Path outside approved folder: ${userPath}`);
     }
@@ -40,7 +41,7 @@ export class Workspace {
   }
 
   contains(absPath: string): boolean {
-    return isWithin(this.root, path.resolve(absPath));
+    return isPathWithin(this.root, path.resolve(absPath));
   }
 
   async assertRealPathWithin(
@@ -52,7 +53,7 @@ export class Workspace {
       realpath(absPath),
     ]);
 
-    if (isWithin(this.root, absPath) || !options.allowOutside) {
+    if (isPathWithin(this.root, absPath) || !options.allowOutside) {
       assertWithin(
         rootRealPath,
         targetRealPath,
@@ -111,7 +112,7 @@ export class Workspace {
           realpath(ancestor),
         ]);
 
-        if (isWithin(this.root, absPath) || !options.allowOutside) {
+        if (isPathWithin(this.root, absPath) || !options.allowOutside) {
           assertWithin(
             rootRealPath,
             ancestorRealPath,
@@ -148,19 +149,9 @@ export class Workspace {
 }
 
 function assertWithin(root: string, target: string, message: string): void {
-  if (!isWithin(root, target)) {
+  if (!isPathWithin(root, target)) {
     throw new Error(message);
   }
-}
-
-function isWithin(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return (
-    relative === "" ||
-    (!relative.startsWith(`..${path.sep}`) &&
-      relative !== ".." &&
-      !path.isAbsolute(relative))
-  );
 }
 
 function assertNoSensitiveRelativePath(

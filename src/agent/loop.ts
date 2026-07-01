@@ -65,9 +65,11 @@ export class AgentLoop {
     const budget =
       sharedBudget ??
       new AgentBudgetTracker({
-        ...this.budget,
         maxTurns: this.maxTurns,
+        ...this.budget,
       });
+    const localTurnLimit = Math.min(this.maxTurns, budget.limits.maxTurns);
+    let localTurns = 0;
     const accountingNamespace = randomUUID();
     const explicitSubagentRequest =
       explicitlyRequestsSubagent(userTask);
@@ -118,10 +120,19 @@ export class AgentLoop {
 
       for (let turn = 0; ; turn += 1) {
         throwIfCancelled(signal);
+        if (localTurns >= localTurnLimit) {
+          return this.finishForBudget({
+            code: "turn_budget_reached",
+            message: "Stopped: turn budget reached.",
+            limit: localTurnLimit,
+            used: localTurns,
+          });
+        }
         const modelTurn = budget.beginModelTurn();
         if (!modelTurn.ok) {
           return this.finishForBudget(modelTurn.exhaustion);
         }
+        localTurns += 1;
         let events = await this.session.load();
 
         if (

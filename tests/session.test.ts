@@ -3,6 +3,7 @@ import {
   mkdtemp,
   readFile,
   symlink,
+  truncate,
   utimes,
   writeFile,
 } from "node:fs/promises";
@@ -114,6 +115,22 @@ describe("SessionStore", () => {
         ),
       ),
     );
+  });
+
+  it("invalidates a warm cache when another store appends", async () => {
+    const root = await makeRoot();
+    const filePath = path.join(root, "cache.jsonl");
+    const first = new SessionStore(filePath);
+    const second = new SessionStore(filePath);
+    await first.append({ type: "user_message", text: "first" });
+    await expect(first.load()).resolves.toHaveLength(1);
+
+    await second.append({ type: "assistant_final", text: "second" });
+
+    await expect(first.load()).resolves.toMatchObject([
+      { sequence: 1, text: "first" },
+      { sequence: 2, text: "second" },
+    ]);
   });
 
   it("serializes sequence allocation across processes", async () => {
@@ -229,6 +246,17 @@ describe("SessionStore", () => {
 
     await expect(new SessionStore(filePath).load()).rejects.toBeInstanceOf(
       SyntaxError,
+    );
+  });
+
+  it("rejects oversized session logs before reading them into memory", async () => {
+    const root = await makeRoot();
+    const filePath = path.join(root, "oversized.jsonl");
+    await writeFile(filePath, "", "utf8");
+    await truncate(filePath, 256 * 1024 * 1024 + 1);
+
+    await expect(new SessionStore(filePath).load()).rejects.toThrow(
+      "256 MiB safety limit",
     );
   });
 
