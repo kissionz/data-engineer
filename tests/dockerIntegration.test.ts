@@ -9,10 +9,15 @@ import { parseSandboxConfig } from "../src/runtime/sandboxConfig.js";
 import { Workspace } from "../src/runtime/workspace.js";
 
 const image = process.env.HARNESS_SANDBOX_IMAGE ?? "node:22-bookworm";
+const dockerProbeTimeoutMs = 5_000;
 const dockerReady =
-  spawnSync("docker", ["info"], { stdio: "ignore" }).status === 0 &&
+  spawnSync("docker", ["info"], {
+    stdio: "ignore",
+    timeout: dockerProbeTimeoutMs,
+  }).status === 0 &&
   spawnSync("docker", ["image", "inspect", image], {
     stdio: "ignore",
+    timeout: dockerProbeTimeoutMs,
   }).status === 0;
 
 describe("Docker sandbox integration", () => {
