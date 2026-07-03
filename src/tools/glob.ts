@@ -52,6 +52,7 @@ export class GlobTool implements Tool {
       args: [
         "--files",
         "--hidden",
+        "--no-ignore",
         "--glob",
         "!**/.git/**",
         "--glob",
@@ -90,9 +91,10 @@ export class GlobTool implements Tool {
 
     return {
       ok: true,
-      content: files.join("\n") || "[No files]",
+      content: formatGlobMatches(files),
       data: {
         count: files.length,
+        files,
         pattern,
         truncated: totalLines > limit,
         engine: "ripgrep",
@@ -138,15 +140,25 @@ export class GlobTool implements Tool {
 
     return {
       ok: true,
-      content: files.join("\n") || "[No files]",
+      content: formatGlobMatches(files),
       data: {
         count: files.length,
+        files,
         pattern,
         truncated,
         engine: "native",
       },
     };
   }
+}
+
+function formatGlobMatches(files: string[]): string {
+  return files.length > 0
+    ? [
+        "Matched files (use these exact paths verbatim; do not remove or replace directory segments):",
+        ...files,
+      ].join("\n")
+    : "No files matched. Do not infer or construct a file path from the search pattern; refine the search or inspect directories.";
 }
 
 function normalizeLimit(value: unknown, fallback: number): number {

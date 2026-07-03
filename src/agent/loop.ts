@@ -585,6 +585,7 @@ export class AgentLoop {
                   : result.ok
                     ? "succeeded"
                     : "failed",
+                result,
               );
             }
           }
@@ -716,7 +717,11 @@ export class AgentLoop {
       call.id,
       signal,
     );
-    this.reporter.onToolStatus(call, result.ok ? "succeeded" : "failed");
+    this.reporter.onToolStatus(
+      call,
+      result.ok ? "succeeded" : "failed",
+      result,
+    );
     await this.session.append({
       type: "harness_message",
       kind: "git_diff_review",
@@ -1141,6 +1146,7 @@ export class AgentLoop {
           : result.ok
             ? "succeeded"
             : "failed",
+        result,
       );
       await this.recordStatus("running");
     }

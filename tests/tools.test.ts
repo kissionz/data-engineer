@@ -566,9 +566,41 @@ describe("P0 tools", () => {
       command: "rg",
     });
     expect(calls[0]?.args).toContain("**/*.ts");
+    expect(calls[0]?.args).toContain("--no-ignore");
+    expect(result.data).toMatchObject({
+      files: [
+        path.join("src", "a.ts"),
+        path.join("src", "b.ts"),
+      ],
+    });
     expect(new GlobTool(new Workspace(root), executor).description).toContain(
       "Prefer this over ListDirectory",
     );
+  });
+
+  it("explicitly prevents path guessing when Glob finds no files", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-tools-"));
+    const executor: CommandExecutor = {
+      async run() {
+        return {
+          ok: false,
+          exitCode: 1,
+          stdout: "",
+          stderr: "",
+          timedOut: false,
+          cancelled: false,
+        };
+      },
+    };
+
+    const result = await new GlobTool(new Workspace(root), executor).execute({
+      pattern: "**/missing.sql",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.content).toContain("No files matched");
+    expect(result.content).toContain("Do not infer or construct");
+    expect(result.data).toMatchObject({ count: 0, files: [] });
   });
 
   it("finds files natively when ripgrep is unavailable", async () => {

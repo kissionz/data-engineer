@@ -1,5 +1,6 @@
 import type { AgentReporter, ToolStatus } from "../agent/reporter.js";
 import type { ToolCall } from "../agent/types.js";
+import type { ToolExecutionResult } from "../tools/base.js";
 import { summarizeToolCall } from "./toolPresentation.js";
 
 const STATUS_LABELS: Record<ToolStatus, string> = {
@@ -32,9 +33,15 @@ export class ConsoleReporter implements AgentReporter {
     }
   }
 
-  onToolStatus(call: ToolCall, status: ToolStatus): void {
+  onToolStatus(
+    call: ToolCall,
+    status: ToolStatus,
+    result?: ToolExecutionResult,
+  ): void {
     this.onTextEnd();
-    const line = `  ${summarizeToolCall(call)} [${STATUS_LABELS[status]}]`;
+    const line =
+      `  ${summarizeToolCall(call)} ` +
+      `[${toolStatusLabel(call, status, result)}]`;
 
     if (process.stdout.isTTY) {
       process.stdout.write(`${this.activeToolLine ? "\r\u001b[2K" : ""}${line}`);
@@ -56,6 +63,23 @@ export class ConsoleReporter implements AgentReporter {
       this.activeToolLine = false;
     }
   }
+}
+
+function toolStatusLabel(
+  call: ToolCall,
+  status: ToolStatus,
+  result?: ToolExecutionResult,
+): string {
+  const base = STATUS_LABELS[status];
+  const count = result?.data?.count;
+  if (
+    call.name === "Glob" &&
+    status === "succeeded" &&
+    typeof count === "number"
+  ) {
+    return `${base}, ${count} ${count === 1 ? "match" : "matches"}`;
+  }
+  return base;
 }
 
 function isTerminalStatus(status: ToolStatus): boolean {

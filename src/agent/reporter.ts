@@ -1,4 +1,5 @@
 import type { ToolCall } from "./types.js";
+import type { ToolExecutionResult } from "../tools/base.js";
 
 export type ToolStatus =
   | "awaiting_approval"
@@ -11,7 +12,11 @@ export type ToolStatus =
 export interface AgentReporter {
   onTextDelta(delta: string): void;
   onTextEnd(): void;
-  onToolStatus(call: ToolCall, status: ToolStatus): void;
+  onToolStatus(
+    call: ToolCall,
+    status: ToolStatus,
+    result?: ToolExecutionResult,
+  ): void;
 }
 
 export const silentReporter: AgentReporter = {
