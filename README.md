@@ -460,6 +460,17 @@ RFC1918、`100.64.0.0/10` 或 IPv6 ULA 等私网可路由地址，但仍拒绝
 loopback、link-local、阿里云元数据地址 `100.100.100.200`、benchmark、
 multicast 和其他保留地址。它不会放宽其他 MCP Server 或 `HttpFetch`。
 
+Windows 上若连接报超时或无路由，可先验证 DNS 和 TCP 443：
+
+```powershell
+Resolve-DnsName mcp.cn-hangzhou-vpc.maxcompute.aliyun-inc.com
+Test-NetConnection mcp.cn-hangzhou-vpc.maxcompute.aliyun-inc.com -Port 443
+```
+
+DNS 能解析但 `TcpTestSucceeded` 为 `False`，表示当前 Windows 主机缺少
+到该 VPC 地址的 VPN/专线/路由或出站策略；客户端放行私网地址本身不会
+建立这条网络路径。
+
 在 CI 或脚本中也可以完全非交互配置：
 
 ```bash

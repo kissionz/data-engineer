@@ -12,6 +12,7 @@ import {
 import type { McpServerConfig } from "../src/config/userConfig.js";
 import {
   applyMcpHttpAuthorization,
+  describeMcpNetworkError,
   isPrivateIp,
   McpManager,
   validateMcpHttpRequestTarget,
@@ -30,6 +31,30 @@ describe("MCP integration", () => {
     expect(isPrivateIp("ff02::1")).toBe(true);
     expect(isPrivateIp("8.8.8.8")).toBe(false);
     expect(isPrivateIp("2606:4700:4700::1111")).toBe(false);
+  });
+
+  it("preserves the actionable cause of generic fetch failures", () => {
+    const timeout = Object.assign(
+      new Error("connect ETIMEDOUT 100.103.125.243:443"),
+      { code: "ETIMEDOUT" },
+    );
+    const error = new TypeError("fetch failed", { cause: timeout });
+
+    expect(describeMcpNetworkError(error)).toBe(
+      "fetch failed -> connect ETIMEDOUT 100.103.125.243:443. " +
+        "Check this host's VPC/VPN route and outbound TCP 443 policy.",
+    );
+  });
+
+  it("adds TLS trust guidance to certificate failures", () => {
+    const certificate = Object.assign(
+      new Error("unable to verify the first certificate"),
+      { code: "UNABLE_TO_VERIFY_LEAF_SIGNATURE" },
+    );
+
+    expect(describeMcpNetworkError(certificate)).toContain(
+      "Check this host's or Node.js TLS trust configuration.",
+    );
   });
 
   it("binds MCP HTTP requests and credentials to the configured origin", () => {

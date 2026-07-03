@@ -387,3 +387,37 @@ Create the learning log from the skill template when it is absent.
 - **Notes**: Created the missing learning log and recorded the correction.
 
 ---
+
+## [ERR-20260703-004] opaque_mcp_fetch_failure
+
+**Logged**: 2026-07-03T06:03:00Z
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+MCP connection failures only displayed `fetch failed`, hiding the underlying Windows network or TLS error.
+
+### Error
+```
+Error: fetch failed
+```
+
+### Context
+- The MaxCompute VPC endpoint passed DNS and private-address policy checks.
+- The subsequent TCP or TLS failure was reduced to the outer Undici error message.
+- The hidden cause is needed to distinguish a missing VPC route from DNS, firewall, and certificate failures.
+
+### Suggested Fix
+Preserve the bounded error cause chain at the MCP request boundary and add targeted guidance for common DNS, routing, TCP, and TLS error codes.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/mcp/manager.ts, tests/mcp.test.ts
+- See Also: LRN-20260703-001, LRN-20260703-002
+
+### Resolution
+- **Resolved**: 2026-07-03T06:05:00Z
+- **Notes**: MCP HTTP requests now preserve a bounded cause chain and add targeted DNS, VPC route, TCP 443, and TLS trust guidance. Full validation passed.
+
+---

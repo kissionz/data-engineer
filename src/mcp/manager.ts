@@ -256,12 +256,19 @@ async function createHttpTransport(
       token,
       validated.includeCredential,
     );
-    return fetch(target, {
-      ...init,
-      headers,
-      redirect: "manual",
-      dispatcher,
-    } as RequestInit & { dispatcher: Dispatcher });
+    try {
+      return await fetch(target, {
+        ...init,
+        headers,
+        redirect: "manual",
+        dispatcher,
+      } as RequestInit & { dispatcher: Dispatcher });
+    } catch (error: unknown) {
+      throw new Error(
+        `MCP server ${serverId} request to ${target.hostname}:${effectivePort(target)} failed: ${describeMcpNetworkError(error)}`,
+        error instanceof Error ? { cause: error } : undefined,
+      );
+    }
   };
 
   return {
@@ -461,6 +468,74 @@ export function isPrivateIp(address: string): boolean {
   } catch {
     return true;
   }
+}
+
+export function describeMcpNetworkError(error: unknown): string {
+  const messages: string[] = [];
+  const codes = new Set<string>();
+  const seen = new Set<object>();
+  let current: unknown = error;
+
+  for (let depth = 0; depth < 6 && current !== undefined; depth += 1) {
+    if (typeof current !== "object" || current === null || seen.has(current)) {
+      if (current !== undefined && current !== null) {
+        messages.push(String(current));
+      }
+      break;
+    }
+    seen.add(current);
+    const detail = current as {
+      message?: unknown;
+      code?: unknown;
+      cause?: unknown;
+    };
+    const message =
+      typeof detail.message === "string" ? detail.message.trim() : "";
+    const code = typeof detail.code === "string" ? detail.code : undefined;
+    if (message && !messages.includes(message)) {
+      messages.push(message);
+    }
+    if (code) {
+      codes.add(code);
+      if (!message.includes(code)) {
+        messages.push(code);
+      }
+    }
+    current = detail.cause;
+  }
+
+  const advice = networkErrorAdvice(codes);
+  const detail = messages.join(" -> ") || "unknown network error";
+  return advice ? `${detail}. ${advice}` : detail;
+}
+
+function networkErrorAdvice(codes: ReadonlySet<string>): string | undefined {
+  if (codes.has("ENOTFOUND") || codes.has("EAI_AGAIN")) {
+    return "Check the DNS configuration available to this process.";
+  }
+  if (
+    codes.has("ETIMEDOUT") ||
+    codes.has("UND_ERR_CONNECT_TIMEOUT") ||
+    codes.has("EHOSTUNREACH") ||
+    codes.has("ENETUNREACH")
+  ) {
+    return "Check this host's VPC/VPN route and outbound TCP 443 policy.";
+  }
+  if (codes.has("ECONNREFUSED")) {
+    return "Check that the endpoint is reachable and permits outbound TCP 443.";
+  }
+  if (
+    [...codes].some(
+      (code) =>
+        code.startsWith("ERR_TLS") ||
+        code.includes("CERT") ||
+        code.includes("SELF_SIGNED") ||
+        code.includes("UNABLE_TO_VERIFY"),
+    )
+  ) {
+    return "Check this host's or Node.js TLS trust configuration.";
+  }
+  return undefined;
 }
 
 function effectivePort(url: URL): number {
