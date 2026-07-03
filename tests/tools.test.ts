@@ -573,6 +573,10 @@ describe("P0 tools", () => {
         path.join("src", "b.ts"),
       ],
     });
+    expect(result.content).toContain(
+      JSON.stringify({ file_path: path.join("src", "a.ts") }),
+    );
+    expect(result.content).toContain("Copy one complete file_path value");
     expect(new GlobTool(new Workspace(root), executor).description).toContain(
       "Prefer this over ListDirectory",
     );

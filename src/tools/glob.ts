@@ -155,8 +155,8 @@ export class GlobTool implements Tool {
 function formatGlobMatches(files: string[]): string {
   return files.length > 0
     ? [
-        "Matched files (use these exact paths verbatim; do not remove or replace directory segments):",
-        ...files,
+        "Exact Glob matches as JSON. Copy one complete file_path value verbatim into the next file tool call; do not rebuild it from the pattern or search root:",
+        ...files.map((file_path) => JSON.stringify({ file_path })),
       ].join("\n")
     : "No files matched. Do not infer or construct a file path from the search pattern; refine the search or inspect directories.";
 }

@@ -9,6 +9,19 @@ import { SkillLoader } from "../src/skills/loader.js";
 import type { SessionEvent } from "../src/agent/types.js";
 
 describe("ContextBuilder", () => {
+  it("requires exact reuse of complete Glob paths", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
+    const messages = await new ContextBuilder(root).build([]);
+
+    expect(messages[0]?.content).toContain(
+      "Treat every file_path returned by Glob as an opaque exact value",
+    );
+    expect(messages[0]?.content).toContain("never remove directory segments");
+    expect(messages[0]?.content).toContain(
+      "never invent a path when Glob reports no matches",
+    );
+  });
+
   it("loads neutral project instruction files", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
     await writeFile(path.join(root, "AGENTS.md"), "Use npm test.", "utf8");
