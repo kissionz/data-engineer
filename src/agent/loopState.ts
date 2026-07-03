@@ -92,6 +92,10 @@ export function toolCallFingerprint(call: ToolCall): string {
     .digest("hex");
 }
 
+export function toolApprovalScope(call: { name: string }): string {
+  return `tool:${call.name}`;
+}
+
 function stableSerialize(value: unknown): string {
   if (Array.isArray(value)) {
     return `[${value.map(stableSerialize).join(",")}]`;

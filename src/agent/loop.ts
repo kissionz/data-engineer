@@ -40,6 +40,7 @@ import {
   pendingApprovalRequests,
   safeErrorMessage,
   sessionApprovalAllowed,
+  toolApprovalScope,
   toolCallFingerprint,
   toolEffect,
 } from "./loopState.js";
@@ -519,13 +520,14 @@ export class AgentLoop {
               };
             } else if (
               check.decision === "ask" &&
-              !this.hasSessionApproval(call)
+              (!this.hasSessionApproval(call) || check.folderGrant !== undefined)
             ) {
+              const approvalScope = toolApprovalScope(call);
               await this.session.append({
                 type: "approval_requested",
                 toolCallId: call.id,
                 fingerprint,
-                scope: fingerprint,
+                scope: approvalScope,
                 reason: check.reason,
                 folderGrant: check.folderGrant,
               });
@@ -541,7 +543,7 @@ export class AgentLoop {
                 type: "approval_resolved",
                 toolCallId: call.id,
                 fingerprint,
-                scope: fingerprint,
+                scope: approvalScope,
                 decision: approval,
                 folderGrant: check.folderGrant,
               });
@@ -834,7 +836,7 @@ export class AgentLoop {
       approval === "allow_session" &&
       sessionApprovalAllowed(call)
     ) {
-      this.sessionApprovals.add(fingerprint);
+      this.sessionApprovals.add(toolApprovalScope(call));
     }
 
     return this.executeTrackedTool(
@@ -936,12 +938,15 @@ export class AgentLoop {
     if (!sessionApprovalAllowed(call)) {
       return false;
     }
-    return this.sessionApprovals.has(
-      toolCallFingerprint({
-        id: "",
-        name: call.name,
-        args: call.args,
-      }),
+    return (
+      this.sessionApprovals.has(toolApprovalScope(call)) ||
+      this.sessionApprovals.has(
+        toolCallFingerprint({
+          id: "",
+          name: call.name,
+          args: call.args,
+        }),
+      )
     );
   }
 
@@ -957,10 +962,12 @@ export class AgentLoop {
       if (
         event.type === "approval_resolved" &&
         event.decision === "allow_session" &&
-        event.scope === event.fingerprint &&
-        record?.fingerprint === event.fingerprint &&
+        record !== undefined &&
+        record.fingerprint === event.fingerprint &&
         !record.collision &&
-        sessionApprovalAllowed(record.call)
+        sessionApprovalAllowed(record.call) &&
+        (event.scope === toolApprovalScope(record.call) ||
+          event.scope === event.fingerprint)
       ) {
         this.sessionApprovals.add(event.scope);
       } else if (
@@ -1081,7 +1088,7 @@ export class AgentLoop {
             type: "approval_resolved",
             toolCallId: record.call.id,
             fingerprint: record.fingerprint,
-            scope: record.fingerprint,
+            scope: toolApprovalScope(record.call),
             decision: approval,
             folderGrant: check.folderGrant,
           });

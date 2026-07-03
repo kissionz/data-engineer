@@ -124,11 +124,5 @@ function folderScopeDescription(
 }
 
 function sessionScopeDescription(call: ToolCall): string {
-  if (call.name === "Bash") {
-    const command = String(call.args.command ?? "");
-    const commandFamily = command.trim().split(/\s+/)[0] || "this command type";
-    return `Remember approval for ${commandFamily} commands until this process exits.`;
-  }
-
-  return `Remember approval for ${call.name} until this process exits.`;
+  return `Remember approval for the ${call.name} tool until this process exits.`;
 }

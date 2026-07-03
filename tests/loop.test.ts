@@ -783,7 +783,7 @@ describe("AgentLoop", () => {
     expect(reporter.statuses).toEqual(["running", "succeeded"]);
   });
 
-  it("rechecks approval when concrete bash arguments change", async () => {
+  it("reuses session approval when arguments to the same tool change", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
     const tools = new ToolRegistry();
     tools.register(new FakeBashTool());
@@ -803,7 +803,7 @@ describe("AgentLoop", () => {
     );
 
     await expect(loop.run("run npm checks")).resolves.toBe("done");
-    expect(approvalCount).toBe(2);
+    expect(approvalCount).toBe(1);
   });
 
   it("reuses an approved folder for descendant file calls", async () => {
@@ -1156,6 +1156,60 @@ describe("AgentLoop", () => {
     );
 
     await expect(loop.run("reuse exact approval")).resolves.toBe("done");
+    expect(approvals).toBe(0);
+    expect(bash.executions).toBe(1);
+  });
+
+  it("restores a tool-scoped session approval for different arguments", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const store = new SessionStore(sessionPath);
+    const original = {
+      id: "approved-original",
+      name: "Bash",
+      args: { command: "npm test" },
+    };
+    const fingerprint = testFingerprint(original);
+    await store.append({
+      type: "assistant_tool_calls",
+      toolCalls: [original],
+    });
+    await store.append({
+      type: "approval_resolved",
+      toolCallId: original.id,
+      fingerprint,
+      scope: "tool:Bash",
+      decision: "allow_session",
+    });
+    await store.append({
+      type: "tool_result",
+      toolCallId: original.id,
+      name: original.name,
+      ok: true,
+      content: "previously completed",
+    });
+    const bash = new FakeBashTool();
+    const tools = new ToolRegistry();
+    tools.register(bash);
+    let approvals = 0;
+    const loop = new AgentLoop(
+      new SingleToolThenDoneModel({
+        id: "approved-reuse",
+        name: "Bash",
+        args: { command: "npm run build" },
+      }),
+      tools,
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      store,
+      10,
+      async () => {
+        approvals += 1;
+        return "reject";
+      },
+    );
+
+    await expect(loop.run("reuse tool approval")).resolves.toBe("done");
     expect(approvals).toBe(0);
     expect(bash.executions).toBe(1);
   });
