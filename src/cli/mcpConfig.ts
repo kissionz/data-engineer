@@ -4,6 +4,7 @@ import {
   select,
 } from "@inquirer/prompts";
 import { Command } from "commander";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import {
   defaultUserConfigPath,
@@ -14,6 +15,7 @@ import {
 } from "../config/userConfig.js";
 
 type HttpAuthKind = "none" | "bearer" | "oauth";
+type McpKind = "maxcompute" | "maxcompute-local" | "custom";
 
 interface AddOptions {
   config?: string;
@@ -25,6 +27,9 @@ interface AddOptions {
   callbackPort?: string;
   manual?: boolean;
   vpc?: boolean;
+  directory?: string;
+  serverConfig?: string;
+  command?: string;
   force?: boolean;
   yes?: boolean;
 }
@@ -51,8 +56,8 @@ export async function runMcpConfigCommand(
 
   program
     .command("add")
-    .description("Add a MaxCompute preset or a custom HTTP MCP server")
-    .argument("[kind]", "maxcompute or custom")
+    .description("Add a MaxCompute remote/local preset or a custom HTTP MCP server")
+    .argument("[kind]", "maxcompute, maxcompute-local, or custom")
     .option("--config <path>", "Trusted user config file")
     .option("--id <id>", "MCP server id")
     .option("--url <url>", "Streamable HTTP MCP URL")
@@ -65,6 +70,9 @@ export async function runMcpConfigCommand(
     .option("--callback-port <port>", "OAuth loopback callback port")
     .option("--manual", "Print OAuth URL instead of opening a browser")
     .option("--vpc", "Allow private VPC addresses for this server")
+    .option("--directory <path>", "Local MaxCompute MCP source directory")
+    .option("--server-config <path>", "Local MaxCompute MCP config JSON")
+    .option("--command <path>", "Local MCP uv command or absolute path")
     .option("--force", "Replace an existing server with the same id")
     .option("--yes", "Require no interactive input")
     .action(async (kind: string | undefined, options: AddOptions) => {
@@ -103,6 +111,8 @@ async function addServer(
   const candidate =
     kind === "maxcompute"
       ? maxComputePreset(options)
+      : kind === "maxcompute-local"
+        ? await maxComputeLocalPreset(options)
       : await customHttpServer(options);
   const parsedServer = parseServer(candidate);
   const existingIndex = current.mcpServers.findIndex(
@@ -140,6 +150,15 @@ async function addServer(
     parsedServer.transport.auth?.type === "oauth"
   ) {
     console.log("OAuth authorization will start on the next Harness launch.");
+  } else if (kind === "maxcompute-local") {
+    console.log(
+      "Local MaxCompute MCP will inherit only its allowlisted environment variables.",
+    );
+    if (!options.serverConfig) {
+      console.log(
+        "Set MAXCOMPUTE_ENDPOINT, MAXCOMPUTE_DEFAULT_PROJECT, and an Alibaba Cloud credential source before launching Harness.",
+      );
+    }
   }
 }
 
@@ -203,15 +222,23 @@ async function removeServer(
 async function resolveKind(
   requested: string | undefined,
   nonInteractive: boolean,
-): Promise<"maxcompute" | "custom"> {
-  if (requested === "maxcompute" || requested === "custom") {
+): Promise<McpKind> {
+  if (
+    requested === "maxcompute" ||
+    requested === "maxcompute-local" ||
+    requested === "custom"
+  ) {
     return requested;
   }
   if (requested) {
-    throw new Error("MCP kind must be maxcompute or custom.");
+    throw new Error(
+      "MCP kind must be maxcompute, maxcompute-local, or custom.",
+    );
   }
   if (nonInteractive) {
-    throw new Error("Specify maxcompute or custom when using --yes.");
+    throw new Error(
+      "Specify maxcompute, maxcompute-local, or custom when using --yes.",
+    );
   }
   return select({
     message: "What do you want to configure?",
@@ -221,11 +248,76 @@ async function resolveKind(
         value: "maxcompute" as const,
       },
       {
+        name: "MaxCompute Local MCP (stdio)",
+        value: "maxcompute-local" as const,
+      },
+      {
         name: "Custom Streamable HTTP MCP",
         value: "custom" as const,
       },
     ],
   });
+}
+
+const MAXCOMPUTE_LOCAL_ENVIRONMENT = [
+  "MAXCOMPUTE_CATALOG_CONFIG",
+  "MAXCOMPUTE_ENDPOINT",
+  "MAXCOMPUTE_DEFAULT_PROJECT",
+  "MAXCOMPUTE_NAMESPACE_ID",
+  "ALIBABA_CLOUD_ACCESS_KEY_ID",
+  "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+  "ALIBABA_CLOUD_SECURITY_TOKEN",
+  "ALIBABA_CLOUD_CREDENTIALS_URI",
+] as const;
+
+async function maxComputeLocalPreset(
+  options: AddOptions,
+): Promise<Record<string, unknown>> {
+  const nonInteractive = options.yes === true;
+  const directoryValue =
+    options.directory ??
+    (nonInteractive
+      ? requiredOption("--directory")
+      : await input({
+          message: "Local MaxCompute MCP source directory:",
+          validate: (value) =>
+            path.isAbsolute(value) || "Enter an absolute path.",
+        }));
+  if (!path.isAbsolute(directoryValue)) {
+    throw new Error("--directory must be an absolute path.");
+  }
+  const directory = path.resolve(directoryValue);
+  const directoryInfo = await stat(directory).catch(() => undefined);
+  if (!directoryInfo?.isDirectory()) {
+    throw new Error(
+      `Local MaxCompute MCP directory does not exist: ${directory}`,
+    );
+  }
+  const serverConfig = options.serverConfig
+    ? path.resolve(options.serverConfig)
+    : undefined;
+  const args = [
+    "--directory",
+    directory,
+    "run",
+    "alibabacloud-maxcompute-mcp-server",
+    ...(serverConfig ? ["--config", serverConfig] : []),
+  ];
+  return {
+    id: options.id ?? "maxcompute",
+    enabled: true,
+    transport: {
+      type: "stdio",
+      command: options.command ?? "uv",
+      args,
+      cwd: directory,
+      envAllowlist: [...MAXCOMPUTE_LOCAL_ENVIRONMENT],
+    },
+    timeoutMs: 60_000,
+    maxTools: 128,
+    maxResources: 64,
+    maxPrompts: 64,
+  };
 }
 
 function maxComputePreset(options: AddOptions): Record<string, unknown> {

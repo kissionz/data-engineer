@@ -1,5 +1,6 @@
 import {
   mkdtemp,
+  mkdir,
   stat,
 } from "node:fs/promises";
 import os from "node:os";
@@ -95,6 +96,53 @@ describe("MCP config CLI", () => {
               "mcp.cn-hangzhou-vpc.maxcompute.aliyun-inc.com",
             ],
             network: { mode: "vpc" },
+          },
+        },
+      ],
+    });
+  });
+
+  it("adds a local MaxCompute stdio preset for a regional VPC endpoint", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-mcp-cli-"));
+    const configPath = path.join(root, "config.json");
+    const localServer = path.join(root, "maxcompute-mcp");
+    await mkdir(localServer);
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await runMcpConfigCommand([
+      "mcp",
+      "add",
+      "maxcompute-local",
+      "--directory",
+      localServer,
+      "--yes",
+      "--config",
+      configPath,
+    ]);
+
+    await expect(loadUserConfig(configPath)).resolves.toMatchObject({
+      mcpServers: [
+        {
+          id: "maxcompute",
+          timeoutMs: 60_000,
+          transport: {
+            type: "stdio",
+            command: "uv",
+            args: [
+              "--directory",
+              localServer,
+              "run",
+              "alibabacloud-maxcompute-mcp-server",
+            ],
+            cwd: localServer,
+            envAllowlist: expect.arrayContaining([
+              "MAXCOMPUTE_CATALOG_CONFIG",
+              "MAXCOMPUTE_ENDPOINT",
+              "MAXCOMPUTE_DEFAULT_PROJECT",
+              "ALIBABA_CLOUD_ACCESS_KEY_ID",
+              "ALIBABA_CLOUD_ACCESS_KEY_SECRET",
+              "ALIBABA_CLOUD_CREDENTIALS_URI",
+            ]),
           },
         },
       ],

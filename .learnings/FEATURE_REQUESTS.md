@@ -113,3 +113,32 @@ Add a per-server VPC network mode covering standard private-routable address cla
 - **Notes**: Added an explicit per-server VPC mode, covered standard private-routable IPv4 and IPv6 ranges without a MaxCompute-specific CIDR list, retained non-overridable sensitive-range blocks, added the MaxCompute VPC CLI preset, and passed the full validation suite.
 
 ---
+
+## [FEAT-20260703-003] maxcompute_local_mcp_preset
+
+**Logged**: 2026-07-03T06:08:00Z
+**Priority**: high
+**Status**: resolved
+**Area**: config
+
+### Requested Capability
+Configure the official local MaxCompute MCP server through the guided CLI so it can use a reachable regional VPC service endpoint.
+
+### User Context
+The Windows host cannot route to the Hangzhou Remote MCP VPC endpoint, but it can reach the Shanghai MaxCompute VPC service path. Running the MCP server locally over stdio avoids the unavailable remote gateway route.
+
+### Complexity Estimate
+medium
+
+### Suggested Implementation
+Add a `maxcompute-local` CLI preset that launches the official source checkout with `uv`, supports an optional external server config, and passes only explicitly allowlisted MaxCompute and Alibaba Cloud credential environment variables without persisting secrets.
+
+### Metadata
+- Frequency: first_time
+- Related Features: guided MCP configuration, stdio MCP transport, workspace environment loading
+
+### Resolution
+- **Resolved**: 2026-07-03T06:16:00Z
+- **Notes**: Added the `maxcompute-local` guided preset with source-directory validation, optional external server config, explicit environment allowlisting, Windows instructions for the Shanghai VPC endpoint, and full automated coverage.
+
+---

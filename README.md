@@ -471,6 +471,45 @@ DNS 能解析但 `TcpTestSucceeded` 为 `False`，表示当前 Windows 主机缺
 到该 VPC 地址的 VPN/专线/路由或出站策略；客户端放行私网地址本身不会
 建立这条网络路径。
 
+### MaxCompute Local MCP
+
+如果 Remote MCP 的杭州 VPC 入口不可达，但本机可以访问项目所在地域的
+MaxCompute VPC Endpoint，可改用官方 Local MCP。先安装 `uv`、克隆官方
+仓库并在仓库目录执行一次 `uv sync`，然后运行：
+
+```powershell
+harness mcp add maxcompute-local `
+  --directory D:\project\alibabacloud-maxcompute-mcp-server `
+  --force
+```
+
+从 Harness 源码运行时使用：
+
+```powershell
+npm start -- mcp add maxcompute-local `
+  --directory D:\project\alibabacloud-maxcompute-mcp-server `
+  --force
+```
+
+Local MCP 使用 stdio，不走 Remote MCP OAuth。可以在 Harness 自动加载的
+可信 `.env` 中配置上海 VPC Endpoint、默认 project 和一种阿里云凭证来源：
+
+```dotenv
+MAXCOMPUTE_ENDPOINT=https://service.cn-shanghai-vpc.maxcompute.aliyun-inc.com/api
+MAXCOMPUTE_DEFAULT_PROJECT=your_project
+MAXCOMPUTE_NAMESPACE_ID=your_root_account_uid
+
+# 开发环境可使用 AK/SK；生产环境优先使用动态凭证来源。
+ALIBABA_CLOUD_ACCESS_KEY_ID=your_access_key_id
+ALIBABA_CLOUD_ACCESS_KEY_SECRET=your_access_key_secret
+# ALIBABA_CLOUD_SECURITY_TOKEN=your_sts_token
+# ALIBABA_CLOUD_CREDENTIALS_URI=http://trusted-host/credentials
+```
+
+Harness 配置只保存环境变量名，不保存这些凭证值。若已单独维护官方
+MCMCP `config.json`，可额外传入
+`--server-config D:\absolute\path\config.json`。
+
 在 CI 或脚本中也可以完全非交互配置：
 
 ```bash
