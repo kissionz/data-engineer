@@ -88,6 +88,7 @@ import {
   resolveOptionalStringOption,
   resolveStringOption,
 } from "./cli/program.js";
+import { runMcpConfigCommand } from "./cli/mcpConfig.js";
 import {
   defaultUserConfigPath,
   loadUserConfig,
@@ -110,6 +111,9 @@ let activeMcpManager: McpManager | undefined;
 let activeTelemetrySink: TelemetrySink = noopTelemetrySink;
 
 async function main(): Promise<void> {
+  if (await runMcpConfigCommand()) {
+    return;
+  }
   const { program, options: opts } = parseCli();
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
   const userConfigPath =

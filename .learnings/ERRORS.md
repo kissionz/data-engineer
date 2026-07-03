@@ -290,3 +290,36 @@ Use `expect(fn).toThrow(...)` for synchronous exceptions and reserve `await expe
 - **Notes**: Removed the unnecessary await before rerunning the full quality gate.
 
 ---
+
+## [ERR-20260703-001] user_config_symlinked_parent
+
+**Logged**: 2026-07-03T03:36:32Z
+**Priority**: medium
+**Status**: resolved
+**Area**: config
+
+### Summary
+The MCP CLI smoke test rejected a valid config path under macOS `/tmp` because `/tmp` is a symlink to `/private/tmp`.
+
+### Error
+```
+Error: Refusing an unsafe user config directory.
+```
+
+### Context
+- Ran `harness mcp add maxcompute` with a config path under `/tmp`.
+- The first secure writer rejected any symlinked final parent directory.
+- macOS intentionally exposes `/tmp` through a system-managed symlink.
+
+### Suggested Fix
+Resolve the parent directory to its real path first, then create the lock, temporary file, and final file inside that stable real directory.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/config/userConfig.ts
+
+### Resolution
+- **Resolved**: 2026-07-03T03:36:32Z
+- **Notes**: The writer now anchors atomic operations in the resolved parent directory while preserving the user-facing config path.
+
+---

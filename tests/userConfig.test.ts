@@ -1,10 +1,17 @@
-import { chmod, mkdtemp, symlink, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   defaultUserConfigPath,
   loadUserConfig,
+  saveUserConfig,
 } from "../src/config/userConfig.js";
 
 describe("user config", () => {
@@ -297,6 +304,28 @@ describe("user config", () => {
       await symlink(target, linked);
 
       await expect(loadUserConfig(linked)).rejects.toThrow("symbolic link");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "safely writes through a symlinked parent directory",
+    async () => {
+      const root = await mkdtemp(path.join(os.tmpdir(), "harness-config-"));
+      const realDirectory = path.join(root, "real");
+      const linkedDirectory = path.join(root, "linked");
+      await mkdir(realDirectory);
+      await symlink(realDirectory, linkedDirectory);
+      const configPath = path.join(linkedDirectory, "config.json");
+
+      await saveUserConfig(configPath, {
+        version: 1,
+        mcpServers: [],
+      });
+
+      await expect(loadUserConfig(configPath)).resolves.toEqual({
+        version: 1,
+        mcpServers: [],
+      });
     },
   );
 

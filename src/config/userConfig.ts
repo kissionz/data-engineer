@@ -1,8 +1,18 @@
-import { lstat, open } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import {
+  chmod,
+  lstat,
+  mkdir,
+  open,
+  realpath,
+  rename,
+  unlink,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { canonicalHostname } from "../runtime/httpSafety.js";
+import { acquireFileLock } from "../runtime/fileLock.js";
 
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
@@ -288,6 +298,51 @@ export async function loadUserConfig(
     throw error;
   } finally {
     await handle.close();
+  }
+}
+
+export async function saveUserConfig(
+  configPath: string,
+  value: unknown,
+): Promise<UserConfig> {
+  const config = userConfigSchema.parse(value);
+  validateUserConfigSecurity(config);
+  const absolutePath = path.resolve(configPath);
+  const directory = path.dirname(absolutePath);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const realDirectory = await realpath(directory);
+  const directoryInfo = await lstat(realDirectory);
+  if (!directoryInfo.isDirectory()) {
+    throw new Error("Refusing an unsafe user config directory.");
+  }
+  const targetPath = path.join(realDirectory, path.basename(absolutePath));
+  const release = await acquireFileLock(targetPath, {
+    label: "user config",
+  });
+  const tempPath = `${targetPath}.${process.pid}.${randomBytes(8).toString("hex")}.tmp`;
+  try {
+    const current = await lstat(targetPath).catch((error: unknown) => {
+      if (hasCode(error, "ENOENT")) {
+        return undefined;
+      }
+      throw error;
+    });
+    if (current && (!current.isFile() || current.isSymbolicLink())) {
+      throw new Error("Refusing to replace an unsafe user config file.");
+    }
+    const handle = await open(tempPath, "wx", 0o600);
+    try {
+      await handle.writeFile(`${JSON.stringify(config, null, 2)}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await rename(tempPath, targetPath);
+    await chmod(targetPath, 0o600);
+    return config;
+  } finally {
+    await unlink(tempPath).catch(() => undefined);
+    await release();
   }
 }
 

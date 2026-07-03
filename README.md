@@ -431,6 +431,44 @@ Windows 的绝对路径可使用 JSON 转义形式，例如 `"C:\\path\\to\\serv
 - 使用 HTTPS；只有同时明确允许 localhost 时才能使用 HTTP。
 - 使用无认证、环境变量 bearer token 或标准 MCP OAuth，不能把 token 写入配置。
 
+推荐通过 CLI 配置，命令会校验内容、写入实际生效的用户配置文件并打印路径：
+
+```bash
+# 全局安装或 npm link 后
+harness mcp add maxcompute
+
+# 从源码目录运行
+npm start -- mcp add maxcompute
+
+# 查看和删除
+harness mcp list
+harness mcp remove maxcompute
+```
+
+MaxCompute 使用内置 Remote MCP OAuth 预设，无需手工填写 URL。自定义
+Streamable HTTP 服务使用交互式向导：
+
+```bash
+harness mcp add custom
+```
+
+在 CI 或脚本中也可以完全非交互配置：
+
+```bash
+harness mcp add custom --yes \
+  --id remote_docs \
+  --url https://mcp.example.com/mcp \
+  --auth bearer \
+  --token-env MCP_ACCESS_TOKEN
+```
+
+Windows PowerShell 使用相同命令，不需要手工定位
+`%USERPROFILE%\.harness\config.json`。需要使用其他配置文件时，将
+`--config C:\absolute\path\config.json` 放在 `add`、`list` 或 `remove`
+命令之后。
+
+以下 JSON 仅用于解释最终配置结构，通常不再需要手工编辑。
+
 静态 bearer token 示例：
 
 ```json

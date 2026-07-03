@@ -55,3 +55,32 @@ Retain ripgrep as the accelerated backend when detected, add bounded native Node
 - **Notes**: Kept ripgrep acceleration, added bounded native Glob/Grep backends, registered search tools without rg, added backend visibility, and passed the full test suite.
 
 ---
+
+## [FEAT-20260703-001] guided_mcp_configuration
+
+**Logged**: 2026-07-03T03:32:29Z
+**Priority**: high
+**Status**: resolved
+**Area**: config
+
+### Requested Capability
+Provide a guided CLI for adding, listing, and removing MCP servers instead of requiring users to locate and edit JSON configuration manually.
+
+### User Context
+Manual configuration is cumbersome and error-prone, especially on Windows where users may edit the wrong config path or produce invalid JSON.
+
+### Complexity Estimate
+medium
+
+### Suggested Implementation
+Add `harness mcp add/list/remove`, include a MaxCompute Remote MCP preset, validate all generated configuration through the existing schema, and save it atomically with private permissions.
+
+### Metadata
+- Frequency: first_time
+- Related Features: MCP OAuth, trusted user config
+
+### Resolution
+- **Resolved**: 2026-07-03T03:39:15Z
+- **Notes**: Added guided `mcp add/list/remove` commands, a zero-input MaxCompute preset, schema validation, atomic private config writes, Windows documentation, and automated tests.
+
+---

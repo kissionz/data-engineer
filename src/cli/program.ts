@@ -88,6 +88,17 @@ export function parseCli(): { program: Command; options: CliOptions } {
     .option("--sandbox-pids <count>", "Container process limit", "256")
     .option("--worktree", "Run the agent in a new isolated git worktree")
     .option("--worktree-base <ref>", "Git ref used for a new worktree", "HEAD")
+    .addHelpText(
+      "after",
+      [
+        "",
+        "MCP configuration:",
+        "  harness mcp add maxcompute",
+        "  harness mcp add custom",
+        "  harness mcp list",
+        "  harness mcp remove <id>",
+      ].join("\n"),
+    )
     .parse();
   return { program, options: program.opts<CliOptions>() };
 }
