@@ -24,6 +24,7 @@ interface AddOptions {
   allowedHosts?: string[];
   callbackPort?: string;
   manual?: boolean;
+  vpc?: boolean;
   force?: boolean;
   yes?: boolean;
 }
@@ -63,6 +64,7 @@ export async function runMcpConfigCommand(
     )
     .option("--callback-port <port>", "OAuth loopback callback port")
     .option("--manual", "Print OAuth URL instead of opening a browser")
+    .option("--vpc", "Allow private VPC addresses for this server")
     .option("--force", "Replace an existing server with the same id")
     .option("--yes", "Require no interactive input")
     .action(async (kind: string | undefined, options: AddOptions) => {
@@ -160,8 +162,12 @@ async function listServers(options: ConfigOptions): Promise<void> {
         ? transport.auth?.type ??
           (transport.tokenEnv ? "bearer (legacy)" : "none")
         : "stdio";
+    const network =
+      transport.type === "http"
+        ? transport.network?.mode ?? "public"
+        : "local";
     console.log(
-      `${server.id}\t${server.enabled ? "enabled" : "disabled"}\t${auth}\t${location}`,
+      `${server.id}\t${server.enabled ? "enabled" : "disabled"}\t${auth}\t${network}\t${location}`,
     );
   }
 }
@@ -225,7 +231,9 @@ async function resolveKind(
 function maxComputePreset(options: AddOptions): Record<string, unknown> {
   const url =
     options.url ??
-    "https://mcp.cn-hangzhou.maxcompute.aliyun.com/mcp";
+    (options.vpc
+      ? "https://mcp.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/mcp"
+      : "https://mcp.cn-hangzhou.maxcompute.aliyun.com/mcp");
   return {
     id: options.id ?? "maxcompute",
     enabled: true,
@@ -241,6 +249,9 @@ function maxComputePreset(options: AddOptions): Record<string, unknown> {
         ...(options.callbackPort
           ? { callbackPort: parsePort(options.callbackPort) }
           : {}),
+      },
+      network: {
+        mode: options.vpc ? "vpc" : "public",
       },
     },
     timeoutMs: 30_000,
@@ -298,6 +309,13 @@ async function customHttpServer(
             default: url.hostname.toLowerCase(),
           }),
         ));
+  const useVpc =
+    options.vpc === true ||
+    (!nonInteractive &&
+      await confirm({
+        message: "Allow this server to resolve to private VPC addresses?",
+        default: false,
+      }));
   let authConfig: Record<string, unknown>;
   if (auth === "bearer") {
     const tokenEnv =
@@ -341,6 +359,9 @@ async function customHttpServer(
       allowLocalhost:
         url.protocol === "http:" &&
         ["localhost", "127.0.0.1", "::1"].includes(url.hostname),
+      network: {
+        mode: useVpc ? "vpc" : "public",
+      },
     },
   };
 }

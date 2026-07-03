@@ -9,32 +9,38 @@ export interface LookupAddress {
 
 export type ResolveHost = (hostname: string) => Promise<LookupAddress[]>;
 
-const blockedAddresses = new BlockList();
+const alwaysBlockedAddresses = new BlockList();
+const privateRoutableAddresses = new BlockList();
 
 for (const [network, prefix] of [
   ["0.0.0.0", 8],
-  ["10.0.0.0", 8],
-  ["100.64.0.0", 10],
+  ["100.100.100.200", 32],
   ["127.0.0.0", 8],
   ["169.254.0.0", 16],
-  ["172.16.0.0", 12],
   ["192.0.0.0", 24],
   ["192.0.2.0", 24],
-  ["192.168.0.0", 16],
   ["198.18.0.0", 15],
   ["198.51.100.0", 24],
   ["203.0.113.0", 24],
   ["224.0.0.0", 4],
   ["240.0.0.0", 4],
 ] as const) {
-  blockedAddresses.addSubnet(network, prefix, "ipv4");
+  alwaysBlockedAddresses.addSubnet(network, prefix, "ipv4");
+}
+
+for (const [network, prefix] of [
+  ["10.0.0.0", 8],
+  ["100.64.0.0", 10],
+  ["172.16.0.0", 12],
+  ["192.168.0.0", 16],
+] as const) {
+  privateRoutableAddresses.addSubnet(network, prefix, "ipv4");
 }
 
 for (const [network, prefix] of [
   ["::", 128],
   ["::1", 128],
   ["100::", 64],
-  ["fc00::", 7],
   ["fe80::", 10],
   ["2001:2::", 48],
   ["2001:10::", 28],
@@ -43,8 +49,10 @@ for (const [network, prefix] of [
   ["5f00::", 16],
   ["ff00::", 8],
 ] as const) {
-  blockedAddresses.addSubnet(network, prefix, "ipv6");
+  alwaysBlockedAddresses.addSubnet(network, prefix, "ipv6");
 }
+
+privateRoutableAddresses.addSubnet("fc00::", 7, "ipv6");
 
 export function canonicalHostname(hostname: string): string {
   const withoutBrackets =
@@ -60,7 +68,7 @@ export function canonicalHostname(hostname: string): string {
 
 export function assertAllowedAddress(
   address: string,
-  options: { allowLoopback: boolean },
+  options: { allowLoopback: boolean; allowPrivate?: boolean },
 ): void {
   const family = isIP(address);
   if (family === 0) {
@@ -74,11 +82,22 @@ export function assertAllowedAddress(
     return;
   }
 
-  const blocked = blockedAddresses.check(
+  const familyName = family === 4 ? "ipv4" : "ipv6";
+  const alwaysBlocked = alwaysBlockedAddresses.check(
     address,
-    family === 4 ? "ipv4" : "ipv6",
+    familyName,
   );
-  if (blocked && !(options.allowLoopback && isLoopback(address))) {
+  if (
+    alwaysBlocked &&
+    !(options.allowLoopback && isLoopback(address))
+  ) {
+    throw new Error(`Connection to non-public IP address ${address} is denied.`);
+  }
+  const privateRoutable = privateRoutableAddresses.check(
+    address,
+    familyName,
+  );
+  if (privateRoutable && options.allowPrivate !== true) {
     throw new Error(`Connection to non-public IP address ${address} is denied.`);
   }
 }

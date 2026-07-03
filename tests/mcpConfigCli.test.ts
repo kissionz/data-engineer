@@ -70,6 +70,37 @@ describe("MCP config CLI", () => {
     });
   });
 
+  it("adds the VPC-only MaxCompute preset without a CIDR list", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-mcp-cli-"));
+    const configPath = path.join(root, "config.json");
+    vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+    await runMcpConfigCommand([
+      "mcp",
+      "add",
+      "maxcompute",
+      "--vpc",
+      "--yes",
+      "--config",
+      configPath,
+    ]);
+
+    await expect(loadUserConfig(configPath)).resolves.toMatchObject({
+      mcpServers: [
+        {
+          id: "maxcompute",
+          transport: {
+            url: "https://mcp.cn-hangzhou-vpc.maxcompute.aliyun-inc.com/mcp",
+            allowedHosts: [
+              "mcp.cn-hangzhou-vpc.maxcompute.aliyun-inc.com",
+            ],
+            network: { mode: "vpc" },
+          },
+        },
+      ],
+    });
+  });
+
   it("adds a non-interactive custom bearer MCP server", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-mcp-cli-"));
     const configPath = path.join(root, "config.json");

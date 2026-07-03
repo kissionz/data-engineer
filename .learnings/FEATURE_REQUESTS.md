@@ -84,3 +84,32 @@ Add `harness mcp add/list/remove`, include a MaxCompute Remote MCP preset, valid
 - **Notes**: Added guided `mcp add/list/remove` commands, a zero-input MaxCompute preset, schema validation, atomic private config writes, Windows documentation, and automated tests.
 
 ---
+
+## [FEAT-20260703-002] scoped_mcp_vpc_access
+
+**Logged**: 2026-07-03T05:48:06Z
+**Priority**: high
+**Status**: resolved
+**Area**: config
+
+### Requested Capability
+Allow an explicitly configured MCP server to connect to a VPC-only endpoint without disabling global SSRF protections.
+
+### User Context
+The MaxCompute deployment is intentionally reachable only through its VPC endpoint, which resolves into `100.64.0.0/10` and is rejected by the current public-only MCP network policy.
+
+### Complexity Estimate
+medium
+
+### Suggested Implementation
+Add a per-server VPC network mode covering standard private-routable address classes, keep loopback/link-local/metadata/benchmark/multicast/reserved ranges non-overridable, and add `harness mcp add maxcompute --vpc` for the documented VPC endpoint.
+
+### Metadata
+- Frequency: first_time
+- Related Features: MCP OAuth, guided MCP configuration, SSRF protection
+
+### Resolution
+- **Resolved**: 2026-07-03T05:53:00Z
+- **Notes**: Added an explicit per-server VPC mode, covered standard private-routable IPv4 and IPv6 ranges without a MaxCompute-specific CIDR list, retained non-overridable sensitive-range blocks, added the MaxCompute VPC CLI preset, and passed the full validation suite.
+
+---

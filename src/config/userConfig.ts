@@ -85,6 +85,12 @@ const httpTransportSchema = z
     tokenEnv: environmentName.optional(),
     auth: mcpHttpAuthSchema.optional(),
     allowLocalhost: z.boolean().default(false),
+    network: z
+      .object({
+        mode: z.enum(["public", "vpc"]),
+      })
+      .strict()
+      .optional(),
   })
   .strict()
   .superRefine((transport, context) => {

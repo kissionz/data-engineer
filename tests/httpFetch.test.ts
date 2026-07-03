@@ -251,6 +251,39 @@ describe("HttpFetchTool", () => {
     }).toThrow(/non-public/);
   });
 
+  it("allows VPC-routable addresses without exposing metadata or local ranges", () => {
+    for (const address of [
+      "10.20.30.40",
+      "100.103.125.243",
+      "172.20.1.2",
+      "192.168.10.20",
+      "fd00::1234",
+    ]) {
+      expect(() =>
+        assertAllowedAddress(address, {
+          allowLoopback: false,
+          allowPrivate: true,
+        }),
+      ).not.toThrow();
+    }
+    for (const address of [
+      "127.0.0.1",
+      "169.254.169.254",
+      "100.100.100.200",
+      "198.18.1.1",
+      "224.0.0.1",
+      "::1",
+      "fe80::1",
+    ]) {
+      expect(() =>
+        assertAllowedAddress(address, {
+          allowLoopback: false,
+          allowPrivate: true,
+        }),
+      ).toThrow(/non-public/);
+    }
+  });
+
   it("canonicalizes DNS hostnames", () => {
     expect(canonicalHostname("EXAMPLE.COM.")).toBe("example.com");
     expect(canonicalHostname("bücher.example")).toBe("xn--bcher-kva.example");

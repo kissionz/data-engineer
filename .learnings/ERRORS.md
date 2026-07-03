@@ -323,3 +323,67 @@ Resolve the parent directory to its real path first, then create the lock, tempo
 - **Notes**: The writer now anchors atomic operations in the resolved parent directory while preserving the user-facing config path.
 
 ---
+
+## [ERR-20260703-002] sandbox_dns_lookup
+
+**Logged**: 2026-07-03T04:23:20Z
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The managed sandbox blocked `dig` from opening its DNS socket during MaxCompute endpoint diagnosis.
+
+### Error
+```
+dig: isc_socket_bind: unexpected error
+```
+
+### Context
+- Investigated a Windows MCP connection that resolved the public MaxCompute hostname to RFC 6598 shared address space.
+- Source inspection succeeded, but the local DNS comparison required network socket access.
+
+### Suggested Fix
+Retry read-only DNS diagnostics with narrowly scoped elevated permissions.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/runtime/httpSafety.ts
+
+### Resolution
+- **Resolved**: 2026-07-03T04:23:20Z
+- **Notes**: Continued with an elevated read-only DNS lookup.
+
+---
+
+## [ERR-20260703-003] missing_learnings_log
+
+**Logged**: 2026-07-03T04:24:40Z
+**Priority**: low
+**Status**: resolved
+**Area**: config
+
+### Summary
+The correction logging step assumed `.learnings/LEARNINGS.md` already existed.
+
+### Error
+```
+tail: .learnings/LEARNINGS.md: No such file or directory
+```
+
+### Context
+- The self-improvement skill required recording a user correction.
+- This repository had error and feature-request logs but no learning log.
+
+### Suggested Fix
+Create the learning log from the skill template when it is absent.
+
+### Metadata
+- Reproducible: yes
+- Related Files: .learnings/LEARNINGS.md
+
+### Resolution
+- **Resolved**: 2026-07-03T04:24:40Z
+- **Notes**: Created the missing learning log and recorded the correction.
+
+---

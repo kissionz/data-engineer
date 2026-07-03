@@ -440,6 +440,9 @@ harness mcp add maxcompute
 # 从源码目录运行
 npm start -- mcp add maxcompute
 
+# MaxCompute 仅允许 VPC 访问时
+harness mcp add maxcompute --vpc --force
+
 # 查看和删除
 harness mcp list
 harness mcp remove maxcompute
@@ -451,6 +454,11 @@ Streamable HTTP 服务使用交互式向导：
 ```bash
 harness mcp add custom
 ```
+
+`--vpc` 是单个 MCP Server 的显式网络授权：它允许该精确 host 解析到
+RFC1918、`100.64.0.0/10` 或 IPv6 ULA 等私网可路由地址，但仍拒绝
+loopback、link-local、阿里云元数据地址 `100.100.100.200`、benchmark、
+multicast 和其他保留地址。它不会放宽其他 MCP Server 或 `HttpFetch`。
 
 在 CI 或脚本中也可以完全非交互配置：
 

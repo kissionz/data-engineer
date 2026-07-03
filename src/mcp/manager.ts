@@ -196,7 +196,12 @@ async function createHttpTransport(
   cleanup: () => Promise<void>;
 }> {
   const url = new URL(transportConfig.url);
-  await assertNetworkDestination(url, transportConfig.allowLocalhost);
+  const allowPrivate = transportConfig.network?.mode === "vpc";
+  await assertNetworkDestination(
+    url,
+    transportConfig.allowLocalhost,
+    allowPrivate,
+  );
   const auth =
     transportConfig.auth ??
     (transportConfig.tokenEnv
@@ -226,7 +231,10 @@ async function createHttpTransport(
   );
   const dispatcher = new Agent({
     connect: {
-      lookup: secureLookup(transportConfig.allowLocalhost),
+      lookup: secureLookup(
+        transportConfig.allowLocalhost,
+        allowPrivate,
+      ),
     },
     maxResponseSize: 2 * 1024 * 1024,
   });
@@ -237,7 +245,11 @@ async function createHttpTransport(
       input instanceof Request ? input.url : String(input),
     );
     const target = validated.url;
-    await assertNetworkDestination(target, transportConfig.allowLocalhost);
+    await assertNetworkDestination(
+      target,
+      transportConfig.allowLocalhost,
+      allowPrivate,
+    );
     const headers = applyMcpHttpAuthorization(
       new Headers(init?.headers),
       auth.type,
@@ -312,7 +324,10 @@ export function validateMcpHttpRequestTarget(
   };
 }
 
-function secureLookup(allowLocalhost: boolean) {
+function secureLookup(
+  allowLocalhost: boolean,
+  allowPrivate: boolean,
+) {
   return (
     hostname: string,
     options: LookupOptions,
@@ -328,7 +343,10 @@ function secureLookup(allowLocalhost: boolean) {
           throw new Error("MCP HTTP socket lookup returned no addresses.");
         }
         for (const { address } of addresses) {
-          assertAllowedAddress(address, { allowLoopback: localhostAllowed });
+          assertAllowedAddress(address, {
+            allowLoopback: localhostAllowed,
+            allowPrivate,
+          });
         }
         finishLookup(addresses, options, callback);
       } catch (error) {
@@ -407,6 +425,7 @@ async function discoverTools(
 async function assertNetworkDestination(
   url: URL,
   allowLocalhost: boolean,
+  allowPrivate: boolean,
 ): Promise<void> {
   const hostname = canonicalHostname(url.hostname);
   const localhost = isLocalhostHostname(hostname);
@@ -423,6 +442,7 @@ async function assertNetworkDestination(
   for (const { address } of addresses) {
     assertAllowedAddress(address, {
       allowLoopback: allowLocalhost && localhost,
+      allowPrivate,
     });
   }
 }
