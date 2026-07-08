@@ -41,7 +41,7 @@ export class InteractivePrompt {
       cursorTo(process.stdout, 0);
       clearLine(process.stdout, 0);
     }
-    process.stdout.write(`${USER_HIGHLIGHT} ${text} ${RESET}\n`);
+    process.stdout.write(`\n${USER_HIGHLIGHT} ${text} ${RESET}\n\n`);
     this.resetOutputPosition();
   }
 

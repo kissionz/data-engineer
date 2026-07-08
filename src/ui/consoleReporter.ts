@@ -12,39 +12,52 @@ const STATUS_LABELS: Record<ToolStatus, string> = {
   denied: "denied",
 };
 
+const TOOL_SPINNER_MS = 350;
+
 export class ConsoleReporter implements AgentReporter {
   private textOpen = false;
-  private activeToolLine = false;
   private toolDetailsExpanded = false;
-  private readonly toolCalls = new Map<string, number>();
+  private toolGroupActive = false;
+  private toolSpinnerFrame = 0;
+  private toolSpinner?: NodeJS.Timeout;
+  private readonly activeTools = new Set<string>();
   private readonly toolDetails: string[] = [];
+  private toolDetailCursor = 0;
+  private toolGroupStartIndex = 0;
 
   constructor(
     private readonly writeOutput: (text: string) => void = (text) =>
       process.stdout.write(text),
+    private readonly collapseTools = false,
   ) {}
 
   toggleToolDetails(): void {
-    if (!process.stdout.isTTY || this.toolDetails.length === 0) {
+    if (
+      !this.collapseTools ||
+      !process.stdout.isTTY ||
+      this.toolDetails.length === 0
+    ) {
       return;
     }
 
     this.onTextEnd();
     this.toolDetailsExpanded = !this.toolDetailsExpanded;
     if (!this.toolDetailsExpanded) {
-      this.writeOutput("▸ tool details collapsed (ctrl+o or /tools to expand)\n");
+      this.writeOutput("  tool details collapsed\n");
       return;
     }
 
     this.writeOutput("▾ tool details\n");
-    for (const detail of this.toolDetails.slice(-12)) {
+    for (const detail of this.toolDetails.slice(this.toolDetailCursor)) {
       this.writeOutput(`${detail}\n`);
     }
+    this.writeOutput("\n");
+    this.toolDetailCursor = this.toolDetails.length;
   }
 
   onTextDelta(delta: string): void {
     if (!this.textOpen) {
-      this.finishToolLine();
+      this.completeToolGroup();
       this.writeOutput("\n● ");
       this.textOpen = true;
     }
@@ -69,43 +82,78 @@ export class ConsoleReporter implements AgentReporter {
       `  ${summarizeToolCall(call)} ` +
       `[${toolStatusLabel(call, status, result)}]`;
 
-    if (process.stdout.isTTY) {
+    if (this.collapseTools && process.stdout.isTTY) {
       if (!isTerminalStatus(status)) {
+        this.startToolGroup();
+        this.activeTools.add(call.id);
+        this.toolDetails.push(line);
         if (this.toolDetailsExpanded) {
           this.writeOutput(`${line}\n`);
+          this.toolDetailCursor = this.toolDetails.length;
         }
         return;
       }
 
-      const count = (this.toolCalls.get(call.name) ?? 0) + 1;
-      this.toolCalls.set(call.name, count);
+      this.startToolGroup();
+      this.activeTools.delete(call.id);
       this.toolDetails.push(line);
       if (this.toolDetailsExpanded) {
         this.writeOutput(`${line}\n`);
-        return;
+        this.toolDetailCursor = this.toolDetails.length;
       }
-
-      this.writeOutput(
-        `▸ called ${call.name} ${count} ${count === 1 ? "time" : "times"} ` +
-          "(ctrl+o or /tools to expand)\n",
-      );
-      this.activeToolLine = !isTerminalStatus(status);
-
-      if (!this.activeToolLine) {
-        return;
-      }
-
       return;
     }
 
     this.writeOutput(`${line}\n`);
   }
 
-  private finishToolLine(): void {
-    if (this.activeToolLine) {
-      this.writeOutput("\n");
-      this.activeToolLine = false;
+  dispose(): void {
+    if (this.toolSpinner) {
+      clearInterval(this.toolSpinner);
+      this.toolSpinner = undefined;
     }
+    if (this.toolGroupActive) {
+      this.toolGroupActive = false;
+      this.writeOutput("\r\u001b[2K▸ 已停止工具调用\n");
+    }
+  }
+
+  private startToolGroup(): void {
+    if (this.toolGroupActive) {
+      return;
+    }
+
+    this.toolGroupActive = true;
+    this.toolSpinnerFrame = 0;
+    this.toolGroupStartIndex = this.toolDetails.length;
+    this.writeToolActivityLine();
+    this.toolSpinner = setInterval(() => {
+      if (!this.toolGroupActive) {
+        return;
+      }
+      this.toolSpinnerFrame = (this.toolSpinnerFrame + 1) % 3;
+      this.writeToolActivityLine();
+    }, TOOL_SPINNER_MS);
+  }
+
+  private completeToolGroup(): void {
+    if (!this.toolGroupActive) {
+      return;
+    }
+    if (this.toolSpinner) {
+      clearInterval(this.toolSpinner);
+      this.toolSpinner = undefined;
+    }
+    this.toolGroupActive = false;
+    const groupCount = this.toolDetails.length - this.toolGroupStartIndex;
+    this.writeOutput(
+      `\r\u001b[2K▸ 已完成 ${groupCount} 个工具事件\n`,
+    );
+  }
+
+  private writeToolActivityLine(): void {
+    const dots = ".".repeat(this.toolSpinnerFrame + 1);
+    this.writeOutput(`\r\u001b[2K▸ 处理中${dots}`);
   }
 }
 

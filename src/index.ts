@@ -408,6 +408,7 @@ interface SessionRuntime {
   session: ManagedSession;
   agent: AgentLoop;
   telemetry: SessionTelemetryObserver;
+  reporter: ConsoleReporter;
 }
 
 type ShellExecutorFactory = (
@@ -483,7 +484,11 @@ async function createShellExecutorFactory(
 
 function createAgent(
   options: CreateAgentOptions,
-): { agent: AgentLoop; telemetry: SessionTelemetryObserver } {
+): {
+  agent: AgentLoop;
+  telemetry: SessionTelemetryObserver;
+  reporter: ConsoleReporter;
+} {
   const tools = new ToolRegistry();
   const model = createModel(
     options.provider,
@@ -608,6 +613,7 @@ function createAgent(
     options.interactivePrompt
       ? options.interactivePrompt.writeAboveInput(text)
       : process.stdout.write(text),
+    options.interactivePrompt !== undefined,
   );
   options.interactivePrompt?.setToggleDetailsHandler(() =>
     reporter.toggleToolDetails(),
@@ -649,7 +655,7 @@ function createAgent(
     options.budget,
     options.compaction?.contextWindowRatio,
   );
-  return { agent, telemetry };
+  return { agent, telemetry, reporter };
 }
 
 async function runTask(
@@ -735,6 +741,7 @@ async function runInteractiveSession(
       if (trimmed === "/new") {
         try {
           const nextRuntime = createRuntime(await sessionManager.create());
+          runtime.reporter.dispose();
           await runtime.telemetry.dispose();
           await runtime.session.release();
           runtime = nextRuntime;
@@ -792,6 +799,7 @@ async function runInteractiveSession(
 
           if (nextSession.id !== runtime.session.id) {
             const nextRuntime = createRuntime(nextSession);
+            runtime.reporter.dispose();
             await runtime.telemetry.dispose();
             await runtime.session.release();
             runtime = nextRuntime;
@@ -819,6 +827,7 @@ async function runInteractiveSession(
         console.error(`Task failed: ${errorMessage(error)}`);
       } finally {
         guidance.reset();
+        runtime.reporter.dispose();
         prompt.endTask(controller);
       }
 
@@ -828,6 +837,7 @@ async function runInteractiveSession(
     }
   } finally {
     try {
+      runtime.reporter.dispose();
       await runtime.telemetry.dispose();
     } finally {
       try {
