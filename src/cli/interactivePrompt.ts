@@ -1,7 +1,6 @@
 import {
   clearLine,
   cursorTo,
-  moveCursor,
 } from "node:readline";
 import { createInterface as createPromisesInterface } from "node:readline/promises";
 
@@ -14,7 +13,6 @@ export class InteractivePrompt {
   private guidanceHandler?: (text: string) => void;
   private taskLineHandler?: (line: string) => void;
   private inputSuspended = false;
-  private outputPartialOpen = false;
 
   constructor() {
     this.rl = this.createReadline();
@@ -35,15 +33,9 @@ export class InteractivePrompt {
 
     cursorTo(process.stdout, 0);
     clearLine(process.stdout, 0);
-    if (this.outputPartialOpen) {
-      moveCursor(process.stdout, 0, -1);
-      process.stdout.write("\u001b[999C");
-    }
-
     process.stdout.write(text);
-    this.outputPartialOpen = text.length > 0 && !text.endsWith("\n");
 
-    if (this.outputPartialOpen) {
+    if (text.length > 0 && !text.endsWith("\n")) {
       process.stdout.write("\n");
     }
     this.redrawGuidePrompt(currentLine, currentCursor);
@@ -73,7 +65,6 @@ export class InteractivePrompt {
   beginTask(onGuidance?: (text: string) => void): AbortController {
     const controller = new AbortController();
     this.activeTask = controller;
-    this.outputPartialOpen = false;
     if (onGuidance) {
       this.guidanceHandler = onGuidance;
       this.attachTaskLineHandler();
@@ -88,7 +79,6 @@ export class InteractivePrompt {
     this.guidanceHandler = undefined;
     this.detachTaskLineHandler();
     this.rl.setPrompt("");
-    this.outputPartialOpen = false;
     this.resumeInput();
   }
 
