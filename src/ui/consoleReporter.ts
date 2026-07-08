@@ -16,19 +16,24 @@ export class ConsoleReporter implements AgentReporter {
   private textOpen = false;
   private activeToolLine = false;
 
+  constructor(
+    private readonly writeOutput: (text: string) => void = (text) =>
+      process.stdout.write(text),
+  ) {}
+
   onTextDelta(delta: string): void {
     if (!this.textOpen) {
       this.finishToolLine();
-      process.stdout.write("\nAssistant:\n");
+      this.writeOutput("\nAssistant:\n");
       this.textOpen = true;
     }
 
-    process.stdout.write(delta);
+    this.writeOutput(delta);
   }
 
   onTextEnd(): void {
     if (this.textOpen) {
-      process.stdout.write("\n");
+      this.writeOutput("\n");
       this.textOpen = false;
     }
   }
@@ -44,22 +49,22 @@ export class ConsoleReporter implements AgentReporter {
       `[${toolStatusLabel(call, status, result)}]`;
 
     if (process.stdout.isTTY) {
-      process.stdout.write(`${this.activeToolLine ? "\r\u001b[2K" : ""}${line}`);
+      this.writeOutput(`${this.activeToolLine ? "\r\u001b[2K" : ""}${line}`);
       this.activeToolLine = !isTerminalStatus(status);
 
       if (!this.activeToolLine) {
-        process.stdout.write("\n");
+        this.writeOutput("\n");
       }
 
       return;
     }
 
-    process.stdout.write(`${line}\n`);
+    this.writeOutput(`${line}\n`);
   }
 
   private finishToolLine(): void {
     if (this.activeToolLine) {
-      process.stdout.write("\n");
+      this.writeOutput("\n");
       this.activeToolLine = false;
     }
   }

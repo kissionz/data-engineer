@@ -1,12 +1,20 @@
-import { createInterface } from "node:readline/promises";
+import {
+  clearLine,
+  cursorTo,
+  moveCursor,
+} from "node:readline";
+import { createInterface as createPromisesInterface } from "node:readline/promises";
+
+const GUIDE_PROMPT = "Guide> ";
 
 export class InteractivePrompt {
-  private rl: ReturnType<typeof createInterface>;
+  private rl: ReturnType<typeof createPromisesInterface>;
   private terminationPending = false;
   private activeTask?: AbortController;
   private guidanceHandler?: (text: string) => void;
   private taskLineHandler?: (line: string) => void;
   private inputSuspended = false;
+  private outputPartialOpen = false;
 
   constructor() {
     this.rl = this.createReadline();
@@ -14,6 +22,31 @@ export class InteractivePrompt {
 
   async question(prompt: string): Promise<string> {
     return this.rl.question(`${prompt}> `);
+  }
+
+  writeAboveInput(text: string): void {
+    if (!this.isGuidanceInputActive() || !process.stdout.isTTY) {
+      process.stdout.write(text);
+      return;
+    }
+
+    const currentLine = this.rl.line;
+    const currentCursor = this.rl.cursor;
+
+    cursorTo(process.stdout, 0);
+    clearLine(process.stdout, 0);
+    if (this.outputPartialOpen) {
+      moveCursor(process.stdout, 0, -1);
+      process.stdout.write("\u001b[999C");
+    }
+
+    process.stdout.write(text);
+    this.outputPartialOpen = text.length > 0 && !text.endsWith("\n");
+
+    if (this.outputPartialOpen) {
+      process.stdout.write("\n");
+    }
+    this.redrawGuidePrompt(currentLine, currentCursor);
   }
 
   resumeInput(): void {
@@ -40,6 +73,7 @@ export class InteractivePrompt {
   beginTask(onGuidance?: (text: string) => void): AbortController {
     const controller = new AbortController();
     this.activeTask = controller;
+    this.outputPartialOpen = false;
     if (onGuidance) {
       this.guidanceHandler = onGuidance;
       this.attachTaskLineHandler();
@@ -54,6 +88,7 @@ export class InteractivePrompt {
     this.guidanceHandler = undefined;
     this.detachTaskLineHandler();
     this.rl.setPrompt("");
+    this.outputPartialOpen = false;
     this.resumeInput();
   }
 
@@ -93,8 +128,8 @@ export class InteractivePrompt {
     this.rl.close();
   }
 
-  private createReadline(): ReturnType<typeof createInterface> {
-    const rl = createInterface({
+  private createReadline(): ReturnType<typeof createPromisesInterface> {
+    const rl = createPromisesInterface({
       input: process.stdin,
       output: process.stdout,
       terminal: true,
@@ -151,7 +186,7 @@ export class InteractivePrompt {
       this.rl.prompt();
     };
     this.rl.on("line", this.taskLineHandler);
-    this.rl.setPrompt("Guide> ");
+    this.rl.setPrompt(GUIDE_PROMPT);
     this.rl.prompt();
   }
 
@@ -162,5 +197,14 @@ export class InteractivePrompt {
 
     this.rl.off("line", this.taskLineHandler);
     this.taskLineHandler = undefined;
+  }
+
+  private isGuidanceInputActive(): boolean {
+    return this.activeTask !== undefined && this.guidanceHandler !== undefined;
+  }
+
+  private redrawGuidePrompt(line: string, cursor: number): void {
+    process.stdout.write(`${GUIDE_PROMPT}${line}`);
+    cursorTo(process.stdout, GUIDE_PROMPT.length + cursor);
   }
 }

@@ -629,7 +629,11 @@ function createAgent(
           () => options.interactivePrompt?.pauseInput(),
         )
       : askUserApproval,
-    new ConsoleReporter(),
+    new ConsoleReporter((text) =>
+      options.interactivePrompt
+        ? options.interactivePrompt.writeAboveInput(text)
+        : process.stdout.write(text),
+    ),
     new SessionCompactor(
       sessionStore,
       eventThreshold,
