@@ -7,6 +7,7 @@ import type { AgentBudget } from "./agent/budget.js";
 import { CANCELLED_TEXT } from "./agent/cancellation.js";
 import { ContextBuilder } from "./agent/context.js";
 import { SessionCompactor } from "./agent/compaction.js";
+import { AgentGuidanceController } from "./agent/guidance.js";
 import {
   SessionManager,
   type ManagedSession,
@@ -646,8 +647,9 @@ async function runTask(
   agent: AgentLoop,
   task: string,
   signal?: AbortSignal,
+  guidance?: AgentGuidanceController,
 ): Promise<string> {
-  return agent.run(task, signal);
+  return agent.run(task, signal, undefined, guidance);
 }
 
 async function runSingleTask(agent: AgentLoop, task: string): Promise<void> {
@@ -791,14 +793,21 @@ async function runInteractiveSession(
         continue;
       }
 
-      const controller = prompt.beginTask();
+      const guidance = new AgentGuidanceController();
+      const controller = prompt.beginTask((text) => guidance.submit(text));
       let result: string | undefined;
 
       try {
-        result = await runTask(runtime.agent, trimmed, controller.signal);
+        result = await runTask(
+          runtime.agent,
+          trimmed,
+          controller.signal,
+          guidance,
+        );
       } catch (error: unknown) {
         console.error(`Task failed: ${errorMessage(error)}`);
       } finally {
+        guidance.reset();
         prompt.endTask(controller);
       }
 

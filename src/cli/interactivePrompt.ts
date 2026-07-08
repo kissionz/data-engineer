@@ -4,6 +4,8 @@ export class InteractivePrompt {
   private rl: ReturnType<typeof createInterface>;
   private terminationPending = false;
   private activeTask?: AbortController;
+  private guidanceHandler?: (text: string) => void;
+  private taskLineHandler?: (line: string) => void;
   private inputSuspended = false;
 
   constructor() {
@@ -18,6 +20,7 @@ export class InteractivePrompt {
     if (this.inputSuspended) {
       this.rl = this.createReadline();
       this.inputSuspended = false;
+      this.attachTaskLineHandler();
       return;
     }
 
@@ -29,13 +32,18 @@ export class InteractivePrompt {
       return;
     }
 
+    this.detachTaskLineHandler();
     this.rl.close();
     this.inputSuspended = true;
   }
 
-  beginTask(): AbortController {
+  beginTask(onGuidance?: (text: string) => void): AbortController {
     const controller = new AbortController();
     this.activeTask = controller;
+    if (onGuidance) {
+      this.guidanceHandler = onGuidance;
+      this.attachTaskLineHandler();
+    }
     return controller;
   }
 
@@ -43,6 +51,9 @@ export class InteractivePrompt {
     if (this.activeTask === controller) {
       this.activeTask = undefined;
     }
+    this.guidanceHandler = undefined;
+    this.detachTaskLineHandler();
+    this.rl.setPrompt("");
     this.resumeInput();
   }
 
@@ -111,5 +122,45 @@ export class InteractivePrompt {
     });
 
     return rl;
+  }
+
+  private attachTaskLineHandler(): void {
+    if (!this.activeTask || !this.guidanceHandler || this.taskLineHandler) {
+      return;
+    }
+
+    this.taskLineHandler = (line) => {
+      const trimmed = line.trim();
+
+      if (!this.activeTask) {
+        return;
+      }
+
+      if (!trimmed) {
+        this.rl.prompt();
+        return;
+      }
+
+      if (trimmed === "/cancel") {
+        this.activeTask.abort();
+        return;
+      }
+
+      this.guidanceHandler?.(trimmed);
+      this.rl.write("Guidance queued.\n");
+      this.rl.prompt();
+    };
+    this.rl.on("line", this.taskLineHandler);
+    this.rl.setPrompt("Guide> ");
+    this.rl.prompt();
+  }
+
+  private detachTaskLineHandler(): void {
+    if (!this.taskLineHandler) {
+      return;
+    }
+
+    this.rl.off("line", this.taskLineHandler);
+    this.taskLineHandler = undefined;
   }
 }

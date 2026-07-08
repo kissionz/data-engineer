@@ -14,23 +14,13 @@ import type { ToolExecutionResult } from "../tools/base.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { ContextBuilder } from "./context.js";
 import type { SessionCompactor } from "./compaction.js";
-import {
-  AgentBudgetTracker,
-  type AgentBudget,
-  type BudgetExhaustion,
-} from "./budget.js";
+import { AgentBudgetTracker, type AgentBudget, type BudgetExhaustion } from "./budget.js";
 import type { AgentReporter } from "./reporter.js";
 import { silentReporter } from "./reporter.js";
 import type { SessionStore } from "./session.js";
-import type {
-  SessionStatus,
-  ToolCall,
-} from "./types.js";
-import {
-  CANCELLED_TEXT,
-  isCancellationError,
-  throwIfCancelled,
-} from "./cancellation.js";
+import { appendGuidanceMessages, refreshContextAfterGuidance, type AgentGuidance } from "./guidance.js";
+import type { SessionStatus, ToolCall } from "./types.js";
+import { CANCELLED_TEXT, isCancellationError, throwIfCancelled } from "./cancellation.js";
 import {
   buildToolCallIndex,
   estimateTokens,
@@ -73,6 +63,7 @@ export class AgentLoop {
     userTask: string,
     signal?: AbortSignal,
     sharedBudget?: AgentBudgetTracker,
+    guidance?: AgentGuidance,
   ): Promise<string> {
     const budget =
       sharedBudget ??
@@ -83,17 +74,13 @@ export class AgentLoop {
     const localTurnLimit = Math.min(this.maxTurns, budget.limits.maxTurns);
     let localTurns = 0;
     const accountingNamespace = randomUUID();
-    const explicitSubagentRequest =
-      explicitlyRequestsSubagent(userTask);
+    const explicitSubagentRequest = explicitlyRequestsSubagent(userTask);
     const callerSignal = signal;
     const wallTimeSignal = AbortSignal.timeout(
       Math.ceil(
         Math.max(
           1,
-          Math.min(
-            budget.limits.maxWallTimeMs - budget.usage.wallTimeMs,
-            2_147_483_647,
-          ),
+          Math.min(budget.limits.maxWallTimeMs - budget.usage.wallTimeMs, 2_147_483_647),
         ),
       ),
     );
@@ -125,13 +112,11 @@ export class AgentLoop {
         this.sessionStartEmitted = true;
       }
       await this.recoverInterruptedToolCalls();
-      await this.session.append({
-        type: "user_message",
-        text: userTask,
-      });
+      await this.session.append({ type: "user_message", text: userTask });
 
       for (let turn = 0; ; turn += 1) {
         throwIfCancelled(signal);
+        await appendGuidanceMessages(this.session, guidance);
         if (localTurns >= localTurnLimit) {
           return this.finishForBudget({
             code: "turn_budget_reached",
@@ -147,10 +132,7 @@ export class AgentLoop {
         localTurns += 1;
         let events = await this.session.load();
 
-        if (
-          this.tools.has("GitDiff") &&
-          needsGitDiffReview(events)
-        ) {
+        if (this.tools.has("GitDiff") && needsGitDiffReview(events)) {
           const reviewBudget = budget.beginToolCall();
           if (!reviewBudget.ok) {
             return this.finishForBudget(reviewBudget.exhaustion);
@@ -163,12 +145,7 @@ export class AgentLoop {
 
         const modelContextWindow = this.model.capabilities?.contextWindow;
         const compactionTokenThreshold = modelContextWindow
-          ? Math.max(
-              1_000,
-              Math.floor(
-                modelContextWindow * this.compactionContextWindowRatio,
-              ),
-            )
+          ? Math.max(1_000, Math.floor(modelContextWindow * this.compactionContextWindowRatio))
           : undefined;
         if (
           await this.compactor?.compactIfNeeded({
@@ -179,8 +156,7 @@ export class AgentLoop {
                 "PreCompact",
                 {
                   eventCount: eventsToCompact.length,
-                  estimatedTokens:
-                    estimateTokens(eventsToCompact),
+                  estimatedTokens: estimateTokens(eventsToCompact),
                 },
                 signal,
               );
@@ -195,17 +171,10 @@ export class AgentLoop {
         const toolSchemas =
           this.model.capabilities?.supportsToolUse === false
             ? []
-            : this.tools
-                .schemas()
-                .filter(
-                  (schema) =>
-                    explicitSubagentRequest ||
-                    schema.name !== "EphemeralTask",
-                );
-        let estimatedInputTokens = estimateTokens({
-          messages,
-          tools: toolSchemas,
-        });
+            : this.tools.schemas().filter(
+                (schema) => explicitSubagentRequest || schema.name !== "EphemeralTask",
+              );
+        let estimatedInputTokens = estimateTokens({ messages, tools: toolSchemas });
         const inputUsage = budget.usage.inputTokens;
         if (
           inputUsage + estimatedInputTokens >
@@ -231,7 +200,31 @@ export class AgentLoop {
           this.model.capabilities?.supportsStreaming !== false;
 
         while (!response) {
+          const guided = await refreshContextAfterGuidance(
+            guidance,
+            this.session,
+            this.context,
+            toolSchemas,
+          );
+          if (guided) {
+            ({ events, messages, estimatedInputTokens } = guided);
+            if (
+              inputUsage + estimatedInputTokens >
+              budget.limits.maxInputTokens
+            ) {
+              return this.finishForBudget({
+                code: "input_token_budget_reached",
+                message: "Stopped: token budget reached.",
+                limit: budget.limits.maxInputTokens,
+                used: inputUsage + estimatedInputTokens,
+              });
+            }
+          }
           await this.session.append({ type: "model_request_started" });
+          const requestSignal =
+            guidance && !guidance.signal.aborted
+              ? AbortSignal.any([signal, guidance.signal])
+              : signal;
           try {
             const remainingOutputTokens =
               budget.limits.maxOutputTokens -
@@ -249,16 +242,52 @@ export class AgentLoop {
               onTextDelta: supportsStreaming
                 ? (delta) => {
                     receivedText = true;
+                    bufferedText += delta;
                     if (deferStreaming) {
-                      bufferedText += delta;
+                      return;
                     } else {
                       this.reporter.onTextDelta(delta);
                     }
                   }
                 : undefined,
-              signal,
+              signal: requestSignal,
             });
           } catch (error: unknown) {
+            if (
+              guidance?.signal.aborted &&
+              isCancellationError(error, requestSignal)
+            ) {
+              if (bufferedText) {
+                await this.session.append({
+                  type: "assistant_partial",
+                  text: bufferedText,
+                });
+              }
+              const guided = await refreshContextAfterGuidance(
+                guidance,
+                this.session,
+                this.context,
+                toolSchemas,
+              );
+              receivedText = false;
+              bufferedText = "";
+              if (!guided) {
+                continue;
+              }
+              ({ events, messages, estimatedInputTokens } = guided);
+              if (
+                inputUsage + estimatedInputTokens >
+                budget.limits.maxInputTokens
+              ) {
+                return this.finishForBudget({
+                  code: "input_token_budget_reached",
+                  message: "Stopped: token budget reached.",
+                  limit: budget.limits.maxInputTokens,
+                  used: inputUsage + estimatedInputTokens,
+                });
+              }
+              continue;
+            }
             if (
               isContextWindowExceededError(error) &&
               !receivedText &&

@@ -10,6 +10,7 @@ import {
 import { CANCELLED_TEXT } from "../src/agent/cancellation.js";
 import { SessionCompactor } from "../src/agent/compaction.js";
 import { ContextBuilder } from "../src/agent/context.js";
+import { AgentGuidanceController } from "../src/agent/guidance.js";
 import type { AgentReporter, ToolStatus } from "../src/agent/reporter.js";
 import { SessionStore } from "../src/agent/session.js";
 import type {
@@ -595,6 +596,50 @@ class AbortableModel implements ModelClient {
 
       options.signal?.addEventListener("abort", abort, { once: true });
     });
+  }
+}
+
+class GuidanceInterruptModel implements ModelClient {
+  calls = 0;
+  sawGuidance = false;
+  started!: Promise<void>;
+  private markStarted!: () => void;
+
+  constructor() {
+    this.started = new Promise((resolve) => {
+      this.markStarted = resolve;
+    });
+  }
+
+  async complete(options: {
+    messages: AgentMessage[];
+    onTextDelta?: (delta: string) => void;
+    signal?: AbortSignal;
+  }): Promise<AgentResponse> {
+    this.calls += 1;
+
+    if (this.calls === 1) {
+      options.onTextDelta?.("partial answer");
+      this.markStarted();
+      return new Promise((_resolve, reject) => {
+        const abort = () =>
+          reject(new DOMException("The operation was aborted.", "AbortError"));
+
+        if (options.signal?.aborted) {
+          abort();
+          return;
+        }
+
+        options.signal?.addEventListener("abort", abort, { once: true });
+      });
+    }
+
+    this.sawGuidance = options.messages.some(
+      (message) =>
+        message.role === "user" &&
+        message.content.includes("please steer differently"),
+    );
+    return { finalText: "guided done", stopReason: "end_turn" };
   }
 }
 
@@ -1940,6 +1985,39 @@ describe("AgentLoop", () => {
     expect(await readFile(sessionPath, "utf8")).toContain(
       '"type":"session_cancelled"',
     );
+  });
+
+  it("accepts guidance while a model request is in flight and continues", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-loop-"));
+    const sessionPath = path.join(root, ".harness", "sessions", "test.jsonl");
+    const model = new GuidanceInterruptModel();
+    const guidance = new AgentGuidanceController();
+    const loop = new AgentLoop(
+      model,
+      new ToolRegistry(),
+      new PermissionGate(defaultPolicy()),
+      new ContextBuilder(root),
+      new SessionStore(sessionPath),
+    );
+
+    const running = loop.run(
+      "start the work",
+      undefined,
+      undefined,
+      guidance,
+    );
+    await model.started;
+    guidance.submit("please steer differently");
+
+    await expect(running).resolves.toBe("guided done");
+    expect(model.calls).toBe(2);
+    expect(model.sawGuidance).toBe(true);
+
+    const sessionText = await readFile(sessionPath, "utf8");
+    expect(sessionText).toContain('"type":"assistant_partial"');
+    expect(sessionText).toContain("partial answer");
+    expect(sessionText).toContain("please steer differently");
+    expect(sessionText).not.toContain('"type":"session_cancelled"');
   });
 
   it("records model failures without converting them to final answers", async () => {
