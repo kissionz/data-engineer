@@ -604,6 +604,15 @@ function createAgent(
       ? null
       : options.compaction?.eventThreshold;
 
+  const reporter = new ConsoleReporter((text) =>
+    options.interactivePrompt
+      ? options.interactivePrompt.writeAboveInput(text)
+      : process.stdout.write(text),
+  );
+  options.interactivePrompt?.setToggleDetailsHandler(() =>
+    reporter.toggleToolDetails(),
+  );
+
   const agent = new AgentLoop(
     model,
     tools,
@@ -629,11 +638,7 @@ function createAgent(
           () => options.interactivePrompt?.pauseInput(),
         )
       : askUserApproval,
-    new ConsoleReporter((text) =>
-      options.interactivePrompt
-        ? options.interactivePrompt.writeAboveInput(text)
-        : process.stdout.write(text),
-    ),
+    reporter,
     new SessionCompactor(
       sessionStore,
       eventThreshold,
@@ -694,6 +699,7 @@ async function runInteractiveSession(
   console.log(
     "Commands: /new, /resume <id>, /session, /sessions, /inspect [id], /exit",
   );
+  console.log("During a run: /tools toggles tool details, /cancel stops.");
 
   try {
     while (true) {
@@ -797,6 +803,7 @@ async function runInteractiveSession(
         continue;
       }
 
+      prompt.showSubmittedUserMessage(trimmed);
       const guidance = new AgentGuidanceController();
       const controller = prompt.beginTask((text) => guidance.submit(text));
       let result: string | undefined;

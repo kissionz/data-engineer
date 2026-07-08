@@ -1,12 +1,15 @@
 import {
   clearLine,
   cursorTo,
+  emitKeypressEvents,
   moveCursor,
 } from "node:readline";
 import { createInterface as createPromisesInterface } from "node:readline/promises";
 
-const GUIDE_PROMPT = "Guide> ";
+const INPUT_PROMPT = "› ";
 const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const USER_HIGHLIGHT = "\u001b[48;5;236m";
+const RESET = "\u001b[0m";
 
 export class InteractivePrompt {
   private rl: ReturnType<typeof createPromisesInterface>;
@@ -14,6 +17,8 @@ export class InteractivePrompt {
   private activeTask?: AbortController;
   private guidanceHandler?: (text: string) => void;
   private taskLineHandler?: (line: string) => void;
+  private keypressHandler?: (str: string, key: KeypressKey) => void;
+  private toggleDetailsHandler?: () => void;
   private inputSuspended = false;
   private outputLineOpen = false;
   private outputColumn = 0;
@@ -22,8 +27,22 @@ export class InteractivePrompt {
     this.rl = this.createReadline();
   }
 
-  async question(prompt: string): Promise<string> {
-    return this.rl.question(`${prompt}> `);
+  async question(_prompt: string): Promise<string> {
+    return this.rl.question(INPUT_PROMPT);
+  }
+
+  setToggleDetailsHandler(handler: () => void): void {
+    this.toggleDetailsHandler = handler;
+  }
+
+  showSubmittedUserMessage(text: string): void {
+    if (process.stdout.isTTY) {
+      moveCursor(process.stdout, 0, -1);
+      cursorTo(process.stdout, 0);
+      clearLine(process.stdout, 0);
+    }
+    process.stdout.write(`${USER_HIGHLIGHT} ${text} ${RESET}\n`);
+    this.resetOutputPosition();
   }
 
   writeAboveInput(text: string): void {
@@ -127,6 +146,7 @@ export class InteractivePrompt {
   }
 
   close(): void {
+    this.detachKeypressHandler();
     this.rl.close();
   }
 
@@ -136,6 +156,7 @@ export class InteractivePrompt {
       output: process.stdout,
       terminal: true,
     });
+    this.attachKeypressHandler(rl);
 
     rl.on("SIGINT", () => {
       if (this.activeTask && !this.activeTask.signal.aborted) {
@@ -183,12 +204,19 @@ export class InteractivePrompt {
         return;
       }
 
+      if (trimmed === "/tools") {
+        this.toggleDetailsHandler?.();
+        this.rl.prompt();
+        return;
+      }
+
+      this.showSubmittedUserMessage(trimmed);
       this.guidanceHandler?.(trimmed);
-      this.rl.write("Guidance queued.\n");
+      this.rl.write("↳ queued\n");
       this.rl.prompt();
     };
     this.rl.on("line", this.taskLineHandler);
-    this.rl.setPrompt(GUIDE_PROMPT);
+    this.rl.setPrompt(INPUT_PROMPT);
     this.rl.prompt();
   }
 
@@ -201,13 +229,39 @@ export class InteractivePrompt {
     this.taskLineHandler = undefined;
   }
 
+  private attachKeypressHandler(
+    rl: ReturnType<typeof createPromisesInterface>,
+  ): void {
+    if (!isNodeReadStream(process.stdin)) {
+      return;
+    }
+
+    this.detachKeypressHandler();
+    emitKeypressEvents(process.stdin, rl);
+    this.keypressHandler = (_str, key) => {
+      if (key.ctrl && key.name === "o") {
+        this.toggleDetailsHandler?.();
+      }
+    };
+    process.stdin.on("keypress", this.keypressHandler);
+  }
+
+  private detachKeypressHandler(): void {
+    if (!this.keypressHandler || !isNodeReadStream(process.stdin)) {
+      return;
+    }
+
+    process.stdin.off("keypress", this.keypressHandler);
+    this.keypressHandler = undefined;
+  }
+
   private isGuidanceInputActive(): boolean {
     return this.activeTask !== undefined && this.guidanceHandler !== undefined;
   }
 
   private redrawGuidePrompt(line: string, cursor: number): void {
-    process.stdout.write(`${GUIDE_PROMPT}${line}`);
-    cursorTo(process.stdout, GUIDE_PROMPT.length + cursor);
+    process.stdout.write(`${INPUT_PROMPT}${line}`);
+    cursorTo(process.stdout, INPUT_PROMPT.length + cursor);
   }
 
   private resetOutputPosition(): void {
@@ -245,6 +299,17 @@ export class InteractivePrompt {
     this.outputColumn = column;
     this.outputLineOpen = lineOpen;
   }
+}
+
+interface KeypressKey {
+  name?: string;
+  ctrl?: boolean;
+}
+
+function isNodeReadStream(
+  input: NodeJS.ReadableStream,
+): input is NodeJS.ReadStream {
+  return "isTTY" in input;
 }
 
 function stripAnsi(text: string): string {
