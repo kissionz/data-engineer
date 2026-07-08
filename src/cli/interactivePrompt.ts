@@ -1,10 +1,12 @@
 import {
   clearLine,
   cursorTo,
+  moveCursor,
 } from "node:readline";
 import { createInterface as createPromisesInterface } from "node:readline/promises";
 
 const GUIDE_PROMPT = "Guide> ";
+const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
 
 export class InteractivePrompt {
   private rl: ReturnType<typeof createPromisesInterface>;
@@ -13,6 +15,8 @@ export class InteractivePrompt {
   private guidanceHandler?: (text: string) => void;
   private taskLineHandler?: (line: string) => void;
   private inputSuspended = false;
+  private outputLineOpen = false;
+  private outputColumn = 0;
 
   constructor() {
     this.rl = this.createReadline();
@@ -33,9 +37,15 @@ export class InteractivePrompt {
 
     cursorTo(process.stdout, 0);
     clearLine(process.stdout, 0);
-    process.stdout.write(text);
+    if (this.outputLineOpen) {
+      moveCursor(process.stdout, 0, -1);
+      cursorTo(process.stdout, this.outputColumn);
+    }
 
-    if (text.length > 0 && !text.endsWith("\n")) {
+    process.stdout.write(text);
+    this.trackOutputPosition(text);
+
+    if (this.outputLineOpen) {
       process.stdout.write("\n");
     }
     this.redrawGuidePrompt(currentLine, currentCursor);
@@ -65,6 +75,7 @@ export class InteractivePrompt {
   beginTask(onGuidance?: (text: string) => void): AbortController {
     const controller = new AbortController();
     this.activeTask = controller;
+    this.resetOutputPosition();
     if (onGuidance) {
       this.guidanceHandler = onGuidance;
       this.attachTaskLineHandler();
@@ -79,6 +90,7 @@ export class InteractivePrompt {
     this.guidanceHandler = undefined;
     this.detachTaskLineHandler();
     this.rl.setPrompt("");
+    this.resetOutputPosition();
     this.resumeInput();
   }
 
@@ -197,4 +209,69 @@ export class InteractivePrompt {
     process.stdout.write(`${GUIDE_PROMPT}${line}`);
     cursorTo(process.stdout, GUIDE_PROMPT.length + cursor);
   }
+
+  private resetOutputPosition(): void {
+    this.outputLineOpen = false;
+    this.outputColumn = 0;
+  }
+
+  private trackOutputPosition(text: string): void {
+    const columns = Math.max(1, process.stdout.columns ?? 80);
+    let column = this.outputLineOpen ? this.outputColumn : 0;
+    let lineOpen = this.outputLineOpen;
+
+    for (const rawChar of stripAnsi(text)) {
+      if (rawChar === "\r") {
+        column = 0;
+        lineOpen = true;
+        continue;
+      }
+
+      if (rawChar === "\n") {
+        column = 0;
+        lineOpen = false;
+        continue;
+      }
+
+      const width = charWidth(rawChar);
+      if (width === 0) {
+        continue;
+      }
+
+      column = (column + width) % columns;
+      lineOpen = true;
+    }
+
+    this.outputColumn = column;
+    this.outputLineOpen = lineOpen;
+  }
+}
+
+function stripAnsi(text: string): string {
+  return text.replace(ANSI_PATTERN, "");
+}
+
+function charWidth(char: string): number {
+  const codePoint = char.codePointAt(0) ?? 0;
+  if (codePoint === 0 || codePoint < 32 || (codePoint >= 0x7f && codePoint < 0xa0)) {
+    return 0;
+  }
+
+  return isWideCodePoint(codePoint) ? 2 : 1;
+}
+
+function isWideCodePoint(codePoint: number): boolean {
+  return (
+    codePoint >= 0x1100 &&
+    (codePoint <= 0x115f ||
+      codePoint === 0x2329 ||
+      codePoint === 0x232a ||
+      (codePoint >= 0x2e80 && codePoint <= 0xa4cf && codePoint !== 0x303f) ||
+      (codePoint >= 0xac00 && codePoint <= 0xd7a3) ||
+      (codePoint >= 0xf900 && codePoint <= 0xfaff) ||
+      (codePoint >= 0xfe10 && codePoint <= 0xfe19) ||
+      (codePoint >= 0xfe30 && codePoint <= 0xfe6f) ||
+      (codePoint >= 0xff00 && codePoint <= 0xff60) ||
+      (codePoint >= 0xffe0 && codePoint <= 0xffe6))
+  );
 }
