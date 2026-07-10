@@ -58,7 +58,8 @@ describe("ContextBuilder", () => {
     const serialized = JSON.stringify(messages);
 
     expect(serialized).toContain("Runtime-authorized external folders");
-    expect(messages.some((message) => message.content.includes(outside)))
+    const escapedOutside = JSON.stringify(outside).slice(1, -1);
+    expect(messages.some((message) => message.content.includes(escapedOutside)))
       .toBe(true);
     expect(serialized).toContain("ListDirectory");
     expect(serialized).toContain("Glob");

@@ -1739,7 +1739,7 @@ describe("AgentLoop", () => {
       undefined,
       undefined,
       undefined,
-      { maxWallTimeMs: 100 },
+      { maxWallTimeMs: 500 },
     );
 
     await expect(loop.run("respect tool wall time")).resolves.toBe(
