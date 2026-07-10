@@ -34,6 +34,10 @@ export class ToolRegistry {
     return this.tools.has(name);
   }
 
+  list(): readonly Tool[] {
+    return [...this.tools.values()];
+  }
+
   schemas(): Array<Record<string, unknown>> {
     return [...this.tools.values()].map((tool) => ({
       name: tool.name,

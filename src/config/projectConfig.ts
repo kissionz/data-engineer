@@ -1,4 +1,4 @@
-import { constants } from "node:fs";
+import { constants, existsSync } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
@@ -38,7 +38,9 @@ export interface ProjectRestrictionTarget {
 }
 
 export function defaultProjectConfigPath(workspaceRoot: string): string {
-  return path.join(workspaceRoot, ".harness.json");
+  const current = path.join(workspaceRoot, ".montane.json");
+  const legacy = path.join(workspaceRoot, ".harness.json");
+  return existsSync(current) || !existsSync(legacy) ? current : legacy;
 }
 
 export async function loadProjectConfig(

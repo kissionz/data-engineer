@@ -87,6 +87,41 @@ export function buildSessionSummary(events: SessionEvent[]): string {
     )
     .slice(-10)
     .map((event) => `${event.name}: ${compact(event.content, 240)}`);
+  const latestTodos = [...events]
+    .reverse()
+    .find(
+      (event) =>
+        event.type === "tool_result" &&
+        event.name === "TodoWrite" &&
+        Array.isArray(event.data?.todos),
+    );
+  const todos = latestTodos?.type === "tool_result"
+    ? formatTodos(latestTodos.data?.todos)
+    : [];
+  const approvals = events
+    .filter(
+      (event): event is Extract<SessionEvent, { type: "approval_resolved" }> =>
+        event.type === "approval_resolved",
+    )
+    .slice(-20)
+    .map((event) => `${event.scope}: ${event.decision}`);
+  const verification = events
+    .filter(
+      (event): event is Extract<SessionEvent, { type: "tool_result" }> =>
+        event.type === "tool_result" &&
+        ["Bash", "GitDiff", "GitStatus"].includes(event.name),
+    )
+    .slice(-10)
+    .map(
+      (event) =>
+        `${event.name} (${event.ok ? "passed" : "failed"}): ${compact(event.content, 300)}`,
+    );
+  const pendingCalls = pendingToolCalls(events).map(
+    (call) => `${call.name} (${call.id})`,
+  );
+  const nextAction = todos.find((todo) => todo.startsWith("in_progress:")) ??
+    todos.find((todo) => todo.startsWith("pending:")) ??
+    "Re-read the latest user request and verify repository state.";
 
   return [
     "# Session Summary",
@@ -96,6 +131,12 @@ export function buildSessionSummary(events: SessionEvent[]): string {
     "",
     "## Recent User Requests",
     formatList(userMessages.slice(-5).map((message) => compact(message, 500))),
+    "",
+    "## Active Constraints and Decisions",
+    formatList(userMessages.slice(-5).map((message) => compact(message, 500))),
+    "",
+    "## Todo State",
+    formatList(todos),
     "",
     "## Files Read",
     formatList(filesRead.slice(-100)),
@@ -109,9 +150,45 @@ export function buildSessionSummary(events: SessionEvent[]): string {
     "## Current Status",
     latestFinal ? compact(latestFinal.text, 1_000) : "[No final status recorded]",
     "",
+    "## Approval Decisions",
+    formatList(approvals),
+    "",
+    "## Verification Evidence",
+    formatList(verification),
+    "",
+    "## Pending Tool State",
+    formatList(pendingCalls),
+    "",
     "## Open Issues",
     formatList(openIssues),
+    "",
+    "## Next Action",
+    nextAction,
   ].join("\n");
+}
+
+function formatTodos(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    return typeof record.content === "string" &&
+      ["pending", "in_progress", "done"].includes(String(record.status))
+      ? [`${String(record.status)}: ${compact(record.content, 300)}`]
+      : [];
+  });
+}
+
+function pendingToolCalls(events: SessionEvent[]): ToolCall[] {
+  const pending = new Map<string, ToolCall>();
+  for (const event of events) {
+    if (event.type === "assistant_tool_calls") {
+      for (const call of event.toolCalls) pending.set(call.id, call);
+    } else if (event.type === "tool_result") {
+      pending.delete(event.toolCallId);
+    }
+  }
+  return [...pending.values()];
 }
 
 function uniqueToolValues(

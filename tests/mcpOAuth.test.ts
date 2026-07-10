@@ -29,8 +29,15 @@ class MemoryOAuthStateStore implements OAuthStateStore {
 }
 
 describe("MCP OAuth provider", () => {
-  it("completes a state-bound loopback authorization and persists tokens", async () => {
-    const port = await availablePort();
+  it("completes a state-bound loopback authorization and persists tokens", async ({
+    skip,
+  }) => {
+    const port = await availablePort().catch((error: unknown) => {
+      if (hasCode(error, "EPERM") || hasCode(error, "EACCES")) {
+        skip("Loopback listeners are disabled in this execution sandbox.");
+      }
+      throw error;
+    });
     const store = new MemoryOAuthStateStore();
     let launched: URL | undefined;
     const provider = new McpOAuthProvider({
@@ -181,4 +188,12 @@ async function availablePort(): Promise<number> {
   }
   await new Promise<void>((resolve) => server.close(() => resolve()));
   return address.port;
+}
+
+function hasCode(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === code
+  );
 }

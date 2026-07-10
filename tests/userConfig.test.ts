@@ -23,7 +23,7 @@ describe("user config", () => {
       mcpServers: [],
     });
     expect(defaultUserConfigPath(root)).toBe(
-      path.join(root, ".harness", "config.json"),
+      path.join(root, ".montane", "config.json"),
     );
   });
 

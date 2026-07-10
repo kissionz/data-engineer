@@ -2,9 +2,10 @@
 
 **Montane Code（山境）** 是一个基于 TypeScript / Node.js 的安全优先本地编程 Agent。它可以在指定工作区中读取和修改代码、执行受控命令、调用模型与 MCP 服务，并把会话、工具调用和恢复信息持久化到本地。
 
-> 0.2 版本完成了从 `harness-ts` 到 Montane Code 的品牌迁移。主命令为
+> 0.3 版本完成了从 `harness-ts` 到 Montane Code 的品牌迁移。主命令为
 > `montane`；旧的 `harness` 命令、`HARNESS_*` 环境变量和 `.harness`
-> 数据目录在 0.x 系列继续兼容，现有会话和配置无需迁移。
+> 数据目录在 0.x 系列继续兼容。新安装默认使用 `.montane`，可通过
+> `montane migrate --all` 显式迁移旧的用户与工作区数据。
 
 ## 环境要求
 
@@ -127,6 +128,15 @@ npm start
 /session
 /sessions
 /inspect [session-id|latest]
+/model
+/permissions
+/cost
+/context
+/compact
+/memory <query>
+/mcp
+/diff
+/undo
 /exit
 ```
 
@@ -135,7 +145,22 @@ npm start
 - `/session`：显示当前会话 ID、状态和模型。
 - `/sessions`：列出已有会话。
 - `/inspect [session-id|latest]`：查看会话元数据；省略参数时查看当前会话。
+- `/compact`：立即生成结构化会话摘要，保留目标、约束、Todo、验证证据与未完成调用。
+- `/undo`：安全撤销 Montane 最近一次文件 Write/Edit；文件已被外部修改时拒绝覆盖。
 - `/exit`：退出交互模式；`/quit` 也可用。
+
+### 自动化与 SDK
+
+非交互任务支持稳定的机器输出和 stdin 输入：
+
+```bash
+printf 'Inspect README.md' | montane --provider mock --input-format text --output-format json
+printf '{"type":"user","text":"Inspect README.md"}\n' | montane --provider mock --input-format stream-json --output-format stream-json
+montane --task "Inspect README.md" --quiet
+```
+
+`--permission-mode` 支持 `default`、`plan`、`accept-edits` 和 `deny`。npm 包根入口
+导出 Agent loop、模型适配器、权限、会话、工具与机器输出类型，可作为 TypeScript SDK 使用。
 
 每次启动默认创建独立会话。也可以在启动时恢复会话：
 
@@ -165,12 +190,12 @@ npm start -- --resume 20260627-120000-a1b2c3
 
 ### 用户配置文件
 
-非敏感配置默认放在 `~/.harness/config.json`。可从 `config.example.json` 开始配置；模型、Base URL、Budget、Memory 和可信 MCP server 都在这里定义。
+非敏感配置默认放在 `~/.montane/config.json`。可从 `config.example.json` 开始配置；模型、Base URL、Budget、Memory 和可信 MCP server 都在这里定义。
 
 ```json
 {
   "version": 1,
-  "envFile": "/absolute/path/to/trusted/harness.env",
+  "envFile": "/absolute/path/to/trusted/montane.env",
   "model": {
     "provider": "openai",
     "name": "gpt-4.1",
@@ -204,8 +229,10 @@ npm start -- --resume 20260627-120000-a1b2c3
 
 ```bash
 OPENAI_API_KEY=sk-your-real-key
-OPENAI_MODEL=gpt-4.1
+MONTANE_MODEL=gpt-4.1
 OPENAI_BASE_URL=https://api.openai.com/v1
+ANTHROPIC_API_KEY=
+GEMINI_API_KEY=
 ```
 
 显式加载方式：
@@ -218,13 +245,15 @@ env-file 只负责把值加入进程环境，不会把它变成普通 JSON 配�
 
 ### 配置优先级
 
-对可覆盖的运行参数，CLI 参数优先于环境变量，环境变量优先于 `~/.harness/config.json`。未设置时使用程序默认值。
+对可覆盖的运行参数，CLI 参数优先于环境变量，环境变量优先于 `~/.montane/config.json`。未设置时使用程序默认值。
 
 常用环境变量：
 
 - `OPENAI_API_KEY`：默认 OpenAI provider 必需。
-- `OPENAI_PROVIDER`：`openai`，或仅供显式本地循环测试的 `mock`。
-- `OPENAI_MODEL`：覆盖模型名，默认 `gpt-4.1`。
+- `MONTANE_PROVIDER`：`openai`、`anthropic`、`gemini`，或仅供本地循环测试的 `mock`；`OPENAI_PROVIDER` 是兼容别名。
+- `MONTANE_MODEL`：覆盖模型名；`OPENAI_MODEL` 作为兼容回退。
+- `ANTHROPIC_API_KEY`、`GEMINI_API_KEY`：对应原生 provider 的凭据。
+- `ANTHROPIC_BASE_URL`、`GEMINI_BASE_URL`：对应原生 provider 的可选端点覆盖。
 - `OPENAI_BASE_URL`：OpenAI-compatible API Base URL，默认 `https://api.openai.com/v1`。
 - `MONTANE_CONFIG`：可信用户配置文件路径。
 - `MONTANE_BASH_SANDBOX`：`auto`、`docker`、`host` 或 `off`。
@@ -253,7 +282,7 @@ npm run dev -- --base-url https://your-gateway.example/v1 --task "Inspect README
 
 ### 项目级限制配置
 
-工作区根目录可以提交 `.harness.json`，但它被视为不可信仓库输入，只能收紧运行限制：
+工作区根目录可以提交 `.montane.json`，但它被视为不可信仓库输入，只能收紧运行限制：
 
 ```json
 {
@@ -322,7 +351,7 @@ Windows PowerShell 不使用 Bash 的行尾 `\` 续行语法。请把上面的�
 npm run eval
 ```
 
-默认报告写入 `.harness/eval-report.json`，同时以单行 JSON 输出到 stdout。报告只包含
+默认报告写入 `.montane/eval-report.json`，同时以单行 JSON 输出到 stdout。报告只包含
 case ID、pass/fail、耗时，以及固定的 `mock` provider/model/config 标识；在 Git
 仓库中会附带当前 commit SHA。报告不会包含任务文本、模型消息、工具输入输出或生产
 Telemetry。
@@ -331,14 +360,24 @@ Telemetry。
 
 ```bash
 npm run eval -- --suite evals/deterministic.v1.json \
-  --report .harness/eval-current.json \
-  --baseline .harness/eval-baseline.json
+  --report .montane/eval-current.json \
+  --baseline .montane/eval-baseline.json
 ```
 
 任一 case 失败，或基线中通过的 case 在当前报告中不再通过时，命令以非零状态退出。
 套件、基线和报告路径不允许使用绝对路径或逃逸工作区；输入必须是普通文件且不超过
 1 MiB，symlink、打开期间替换和未知 schema 字段会被拒绝。使用
 `--no-git-sha` 可省略 commit SHA。
+
+需要验证真实 provider、真实工具调用和最终文件结果时，运行显式的端到端评测：
+
+```bash
+npm run eval:live -- --provider anthropic --model claude-sonnet-4-6
+```
+
+它会在临时工作区运行正式 `dist/index.js`，分别检查 Read 和 Edit 的行为契约，默认写入
+`.montane/eval-live.json`。真实评测会产生模型费用，因此不纳入普通 `npm run check`，
+只在具备对应 API Key 的受控发布或定期评测环境中运行。
 
 ## 长期记忆（Memory）
 
@@ -350,9 +389,9 @@ npm run eval -- --suite evals/deterministic.v1.json \
 
 工具不能自行选择存储路径。Memory 会拒绝疑似 secret、credential 和 prompt-injection 文本；带标签的冲突会交给用户处理，不会静默覆盖。
 
-用户记忆保存在 `~/.harness/memory/user.jsonl`。项目记忆也保存在用户目录中，并按工作区路径的 hash 分区，因此不可信仓库不能直接修改长期记忆。注入模型上下文的内容最多为十条，只包含相关、有效且未过期的记录，并按不可信的历史上下文处理。
+用户记忆保存在 `~/.montane/memory/user.jsonl`。项目记忆也保存在用户目录中，并按工作区路径的 hash 分区，因此不可信仓库不能直接修改长期记忆。注入模型上下文的内容最多为十条，只包含相关、有效且未过期的记录，并按不可信的历史上下文处理。
 
-Memory 与会话恢复不是同一机制：Memory 用于跨会话保留明确的信息；`.harness/sessions/` 中的事件日志用于当前任务的连续性和恢复。
+Memory 与会话恢复不是同一机制：Memory 用于跨会话保留明确的信息；`.montane/sessions/` 中的事件日志用于当前任务的连续性和恢复。
 
 文件工具默认只能访问当前工作区。若 `ListDirectory`、`Read`、`Write`、`Edit`、`Grep`、`Glob`
 或 Bash 的 `cwd` 明确指向工作区外路径，Montane Code 会先展示目标路径并请求用户批准。
@@ -363,7 +402,7 @@ Memory 与会话恢复不是同一机制：Memory 用于跨会话保留明确的
 允许该文件夹、以及跨会话始终递归允许该文件夹。读授权只覆盖
 `Read`/`Grep`/`Glob`，写授权覆盖读写文件工具；父文件夹授权自动覆盖其子文件夹，
 但不会匹配名称前缀相同的兄弟目录。持久化授权保存在
-`~/.harness/permissions/folder-grants.json`，不受仓库控制。Bash 仍使用原有的
+`~/.montane/permissions/folder-grants.json`，不受仓库控制。Bash 仍使用原有的
 逐调用或会话审批，不继承文件工具的文件夹授权。
 
 已授权的外部根目录会作为运行时能力元数据提供给模型，因此模型可以先用
@@ -534,7 +573,7 @@ montane mcp add custom --yes \
 ```
 
 Windows PowerShell 使用相同命令，不需要手工定位
-`%USERPROFILE%\.harness\config.json`。需要使用其他配置文件时，将
+`%USERPROFILE%\.montane\config.json`。需要使用其他配置文件时，将
 `--config C:\absolute\path\config.json` 放在 `add`、`list` 或 `remove`
 命令之后。
 
@@ -582,7 +621,7 @@ Windows PowerShell 使用相同命令，不需要手工定位
 
 首次连接时 Montane Code 会输出授权 URL，并在 `browser` 模式下尝试打开浏览器。
 OAuth 使用 loopback callback、PKCE 和 MCP SDK 的授权服务器发现流程；授权状态按
-server ID 与 URL 隔离保存在 `~/.harness/mcp-oauth/`，文件权限限制为当前用户可读写。
+server ID 与 URL 隔离保存在 `~/.montane/mcp-oauth/`，文件权限限制为当前用户可读写。
 无图形环境可将 `redirectMode` 改为 `manual`，在其他浏览器中打开输出的 URL；
 浏览器最终仍须能回调当前主机的 `127.0.0.1:<callbackPort>`。
 
@@ -713,7 +752,7 @@ npm start -- --sandbox-network bridge
 
 ## 会话、日志与上下文压缩
 
-会话日志、元数据和任务 Todo 分别持久化在 `.harness/sessions/` 和 `.harness/todos/`。新事件包含 session ID、唯一 event ID、单调递增 sequence 和 timestamp；元数据记录模型及 lifecycle state。
+会话日志、元数据和任务 Todo 分别持久化在 `.montane/sessions/` 和 `.montane/todos/`。新事件包含 session ID、唯一 event ID、单调递增 sequence 和 timestamp；元数据记录模型及 lifecycle state。
 
 已完成的 `toolCallId` 可从日志恢复。已经开始但被中断的执行会标记为 `unknown_outcome`，不会自动再次运行。该状态用于任务恢复，不等同于长期 Memory。
 
@@ -725,7 +764,7 @@ npm start -- --sandbox-network bridge
 
 ## 遥测（Telemetry）
 
-Telemetry 默认写入 `~/.harness/telemetry/telemetry.jsonl`，可通过用户配置
+Telemetry 默认写入 `~/.montane/telemetry/telemetry.jsonl`，可通过用户配置
 `"telemetry": { "enabled": false }` 完全关闭。它与 session event log 分离，
 只记录任务、模型请求、工具、权限、压缩和取消的结构化指标，例如耗时、token
 数量、工具名、结果码和 request ID。
@@ -737,7 +776,7 @@ fail-open，不会导致 Agent 任务失败。
 
 ## 项目技能（Project Skills）
 
-项目 Skill 位于 `.harness/skills/<name>/SKILL.md`，可以随仓库提交。文件使用 YAML frontmatter：
+项目 Skill 位于 `.montane/skills/<name>/SKILL.md`，可以随仓库提交。文件使用 YAML frontmatter：
 
 ```md
 ---
@@ -758,7 +797,7 @@ description: 测试并验证 TypeScript 改动。
 
 `Task` 工具可以把内置 `code-reviewer` 或项目定义的只读角色作为独立 AgentLoop 运行。每个子代理都有单独、隐藏的 append-only audit log。内置 `code-reviewer` 始终可用，作为没有项目配置时的 fallback。
 
-项目角色放在工作区 `.harness/agents/*.yaml`。文件名必须与 `name` 一致，配置采用严格 schema，不接受未知字段：
+项目角色放在工作区 `.montane/agents/*.yaml`。文件名必须与 `name` 一致，配置采用严格 schema，不接受未知字段：
 
 ```yaml
 name: test-analyst
@@ -792,7 +831,7 @@ SkillLoad
 
 只有当前用户消息以 `/subagent <子任务>` 开头时，主模型才可以在一次 `EphemeralTask` 调用中内联声明临时只读角色，例如 `/subagent 审查测试覆盖`。采用结构化前缀是为了避免把自然语言讨论、文档引用或粘贴的提示词误当授权；普通的“是否需要 Subagent”“请解释如何创建 Subagent”均不会授权。若后续句子明确写出 `cancel`、`never mind`、“算了”或“取消”，本次授权撤销。未授权的 run 不会向模型暴露 `EphemeralTask` schema，即使模型自行构造同名调用，执行层也会再次拒绝。运行时会使用与 YAML 角色相同的严格 schema、工具白名单、轮数和结果上限校验。
 
-临时角色不进入全局 Registry，不写入 `.harness/agents/`，也不需要重启。生命周期固定为：创建独立 AgentLoop → 串行执行一个 subtask → 返回有界结果 → 在 `finally` 中释放 telemetry observer 和运行时引用。为保留恢复与审计能力，父会话中的工具调用记录和隐藏的 append-only child session 日志仍会保留，但不会作为可复用角色重新加载。每条用户任务最多运行 8 个临时角色，并继续共享父任务 Budget。
+临时角色不进入全局 Registry，不写入 `.montane/agents/`，也不需要重启。生命周期固定为：创建独立 AgentLoop → 串行执行一个 subtask → 返回有界结果 → 在 `finally` 中释放 telemetry observer 和运行时引用。为保留恢复与审计能力，父会话中的工具调用记录和隐藏的 append-only child session 日志仍会保留，但不会作为可复用角色重新加载。每条用户任务最多运行 8 个临时角色，并继续共享父任务 Budget。
 
 当前不提供自动持久化、自动更新或自动覆盖 Subagent YAML 的能力。若需要长期角色，仍由人工维护项目 YAML。
 

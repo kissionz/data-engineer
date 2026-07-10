@@ -1,8 +1,24 @@
 {
   "name": "montane-code",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "A security-first local coding agent runtime for durable, verifiable software work.",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kissionz/data-engineer.git"
+  },
+  "homepage": "https://github.com/kissionz/data-engineer#readme",
+  "bugs": {
+    "url": "https://github.com/kissionz/data-engineer/issues"
+  },
   "type": "module",
+  "types": "./dist/sdk.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/sdk.d.ts",
+      "import": "./dist/sdk.js"
+    }
+  },
   "bin": {
     "montane": "./dist/index.js",
     "montane-worktrees": "./dist/cli/worktreeReport.js",
@@ -15,7 +31,8 @@
     "dist",
     "README.md",
     ".env.example",
-    "config.example.json"
+    "config.example.json",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=22.12.0"
@@ -35,6 +52,7 @@
     "lint": "eslint src tests eslint.config.js vitest.config.ts --max-warnings=0",
     "check": "npm run lint && npm run build && npm test -- --run && npm run test:coverage",
     "eval": "npm run build --silent && node dist/eval/cli.js",
+    "eval:live": "npm run build --silent && node dist/eval/liveCli.js",
     "pack:check": "npm pack --dry-run"
   },
   "keywords": [

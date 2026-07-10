@@ -6,7 +6,7 @@ import type { SkillLoader } from "../skills/loader.js";
 import type { AgentMessage, SessionEvent } from "./types.js";
 
 export const DEFAULT_SYSTEM_PROMPT = `
-You are a coding agent running inside a controlled harness.
+You are a coding agent running inside a controlled Montane runtime.
 
 Rules:
 - You may inspect and modify files only through tools.

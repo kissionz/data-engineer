@@ -13,6 +13,7 @@ import path from "node:path";
 import { parse } from "yaml";
 import { z } from "zod";
 import type { Workspace } from "../runtime/workspace.js";
+import { workspaceStateRoot } from "../runtime/productPaths.js";
 import {
   CODE_REVIEWER_SPEC,
   READONLY_SUBAGENT_TOOLS,
@@ -70,7 +71,7 @@ export class SubagentSpecLoader {
     this.workspaceRoot = path.resolve(
       typeof workspace === "string" ? workspace : workspace.root,
     );
-    this.agentsRoot = path.join(this.workspaceRoot, ".harness", "agents");
+    this.agentsRoot = path.join(workspaceStateRoot(this.workspaceRoot), "agents");
   }
 
   loadAll(): SubagentSpec[] {

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import path from "node:path";
+import { userStateRoot } from "../runtime/productPaths.js";
 
 export interface MemoryPaths {
   project: string;
@@ -14,7 +15,7 @@ export function memoryPathsForWorkspace(
   const identity = createHash("sha256")
     .update(normalizeWorkspaceIdentity(workspaceRoot))
     .digest("hex");
-  const memoryRoot = path.join(userHome, ".harness", "memory");
+  const memoryRoot = path.join(userStateRoot(userHome), "memory");
 
   return {
     project: path.join(memoryRoot, "projects", `${identity}.jsonl`),

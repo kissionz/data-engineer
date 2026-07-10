@@ -26,11 +26,11 @@ const budget: AgentBudget = {
 };
 
 describe("project config", () => {
-  it("uses the workspace-root .harness.json and safe absent defaults", async () => {
+  it("uses the workspace-root .montane.json and safe absent defaults", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-project-"));
 
     expect(defaultProjectConfigPath(root)).toBe(
-      path.join(root, ".harness.json"),
+      path.join(root, ".montane.json"),
     );
     await expect(loadProjectConfig(root)).resolves.toEqual({ version: 1 });
   });

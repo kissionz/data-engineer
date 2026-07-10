@@ -39,7 +39,7 @@ jobs:
       - run: mkdir -p "${RUNNER_TEMP}/montane-consumer"
       - run: npm init -y
         working-directory: ${{ runner.temp }}/montane-consumer
-      - run: npm install "${RUNNER_TEMP}/montane-code-0.2.0.tgz" --ignore-scripts
+      - run: npm install "${RUNNER_TEMP}/montane-code-0.3.0.tgz" --ignore-scripts
         working-directory: ${{ runner.temp }}/montane-consumer
       - run: ./node_modules/.bin/montane --version
         working-directory: ${{ runner.temp }}/montane-consumer

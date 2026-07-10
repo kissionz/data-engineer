@@ -3,6 +3,7 @@
 import { Command } from "commander";
 import { homedir } from "node:os";
 import path from "node:path";
+import { userStateRoot } from "../runtime/productPaths.js";
 import { readTelemetryReport } from "../telemetry/report.js";
 
 const program = new Command()
@@ -11,7 +12,7 @@ const program = new Command()
   .option(
     "--file <path>",
     "Telemetry JSONL file",
-    path.join(homedir(), ".harness", "telemetry", "telemetry.jsonl"),
+    path.join(userStateRoot(homedir()), "telemetry", "telemetry.jsonl"),
   )
   .option(
     "--max-bytes <bytes>",

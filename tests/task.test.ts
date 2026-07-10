@@ -77,14 +77,14 @@ describe("TaskTool", () => {
     expect(model.firstSystemMessage).toContain("strict read-only code reviewer");
 
     const sessionFiles = await readdir(
-      path.join(root, ".harness", "sessions"),
+      path.join(root, ".montane", "sessions"),
     );
     const childFile = sessionFiles.find((name) =>
       name.startsWith(".sub-parent-session-code-reviewer-"),
     );
     expect(childFile).toBeDefined();
     expect(
-      await readFile(path.join(root, ".harness", "sessions", childFile as string), "utf8"),
+      await readFile(path.join(root, ".montane", "sessions", childFile as string), "utf8"),
     ).toContain('"type":"assistant_final"');
   });
 

@@ -42,4 +42,15 @@ describe("Workspace", () => {
       workspace.assertRealPathWithin(path.join(root, "metadata", "config")),
     ).rejects.toThrow("Sensitive real path denied");
   });
+
+  it("keeps private Montane runtime state outside model-facing file tools", () => {
+    const workspace = new Workspace("/tmp/project");
+
+    expect(() => workspace.resolve(".montane/checkpoints/session.json"))
+      .toThrow("Sensitive path denied");
+    expect(() => workspace.resolve(".harness/sessions/legacy.jsonl"))
+      .toThrow("Sensitive path denied");
+    expect(workspace.resolve(".montane/skills/review/SKILL.md"))
+      .toBe("/tmp/project/.montane/skills/review/SKILL.md");
+  });
 });

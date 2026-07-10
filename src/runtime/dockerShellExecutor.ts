@@ -6,6 +6,7 @@ import type { CommandExecutor, CommandResult } from "./commandExecutor.js";
 import type { SandboxConfig } from "./sandboxConfig.js";
 import type { ShellExecutor, ShellOptions } from "./shellExecutor.js";
 import type { Workspace } from "./workspace.js";
+import { workspaceStateRoot } from "./productPaths.js";
 
 interface MountPlan {
   packageRoots: string[];
@@ -84,17 +85,13 @@ export class DockerShellExecutor implements ShellExecutor {
     script: string,
   ): Promise<string[]> {
     const plan = await this.buildMountPlan();
-    const stateRoot = path.join(
-      this.workspace.root,
-      ".harness",
-      "sandbox",
-      this.sessionId,
-    );
+    const workspaceState = workspaceStateRoot(this.workspace.root);
+    const stateRoot = path.join(workspaceState, "sandbox", this.sessionId);
     const depsRoot = path.join(stateRoot, "deps");
     const emptyMask = path.join(stateRoot, "empty-mask");
-    const harnessRoot = path.join(this.workspace.root, ".harness");
+    const stateDirectory = workspaceState;
     const sandboxRoot = path.dirname(stateRoot);
-    await ensureDirectory(harnessRoot);
+    await ensureDirectory(stateDirectory);
     await ensureDirectory(sandboxRoot);
     await ensureDirectory(stateRoot);
     await ensureDirectory(depsRoot);
@@ -123,6 +120,8 @@ export class DockerShellExecutor implements ShellExecutor {
       String(this.config.cpus),
       "--mount",
       mount("bind", this.workspace.root, "/workspace"),
+      "--mount",
+      "type=tmpfs,dst=/workspace/.montane,tmpfs-size=1048576",
       "--mount",
       "type=tmpfs,dst=/workspace/.harness,tmpfs-size=1048576",
       "--tmpfs",
@@ -284,7 +283,7 @@ async function scanWorkspace(
 
     if (
       !entry.isDirectory() ||
-      [".git", ".harness", "node_modules", "dist"].includes(entry.name)
+      [".git", ".montane", ".harness", "node_modules", "dist"].includes(entry.name)
     ) {
       continue;
     }

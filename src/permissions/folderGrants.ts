@@ -12,6 +12,7 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { acquireFileLock } from "../runtime/fileLock.js";
 import { isPathWithin } from "../runtime/pathSafety.js";
+import { userStateRoot } from "../runtime/productPaths.js";
 
 export type FolderGrantAccess = "read" | "read_write";
 export type FolderGrantScope = "session" | "always";
@@ -37,12 +38,7 @@ interface FolderGrantFile {
 const MAX_GRANT_FILE_BYTES = 1024 * 1024;
 
 export function defaultFolderGrantPath(userHome = homedir()): string {
-  return path.join(
-    userHome,
-    ".harness",
-    "permissions",
-    "folder-grants.json",
-  );
+  return path.join(userStateRoot(userHome), "permissions", "folder-grants.json");
 }
 
 export class FolderGrantManager {

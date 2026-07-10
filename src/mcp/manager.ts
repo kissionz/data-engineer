@@ -2,6 +2,7 @@ import type { LookupOptions } from "node:dns";
 import { isIP, type LookupFunction } from "node:net";
 import { homedir } from "node:os";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { PRODUCT_NAME, PRODUCT_VERSION } from "../runtime/productPaths.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import {
   StdioClientTransport,
@@ -80,8 +81,8 @@ export class McpManager {
 
 async function connectServer(config: McpServerConfig): Promise<McpConnection> {
   const client = new Client({
-    name: "montane-code",
-    version: "0.2.0",
+    name: PRODUCT_NAME,
+    version: PRODUCT_VERSION,
   });
   const httpSetup =
     config.transport.type === "http"

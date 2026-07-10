@@ -190,7 +190,7 @@ function isSensitiveEntry(parent: string, name: string): boolean {
     return true;
   }
   return (
-    path.basename(parent).toLowerCase() === ".harness" &&
+    [".montane", ".harness"].includes(path.basename(parent).toLowerCase()) &&
     normalized === "permissions"
   );
 }

@@ -7,6 +7,8 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "outDir": "dist",
+    "declaration": true,
+    "declarationMap": true,
     "rootDir": "src",
     "types": ["node"]
   },

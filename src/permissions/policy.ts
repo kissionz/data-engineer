@@ -35,6 +35,7 @@ export function defaultPolicy(): PermissionPolicy {
       ".env",
       "node_modules",
       ".harness/permissions",
+      ".montane/permissions",
     ],
     deniedCommandFragments: [
       "rm -rf /",

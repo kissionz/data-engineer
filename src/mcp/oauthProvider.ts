@@ -25,6 +25,7 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/sdk/shared/auth.js";
 import { acquireFileLock } from "../runtime/fileLock.js";
+import { PRODUCT_NAME, userStateRoot } from "../runtime/productPaths.js";
 
 const MAX_OAUTH_STATE_BYTES = 256 * 1024;
 const CALLBACK_PATH = "/oauth/callback";
@@ -70,7 +71,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
       `http://127.0.0.1:${options.callbackPort}${CALLBACK_PATH}`,
     );
     this.clientMetadata = {
-      client_name: "montane-code",
+      client_name: PRODUCT_NAME,
       redirect_uris: [this.redirectUrl.toString()],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],
@@ -395,8 +396,7 @@ function defaultOAuthStatePath(serverId: string, serverUrl: URL): string {
     .digest("hex")
     .slice(0, 16);
   return path.join(
-    homedir(),
-    ".harness",
+    userStateRoot(homedir()),
     "mcp-oauth",
     `${serverId}-${digest}.json`,
   );

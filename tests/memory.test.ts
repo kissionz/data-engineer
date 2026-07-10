@@ -93,12 +93,12 @@ describe("long-term memory", () => {
 
     expect(paths).toEqual(again);
     expect(path.dirname(paths.project)).toBe(
-      path.join("/home/user", ".harness", "memory", "projects"),
+      path.join("/home/user", ".montane", "memory", "projects"),
     );
     expect(path.basename(paths.project)).toMatch(/^[a-f0-9]{64}\.jsonl$/);
     expect(paths.project).not.toContain("/workspace/project");
     expect(paths.user).toBe(
-      path.join("/home/user", ".harness", "memory", "user.jsonl"),
+      path.join("/home/user", ".montane", "memory", "user.jsonl"),
     );
   });
 

@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto";
 import path from "node:path";
+import { workspaceStateRoot } from "../runtime/productPaths.js";
 import { CANCELLED_TEXT } from "../agent/cancellation.js";
 import { AgentLoop } from "../agent/loop.js";
 import { ContextBuilder } from "../agent/context.js";
@@ -169,8 +170,7 @@ export class TaskTool implements Tool {
       spec.name,
     );
     const childSessionPath = path.join(
-      this.workspace.root,
-      ".harness",
+      workspaceStateRoot(this.workspace.root),
       "sessions",
       `${childSessionId}.jsonl`,
     );
@@ -364,6 +364,7 @@ function readonlyPolicy(
       ".env",
       "node_modules",
       ".harness/permissions",
+      ".montane/permissions",
     ],
     deniedCommandFragments: [],
   };

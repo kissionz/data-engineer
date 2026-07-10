@@ -11,6 +11,10 @@ import {
 } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
+import {
+  stateDirectoryLabel,
+  workspaceStateRoot,
+} from "../runtime/productPaths.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { SessionStore } from "./session.js";
 import type { SessionEvent, SessionStatus } from "./types.js";
@@ -61,7 +65,8 @@ export class SessionManager {
   private readonly workspaceRoot: string;
   private readonly model: string;
   private readonly parentSessionId?: string;
-  private readonly harnessDir: string;
+  private readonly stateDir: string;
+  private readonly stateLabel: string;
   private readonly sessionsDir: string;
   private readonly todosDir: string;
   private readonly locksDir: string;
@@ -72,9 +77,10 @@ export class SessionManager {
     this.workspaceRoot = path.resolve(workspaceRoot);
     this.model = options.model ?? "unknown";
     this.parentSessionId = options.parentSessionId;
-    this.harnessDir = path.join(this.workspaceRoot, ".harness");
-    this.sessionsDir = path.join(this.harnessDir, "sessions");
-    this.todosDir = path.join(this.harnessDir, "todos");
+    this.stateDir = workspaceStateRoot(this.workspaceRoot);
+    this.stateLabel = stateDirectoryLabel(this.stateDir);
+    this.sessionsDir = path.join(this.stateDir, "sessions");
+    this.todosDir = path.join(this.stateDir, "todos");
     this.locksDir = path.join(this.sessionsDir, ".locks");
     this.currentFile = path.join(this.sessionsDir, "current");
   }
@@ -313,16 +319,16 @@ export class SessionManager {
   }
 
   private async ensureStorageDirectories(): Promise<void> {
-    await ensureDirectory(this.harnessDir, ".harness");
-    await ensureDirectory(this.sessionsDir, ".harness/sessions");
-    await ensureDirectory(this.todosDir, ".harness/todos");
-    await ensureDirectory(this.locksDir, ".harness/sessions/.locks");
+    await ensureDirectory(this.stateDir, this.stateLabel);
+    await ensureDirectory(this.sessionsDir, `${this.stateLabel}/sessions`);
+    await ensureDirectory(this.todosDir, `${this.stateLabel}/todos`);
+    await ensureDirectory(this.locksDir, `${this.stateLabel}/sessions/.locks`);
   }
 
   private async setCurrent(id: string): Promise<void> {
     const safeId = validateRealSessionId(id);
-    await ensureDirectory(this.harnessDir, ".harness");
-    await ensureDirectory(this.sessionsDir, ".harness/sessions");
+    await ensureDirectory(this.stateDir, this.stateLabel);
+    await ensureDirectory(this.sessionsDir, `${this.stateLabel}/sessions`);
     await assertRegularFile(this.currentFile, "Current session pointer", true);
 
     const temporaryPath = path.join(
@@ -459,7 +465,7 @@ export class SessionManager {
       return active;
     }
 
-    await ensureDirectory(this.locksDir, ".harness/sessions/.locks");
+    await ensureDirectory(this.locksDir, `${this.stateLabel}/sessions/.locks`);
     const lockPath = path.join(this.locksDir, `${session.id}.lock`);
 
     for (let attempt = 0; attempt < 2; attempt += 1) {

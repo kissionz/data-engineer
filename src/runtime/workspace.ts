@@ -173,10 +173,18 @@ function assertNoSensitiveRelativePath(
         segment === ".env" ||
         segment.startsWith(".env."),
     ) ||
-    segments.some(
-      (segment, index) =>
-        segment === ".harness" && segments[index + 1] === "permissions",
-    )
+    segments.some((segment, index) => {
+      if (![".montane", ".harness"].includes(segment)) return false;
+      return [
+        "checkpoints",
+        "mcp-oauth",
+        "memory",
+        "permissions",
+        "sessions",
+        "telemetry",
+        "todos",
+      ].includes(segments[index + 1] ?? "");
+    })
   ) {
     throw new Error(message);
   }

@@ -7,7 +7,7 @@ import type { AgentBudget } from "./agent/budget.js";
 import { CANCELLED_TEXT } from "./agent/cancellation.js";
 import { ContextBuilder } from "./agent/context.js";
 import { SessionCompactor } from "./agent/compaction.js";
-import { AgentGuidanceController } from "./agent/guidance.js";
+import type { AgentReporter } from "./agent/reporter.js";
 import {
   SessionManager,
   type ManagedSession,
@@ -21,6 +21,8 @@ import type {
 } from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
 import { MockModel } from "./model/mock.js";
+import { AnthropicModel } from "./model/anthropic.js";
+import { GeminiModel } from "./model/gemini.js";
 import {
   OpenAIModel,
   parseApiStyle,
@@ -34,7 +36,10 @@ import {
   askUserApproval,
   restoreInputAfterApproval,
 } from "./permissions/approval.js";
-import { defaultPolicy } from "./permissions/policy.js";
+import {
+  defaultPolicy,
+  type PermissionPolicy,
+} from "./permissions/policy.js";
 import { PermissionGate } from "./permissions/gate.js";
 import {
   defaultFolderGrantPath,
@@ -59,6 +64,8 @@ import {
 import type { ShellExecutor } from "./runtime/shellExecutor.js";
 import { Workspace } from "./runtime/workspace.js";
 import { WorktreeManager, type WorktreeInfo } from "./runtime/worktree.js";
+import { userStateRoot } from "./runtime/productPaths.js";
+import { CheckpointManager } from "./runtime/checkpoints.js";
 import { SkillLoader } from "./skills/loader.js";
 import { BashTool } from "./tools/bash.js";
 import { EditTool } from "./tools/edit.js";
@@ -79,7 +86,20 @@ import {
 import { WriteTool } from "./tools/write.js";
 import { HttpFetchTool } from "./tools/httpFetch.js";
 import { ConsoleReporter } from "./ui/consoleReporter.js";
+import {
+  MachineReporter,
+  type OutputFormat,
+} from "./ui/machineReporter.js";
 import { InteractivePrompt } from "./cli/interactivePrompt.js";
+import {
+  runInteractiveSession,
+  type InteractiveRuntime,
+} from "./cli/interactiveSession.js";
+import {
+  parseInputFormat,
+  parseOutputFormat,
+  resolveTaskInput,
+} from "./cli/io.js";
 import {
   numericConfig,
   optionOrEnv,
@@ -91,6 +111,7 @@ import {
 } from "./cli/program.js";
 import { runMcpConfigCommand } from "./cli/mcpConfig.js";
 import { runDoctorCommand } from "./cli/doctor.js";
+import { runMigrationCommand } from "./cli/migrate.js";
 import {
   defaultUserConfigPath,
   loadUserConfig,
@@ -113,6 +134,9 @@ let activeMcpManager: McpManager | undefined;
 let activeTelemetrySink: TelemetrySink = noopTelemetrySink;
 
 async function main(): Promise<void> {
+  if (await runMigrationCommand()) {
+    return;
+  }
   if (await runDoctorCommand()) {
     return;
   }
@@ -120,6 +144,12 @@ async function main(): Promise<void> {
     return;
   }
   const { program, options: opts } = parseCli();
+  const outputFormat = parseOutputFormat(opts.outputFormat);
+  const inputFormat = parseInputFormat(opts.inputFormat);
+  const task = await resolveTaskInput(opts.task, inputFormat);
+  if (outputFormat !== "text" && !task) {
+    throw new Error("Machine-readable output requires a non-interactive task.");
+  }
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
   const userConfigPath =
     opts.config ??
@@ -138,8 +168,9 @@ async function main(): Promise<void> {
     program,
     "provider",
     opts.provider,
-    "OPENAI_PROVIDER",
+    "MONTANE_PROVIDER",
     userConfig.model?.provider,
+    "OPENAI_PROVIDER",
   );
   assertModelConfiguration(provider);
 
@@ -157,8 +188,8 @@ async function main(): Promise<void> {
       executor,
       sourceWorkspaceRoot,
     ).create(opts.worktreeBase);
-    console.log(`Worktree: ${worktree.path}`);
-    console.log(`Branch: ${worktree.branch}`);
+    writeDiagnostic(`Worktree: ${worktree.path}`, outputFormat, opts.quiet);
+    writeDiagnostic(`Branch: ${worktree.branch}`, outputFormat, opts.quiet);
   }
 
   const workspaceRoot = worktree?.path ?? sourceWorkspaceRoot;
@@ -181,7 +212,7 @@ async function main(): Promise<void> {
     userConfig.telemetry?.enabled === false
       ? noopTelemetrySink
       : createTelemetrySink(
-          path.join(homedir(), ".harness", "telemetry"),
+          path.join(userStateRoot(homedir()), "telemetry"),
         );
   activeTelemetrySink = telemetry;
   const sandboxConfig = parseSandboxConfig({
@@ -248,15 +279,15 @@ async function main(): Promise<void> {
       program,
       "model",
       opts.model,
-      "OPENAI_MODEL",
+      "MONTANE_MODEL",
       userConfig.model?.name,
-    ) ?? "gpt-4.1";
+      "OPENAI_MODEL",
+    ) ?? defaultModelName(provider);
   const sessionManager = new SessionManager(workspaceRoot, { model: modelName });
-  const baseUrl = resolveOptionalStringOption(
+  const baseUrl = resolveProviderBaseUrl(
     program,
-    "baseUrl",
+    provider,
     opts.baseUrl,
-    "OPENAI_BASE_URL",
     userConfig.model?.baseUrl,
   );
   const apiStyleRaw = resolveOptionalStringOption(
@@ -350,7 +381,7 @@ async function main(): Promise<void> {
     projectConfig,
     { pricing: userConfig.model?.pricing },
   );
-  console.log(
+  writeDiagnostic(
     [
       `Runtime: provider=${provider}`,
       `model=${modelName}`,
@@ -365,9 +396,11 @@ async function main(): Promise<void> {
       `projectConfig=${projectConfig.budget || projectConfig.memory ? "restricted" : "none"}`,
       `budget(turns=${budget.maxTurns}, tools=${budget.maxToolCalls}, wallMs=${budget.maxWallTimeMs})`,
     ].join(" "),
+    outputFormat,
+    opts.quiet,
   );
   const initialSession = await sessionManager.start(opts.resume);
-  const interactivePrompt = opts.task ? undefined : new InteractivePrompt();
+  const interactivePrompt = task ? undefined : new InteractivePrompt();
   const createRuntime = (session: ManagedSession): SessionRuntime => {
     const created = createAgent({
       session,
@@ -391,19 +424,38 @@ async function main(): Promise<void> {
       httpFetch: userConfig.httpFetch,
       compaction: userConfig.compaction,
       folderGrants,
+      outputFormat,
+      quiet: opts.quiet,
+      permissionMode: opts.permissionMode,
     });
     return { session, ...created };
   };
   const runtime = createRuntime(initialSession);
 
-  if (opts.task || !interactivePrompt) {
-    if (!opts.task) {
+  if (task || !interactivePrompt) {
+    if (!task) {
       throw new Error("Task is required when interactive input is unavailable.");
     }
 
-    console.log(`Session: ${runtime.session.id}`);
+    writeDiagnostic(`Session: ${runtime.session.id}`, outputFormat, opts.quiet);
     try {
-      await runSingleTask(runtime.agent, opts.task);
+      const result = await runSingleTask(runtime.agent, task);
+      if (outputFormat === "text" && opts.quiet) {
+        process.stdout.write(`${result}\n`);
+      }
+      if (runtime.reporter instanceof MachineReporter) {
+        runtime.reporter.finish(
+          runtime.session.id,
+          result === CANCELLED_TEXT ? "cancelled" : "completed",
+          result,
+          await summarizeMachineUsage(runtime.sessionStore),
+        );
+      }
+    } catch (error: unknown) {
+      if (runtime.reporter instanceof MachineReporter) {
+        runtime.reporter.finish(runtime.session.id, "failed", errorMessage(error));
+      }
+      throw error;
     } finally {
       try {
         await runtime.telemetry.dispose();
@@ -411,7 +463,7 @@ async function main(): Promise<void> {
         await runtime.session.release();
       }
     }
-    printWorktreeReminder(worktree);
+    printWorktreeReminder(worktree, outputFormat, opts.quiet);
     return;
   }
 
@@ -421,14 +473,19 @@ async function main(): Promise<void> {
     sessionManager,
     createRuntime,
   );
-  printWorktreeReminder(worktree);
+  printWorktreeReminder(worktree, outputFormat, opts.quiet);
 }
 
-interface SessionRuntime {
+interface RuntimeReporter extends AgentReporter {
+  dispose(): void;
+  toggleToolDetails?(): void;
+}
+
+interface SessionRuntime extends InteractiveRuntime {
   session: ManagedSession;
   agent: AgentLoop;
   telemetry: SessionTelemetryObserver;
-  reporter: ConsoleReporter;
+  reporter: RuntimeReporter;
 }
 
 type ShellExecutorFactory = (
@@ -457,6 +514,9 @@ interface CreateAgentOptions {
   httpFetch?: HttpFetchConfig;
   compaction?: UserConfig["compaction"];
   folderGrants: FolderGrantManager;
+  outputFormat: OutputFormat;
+  quiet: boolean;
+  permissionMode: string;
 }
 
 async function createShellExecutorFactory(
@@ -507,7 +567,13 @@ function createAgent(
 ): {
   agent: AgentLoop;
   telemetry: SessionTelemetryObserver;
-  reporter: ConsoleReporter;
+  reporter: RuntimeReporter;
+  sessionStore: SessionStore;
+  compactor: SessionCompactor;
+  checkpoints: CheckpointManager;
+  tools: ToolRegistry;
+  modelName: string;
+  permissionMode: string;
 } {
   const tools = new ToolRegistry();
   const model = createModel(
@@ -533,6 +599,10 @@ function createAgent(
   );
   const hooks = new HookManager();
   const skillLoader = new SkillLoader(options.workspace);
+  const checkpoints = new CheckpointManager(
+    options.workspace,
+    options.session.id,
+  );
   hooks.register("BeforeToolUse", protectSensitiveWrites);
 
   tools.register(new ReadTool(options.workspace));
@@ -566,8 +636,8 @@ function createAgent(
       options.runtimeCapabilities.ripgrep,
     ),
   );
-  tools.register(new WriteTool(options.workspace));
-  tools.register(new EditTool(options.workspace));
+  tools.register(checkpoints.wrap(new WriteTool(options.workspace)));
+  tools.register(checkpoints.wrap(new EditTool(options.workspace)));
   if (options.shellExecutor) {
     tools.register(new BashTool(options.workspace, options.shellExecutor));
   }
@@ -614,9 +684,12 @@ function createAgent(
   tools.register(new EphemeralTaskTool(taskTool));
 
   const permissionPolicy = defaultPolicy();
+  applyPermissionMode(permissionPolicy, options.permissionMode);
   for (const tool of options.mcpTools) {
     if (tool.effect === "readonly") {
       permissionPolicy.allowedTools.add(tool.name);
+    } else if (["plan", "deny"].includes(options.permissionMode)) {
+      permissionPolicy.deniedTools.add(tool.name);
     }
   }
 
@@ -629,16 +702,30 @@ function createAgent(
       ? null
       : options.compaction?.eventThreshold;
 
-  const reporter = new ConsoleReporter((text) =>
-    options.interactivePrompt
-      ? options.interactivePrompt.writeAboveInput(text)
-      : process.stdout.write(text),
-    options.interactivePrompt !== undefined,
-  );
+  const reporter: RuntimeReporter =
+    options.outputFormat === "text"
+      ? new ConsoleReporter(
+          (text) => {
+            if (!options.quiet) {
+              if (options.interactivePrompt) {
+                options.interactivePrompt.writeAboveInput(text);
+              } else {
+                process.stdout.write(text);
+              }
+            }
+          },
+          options.interactivePrompt !== undefined,
+        )
+      : new MachineReporter(options.outputFormat);
   options.interactivePrompt?.setToggleDetailsHandler(() =>
-    reporter.toggleToolDetails(),
+    reporter.toggleToolDetails?.(),
   );
 
+  const compactor = new SessionCompactor(
+    sessionStore,
+    eventThreshold,
+    options.compaction?.fallbackTokenThreshold,
+  );
   const agent = new AgentLoop(
     model,
     tools,
@@ -663,31 +750,28 @@ function createAgent(
           () => options.interactivePrompt?.resumeInput(),
           () => options.interactivePrompt?.pauseInput(),
         )
-      : askUserApproval,
+      : async () => "reject",
     reporter,
-    new SessionCompactor(
-      sessionStore,
-      eventThreshold,
-      options.compaction?.fallbackTokenThreshold,
-    ),
+    compactor,
     hooks,
     (status) => options.session.updateStatus(status).then(() => undefined),
     options.budget,
     options.compaction?.contextWindowRatio,
   );
-  return { agent, telemetry, reporter };
+  return {
+    agent,
+    telemetry,
+    reporter,
+    sessionStore,
+    compactor,
+    checkpoints,
+    tools,
+    modelName: options.modelName,
+    permissionMode: options.permissionMode,
+  };
 }
 
-async function runTask(
-  agent: AgentLoop,
-  task: string,
-  signal?: AbortSignal,
-  guidance?: AgentGuidanceController,
-): Promise<string> {
-  return agent.run(task, signal, undefined, guidance);
-}
-
-async function runSingleTask(agent: AgentLoop, task: string): Promise<void> {
+async function runSingleTask(agent: AgentLoop, task: string): Promise<string> {
   const controller = new AbortController();
   let cancellationRequested = false;
   const handleInterrupt = () => {
@@ -704,168 +788,14 @@ async function runSingleTask(agent: AgentLoop, task: string): Promise<void> {
   process.on("SIGINT", handleInterrupt);
 
   try {
-    const result = await runTask(agent, task, controller.signal);
+    const result = await agent.run(task, controller.signal);
 
     if (result === CANCELLED_TEXT) {
       process.exitCode = 130;
     }
+    return result;
   } finally {
     process.off("SIGINT", handleInterrupt);
-  }
-}
-
-async function runInteractiveSession(
-  initialRuntime: SessionRuntime,
-  prompt: InteractivePrompt,
-  sessionManager: SessionManager,
-  createRuntime: (session: ManagedSession) => SessionRuntime,
-): Promise<void> {
-  let runtime = initialRuntime;
-  console.log(`Montane Code session started. Session: ${runtime.session.id}`);
-  console.log(
-    "Commands: /new, /resume <id>, /session, /sessions, /inspect [id], /exit",
-  );
-  console.log("During a run: /tools toggles tool details, /cancel stops.");
-
-  try {
-    while (true) {
-      const task = await prompt.question("You ");
-      const terminationDecision = prompt.handleTerminationAnswer(task);
-
-      if (terminationDecision === "exit") {
-        console.log("Bye.");
-        return;
-      }
-
-      if (terminationDecision === "continue") {
-        console.log("Continuing session.");
-        continue;
-      }
-
-      if (terminationDecision === "pending") {
-        console.log("Please type y to exit or n to continue.");
-        continue;
-      }
-
-      const trimmed = task.trim();
-
-      if (!trimmed) {
-        continue;
-      }
-
-      if (trimmed === "/exit" || trimmed === "/quit") {
-        console.log("Bye.");
-        return;
-      }
-
-      if (trimmed === "/new") {
-        try {
-          const nextRuntime = createRuntime(await sessionManager.create());
-          runtime.reporter.dispose();
-          await runtime.telemetry.dispose();
-          await runtime.session.release();
-          runtime = nextRuntime;
-          console.log(`New session: ${runtime.session.id}`);
-        } catch (error: unknown) {
-          console.error(`Unable to create session: ${errorMessage(error)}`);
-        }
-        continue;
-      }
-
-      if (trimmed === "/session") {
-        const metadata = await runtime.session.readMetadata();
-        console.log(
-          `Session: ${metadata.id}\nStatus: ${metadata.status}\nModel: ${metadata.model}`,
-        );
-        continue;
-      }
-
-      if (trimmed === "/sessions") {
-        const sessions = await sessionManager.list();
-        const summaries = await Promise.all(
-          sessions.map(async (id) => {
-            const metadata = await sessionManager.inspect(id);
-            return `${id}\t${metadata.status}\t${metadata.model}`;
-          }),
-        );
-        console.log(summaries.length > 0 ? summaries.join("\n") : "[No sessions]");
-        continue;
-      }
-
-      if (trimmed === "/inspect" || trimmed.startsWith("/inspect ")) {
-        const requestedId = trimmed.slice("/inspect".length).trim();
-
-        try {
-          const metadata =
-            !requestedId || requestedId === runtime.session.id
-              ? await runtime.session.readMetadata()
-              : await sessionManager.inspect(requestedId);
-          console.log(JSON.stringify(metadata, null, 2));
-        } catch (error: unknown) {
-          console.error(`Unable to inspect session: ${errorMessage(error)}`);
-        }
-        continue;
-      }
-
-      if (trimmed === "/resume") {
-        console.log("Usage: /resume <session-id|latest>");
-        continue;
-      }
-
-      if (trimmed.startsWith("/resume ")) {
-        const sessionId = trimmed.slice("/resume ".length).trim();
-        try {
-          const nextSession = await sessionManager.resume(sessionId);
-
-          if (nextSession.id !== runtime.session.id) {
-            const nextRuntime = createRuntime(nextSession);
-            runtime.reporter.dispose();
-            await runtime.telemetry.dispose();
-            await runtime.session.release();
-            runtime = nextRuntime;
-          }
-          console.log(`Resumed session: ${runtime.session.id}`);
-        } catch (error: unknown) {
-          console.error(`Unable to resume session: ${errorMessage(error)}`);
-        }
-        continue;
-      }
-
-      prompt.showSubmittedUserMessage(trimmed);
-      const guidance = new AgentGuidanceController();
-      const controller = prompt.beginTask((text) => guidance.submit(text));
-      let result: string | undefined;
-
-      try {
-        result = await runTask(
-          runtime.agent,
-          trimmed,
-          controller.signal,
-          guidance,
-        );
-      } catch (error: unknown) {
-        console.error(`Task failed: ${errorMessage(error)}`);
-      } finally {
-        guidance.reset();
-        runtime.reporter.dispose();
-        prompt.endTask(controller);
-      }
-
-      if (result === CANCELLED_TEXT) {
-        prompt.markTaskCancelled();
-      }
-    }
-  } finally {
-    try {
-      runtime.reporter.dispose();
-      await runtime.telemetry.dispose();
-    } finally {
-      try {
-        await runtime.session.release();
-      } finally {
-        prompt.close();
-      }
-    }
   }
 }
 
@@ -873,13 +803,88 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function printWorktreeReminder(worktree: WorktreeInfo | undefined): void {
+async function summarizeMachineUsage(
+  session: SessionStore,
+): Promise<{
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  estimatedCostUsd: number;
+}> {
+  const events = await session.load();
+  return events.reduce(
+    (total, event) => {
+      if (event.type !== "model_response_received" || !event.usage) return total;
+      total.inputTokens += event.usage.inputTokens;
+      total.outputTokens += event.usage.outputTokens;
+      total.cacheReadTokens += event.usage.cacheReadTokens ?? 0;
+      total.estimatedCostUsd += event.usage.estimatedCostUsd ?? 0;
+      return total;
+    },
+    {
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      estimatedCostUsd: 0,
+    },
+  );
+}
+
+function printWorktreeReminder(
+  worktree: WorktreeInfo | undefined,
+  outputFormat: OutputFormat,
+  quiet: boolean,
+): void {
   if (!worktree) {
     return;
   }
 
-  console.log(`Worktree retained: ${worktree.path}`);
-  console.log(`Review branch before merging: ${worktree.branch}`);
+  writeDiagnostic(`Worktree retained: ${worktree.path}`, outputFormat, quiet);
+  writeDiagnostic(
+    `Review branch before merging: ${worktree.branch}`,
+    outputFormat,
+    quiet,
+  );
+}
+
+function writeDiagnostic(
+  message: string,
+  outputFormat: OutputFormat,
+  quiet: boolean,
+): void {
+  if (quiet) {
+    return;
+  }
+  const stream = outputFormat === "text" ? process.stdout : process.stderr;
+  stream.write(`${message}\n`);
+}
+
+function applyPermissionMode(
+  policy: PermissionPolicy,
+  mode: string,
+): void {
+  if (!["default", "plan", "accept-edits", "deny"].includes(mode)) {
+    throw new Error(
+      "--permission-mode must be default, plan, accept-edits, or deny.",
+    );
+  }
+  if (mode === "accept-edits") {
+    policy.allowedTools.add("Edit");
+    policy.allowedTools.add("Write");
+    return;
+  }
+  if (mode === "plan" || mode === "deny") {
+    for (const name of [
+      "Write",
+      "Edit",
+      "Bash",
+      "MemoryWrite",
+      "MemoryDelete",
+    ]) {
+      policy.deniedTools.add(name);
+      policy.allowedTools.delete(name);
+    }
+  }
 }
 
 function createModel(
@@ -896,6 +901,26 @@ function createModel(
     return new MockModel();
   }
 
+  if (provider === "anthropic") {
+    return new AnthropicModel({
+      apiKey: process.env.ANTHROPIC_API_KEY as string,
+      model,
+      baseUrl,
+      pricing,
+      capabilities,
+    });
+  }
+
+  if (provider === "gemini") {
+    return new GeminiModel({
+      apiKey: process.env.GEMINI_API_KEY as string,
+      model,
+      baseUrl,
+      pricing,
+      capabilities,
+    });
+  }
+
   return new OpenAIModel({
     apiKey: process.env.OPENAI_API_KEY as string,
     model,
@@ -907,7 +932,7 @@ function createModel(
 }
 
 function assertModelConfiguration(provider: string): void {
-  if (provider !== "openai" && provider !== "mock") {
+  if (!["openai", "anthropic", "gemini", "mock"].includes(provider)) {
     throw new Error(`Unknown provider: ${provider}`);
   }
 
@@ -926,6 +951,34 @@ function assertModelConfiguration(provider: string): void {
       ].join("\n"),
     );
   }
+  if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
+    throw new Error("ANTHROPIC_API_KEY is required for Anthropic models.");
+  }
+  if (provider === "gemini" && !process.env.GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY is required for Gemini models.");
+  }
+}
+
+function defaultModelName(provider: string): string {
+  if (provider === "anthropic") return "claude-sonnet-4-6";
+  if (provider === "gemini") return "gemini-2.5-pro";
+  return "gpt-4.1";
+}
+
+function resolveProviderBaseUrl(
+  program: ReturnType<typeof parseCli>["program"],
+  provider: string,
+  cliValue: string | undefined,
+  configValue: string | undefined,
+): string | undefined {
+  if (program.getOptionValueSource("baseUrl") === "cli") return cliValue;
+  const environmentName =
+    provider === "anthropic"
+      ? "ANTHROPIC_BASE_URL"
+      : provider === "gemini"
+        ? "GEMINI_BASE_URL"
+        : "OPENAI_BASE_URL";
+  return process.env[environmentName] ?? configValue;
 }
 
 void main()

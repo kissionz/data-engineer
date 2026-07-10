@@ -306,7 +306,7 @@ function createRuntime(
   tools: ToolRegistry,
 ): { loop: AgentLoop; session: SessionStore } {
   const session = new SessionStore(
-    path.join(root, ".harness", "sessions", "eval.jsonl"),
+    path.join(root, ".montane", "sessions", "eval.jsonl"),
   );
   return {
     loop: new AgentLoop(

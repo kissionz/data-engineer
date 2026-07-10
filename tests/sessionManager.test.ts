@@ -76,8 +76,8 @@ describe("SessionManager", () => {
 
   it("adds metadata when resuming an old flat-layout session", async () => {
     const root = await makeRoot();
-    const sessionsDir = path.join(root, ".harness", "sessions");
-    const todosDir = path.join(root, ".harness", "todos");
+    const sessionsDir = path.join(root, ".montane", "sessions");
+    const todosDir = path.join(root, ".montane", "todos");
     await mkdir(sessionsDir, { recursive: true });
     await mkdir(todosDir);
     await writeFile(
@@ -148,7 +148,7 @@ describe("SessionManager", () => {
 
   it("backfills metadata when inspecting an old session", async () => {
     const root = await makeRoot();
-    const sessionsDir = path.join(root, ".harness", "sessions");
+    const sessionsDir = path.join(root, ".montane", "sessions");
     await mkdir(sessionsDir, { recursive: true });
     await writeFile(
       path.join(sessionsDir, "inspect-old.jsonl"),
@@ -292,7 +292,7 @@ describe("SessionManager", () => {
 
     const lockPath = path.join(
       root,
-      ".harness",
+      ".montane",
       "sessions",
       ".locks",
       `${owner.id}.lock`,
@@ -318,7 +318,7 @@ describe("SessionManager", () => {
     ["malformed", "../escape\n"],
   ])("reports an explicit error for an %s current pointer", async (_name, value) => {
     const root = await makeRoot();
-    const sessionsDir = path.join(root, ".harness", "sessions");
+    const sessionsDir = path.join(root, ".montane", "sessions");
     await mkdir(sessionsDir, { recursive: true });
     await writeFile(path.join(sessionsDir, "current"), value, "utf8");
 
@@ -330,7 +330,7 @@ describe("SessionManager", () => {
   it("uses a same-directory temporary file and leaves only current behind", async () => {
     const root = await makeRoot();
     const session = await new SessionManager(root).create();
-    const sessionsDir = path.join(root, ".harness", "sessions");
+    const sessionsDir = path.join(root, ".montane", "sessions");
 
     expect(await readdir(sessionsDir)).toEqual(
       expect.arrayContaining(["current", `${session.id}.jsonl`]),

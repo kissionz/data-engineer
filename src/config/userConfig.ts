@@ -10,6 +10,7 @@ import {
 } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { userStateRoot } from "../runtime/productPaths.js";
 import { z } from "zod";
 import { canonicalHostname } from "../runtime/httpSafety.js";
 import { acquireFileLock } from "../runtime/fileLock.js";
@@ -188,7 +189,7 @@ export const userConfigSchema = z
     envFile: z.string().trim().min(1).max(4_000).optional(),
     model: z
       .object({
-        provider: z.enum(["openai", "mock"]).optional(),
+        provider: z.enum(["openai", "anthropic", "gemini", "mock"]).optional(),
         name: z.string().min(1).max(200).optional(),
         baseUrl: z.url().optional(),
         pricing: z
@@ -255,7 +256,7 @@ export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type HttpFetchConfig = z.infer<typeof httpFetchSchema>;
 
 export function defaultUserConfigPath(userHome = homedir()): string {
-  return path.join(userHome, ".harness", "config.json");
+  return path.join(userStateRoot(userHome), "config.json");
 }
 
 export async function loadUserConfig(

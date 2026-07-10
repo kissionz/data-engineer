@@ -64,7 +64,7 @@ export async function runEvalCli(
 function parseArgs(argv: string[]): CliOptions {
   const options: CliOptions = {
     suite: "evals/deterministic.v1.json",
-    report: ".harness/eval-report.json",
+    report: ".montane/eval-report.json",
     includeGitSha: true,
   };
   const seen = new Set<string>();

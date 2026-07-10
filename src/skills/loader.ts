@@ -2,6 +2,7 @@ import { lstat, readFile, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { parse } from "yaml";
 import type { Workspace } from "../runtime/workspace.js";
+import { workspaceStateRoot } from "../runtime/productPaths.js";
 
 export const MAX_SKILL_SIZE_BYTES = 64 * 1024;
 export const MAX_SKILL_COUNT = 128;
@@ -55,7 +56,7 @@ export class SkillLoader {
     this.workspaceRoot = path.resolve(
       typeof workspace === "string" ? workspace : workspace.root,
     );
-    this.skillsRoot = path.join(this.workspaceRoot, ".harness", "skills");
+    this.skillsRoot = path.join(workspaceStateRoot(this.workspaceRoot), "skills");
   }
 
   async list(): Promise<SkillSummary[]> {
@@ -173,7 +174,10 @@ export class SkillLoader {
       description: metadata.description,
       metadata,
       content,
-      path: path.join(".harness", "skills", name, "SKILL.md"),
+      path: path.relative(
+        this.workspaceRoot,
+        path.join(this.skillsRoot, name, "SKILL.md"),
+      ),
     };
   }
 

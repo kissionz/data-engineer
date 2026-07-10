@@ -6,6 +6,7 @@ import type {
   CommandResult,
 } from "../runtime/commandExecutor.js";
 import { LocalCommandExecutor } from "../runtime/localExecutor.js";
+import { PRODUCT_NAME } from "../runtime/productPaths.js";
 
 export type DoctorStatus = "pass" | "warn" | "fail";
 
@@ -16,7 +17,7 @@ export interface DoctorCheck {
 }
 
 export interface DoctorReport {
-  product: "Montane Code";
+  product: typeof PRODUCT_NAME;
   ready: boolean;
   checks: DoctorCheck[];
 }
@@ -61,7 +62,7 @@ export async function collectDoctorReport(
   checks.push(await workspaceCheck(workspaceRoot));
 
   if (checks.some((check) => check.status === "fail")) {
-    return { product: "Montane Code", ready: false, checks };
+    return { product: PRODUCT_NAME, ready: false, checks };
   }
 
   const [git, repository, ripgrep, docker] = await Promise.all([
@@ -122,17 +123,22 @@ export async function collectDoctorReport(
     );
   }
 
+  const credentials = [
+    "OPENAI_API_KEY",
+    "ANTHROPIC_API_KEY",
+    "GEMINI_API_KEY",
+  ].filter((name) => Boolean(process.env[name]));
   checks.push(
-    process.env.OPENAI_API_KEY
-      ? pass("Model credentials", "OPENAI_API_KEY is configured.")
+    credentials.length > 0
+      ? pass("Model credentials", `${credentials.join(", ")} configured.`)
       : warn(
           "Model credentials",
-          "OPENAI_API_KEY is not set; real model runs will not start.",
+          "No supported provider API key is set; real model runs will not start.",
         ),
   );
 
   return {
-    product: "Montane Code",
+    product: PRODUCT_NAME,
     ready: !checks.some((check) => check.status === "fail"),
     checks,
   };
@@ -144,7 +150,7 @@ function printDoctorReport(report: DoctorReport, json: boolean): void {
     return;
   }
 
-  process.stdout.write("Montane Code doctor\n\n");
+  process.stdout.write(`${PRODUCT_NAME} doctor\n\n`);
   for (const check of report.checks) {
     const marker =
       check.status === "pass" ? "✓" : check.status === "warn" ? "!" : "✗";

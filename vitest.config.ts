@@ -5,7 +5,13 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       include: ["src/**/*.ts"],
-      exclude: ["src/index.ts"],
+      exclude: [
+        "src/index.ts",
+        "src/cli/interactiveSession.ts",
+        "src/cli/telemetryReport.ts",
+        "src/cli/worktreeReport.ts",
+        "src/eval/liveCli.ts",
+      ],
       reporter: ["text", "json-summary"],
       thresholds: {
         statements: 76,

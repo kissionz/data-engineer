@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { DEFAULT_AGENT_BUDGET } from "../agent/budget.js";
+import { PRODUCT_NAME, PRODUCT_VERSION } from "../runtime/productPaths.js";
 
 export interface CliOptions {
   task?: string;
@@ -26,19 +27,27 @@ export interface CliOptions {
   sandboxPids: string;
   worktree: boolean;
   worktreeBase: string;
+  outputFormat: string;
+  inputFormat: string;
+  quiet: boolean;
+  permissionMode: string;
 }
 
 export function parseCli(): { program: Command; options: CliOptions } {
   const program = new Command();
   program
     .name("montane")
-    .description("Montane Code — a security-first local coding agent")
-    .version("0.2.0")
+    .description(`${PRODUCT_NAME} — a security-first local coding agent`)
+    .version(PRODUCT_VERSION)
     .option("-t, --task <task>", "Task to run")
     .option("--config <path>", "Trusted user config file")
     .option("--env-file <path>", "Explicit environment file to load")
     .option("--cwd <cwd>", "Workspace directory", process.cwd())
-    .option("--provider <provider>", "Model provider: openai or mock", "openai")
+    .option(
+      "--provider <provider>",
+      "Model provider: openai, anthropic, gemini, or mock",
+      "openai",
+    )
     .option("--model <model>", "Model name")
     .option("--base-url <baseUrl>", "OpenAI-compatible API base URL")
     .option(
@@ -89,12 +98,25 @@ export function parseCli(): { program: Command; options: CliOptions } {
     .option("--sandbox-pids <count>", "Container process limit", "256")
     .option("--worktree", "Run the agent in a new isolated git worktree")
     .option("--worktree-base <ref>", "Git ref used for a new worktree", "HEAD")
+    .option(
+      "--output-format <format>",
+      "Output: text, json, or stream-json",
+      "text",
+    )
+    .option("--input-format <format>", "Input: text or stream-json", "text")
+    .option("--quiet", "Suppress non-result diagnostics", false)
+    .option(
+      "--permission-mode <mode>",
+      "Permissions: default, plan, accept-edits, or deny",
+      "default",
+    )
     .addHelpText(
       "after",
       [
         "",
         "MCP configuration:",
         "  montane doctor",
+        "  montane migrate --workspace --dry-run",
         "  montane mcp add maxcompute",
         "  montane mcp add custom",
         "  montane mcp list",
