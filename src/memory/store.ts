@@ -127,7 +127,7 @@ export class MemoryStore {
     let committed = false;
 
     try {
-      const handle = await open(this.filePath, "a+", 0o600);
+      const handle = await openReadWriteFile(this.filePath);
       try {
         await assertSafeOpenFile(this.filePath, handle);
         const { events, validBytes, needsNewline } = await readFromHandle(
@@ -153,10 +153,10 @@ export class MemoryStore {
         if (fileInfo.size !== validBytes) {
           await handle.truncate(validBytes);
         }
-        if (needsNewline) {
-          await handle.writeFile("\n", "utf8");
-        }
-        await handle.writeFile(serializedEnvelope, "utf8");
+        await writeAtEnd(
+          handle,
+          `${needsNewline ? "\n" : ""}${serializedEnvelope}`,
+        );
         await handle.sync();
         committed = true;
       } finally {
@@ -194,6 +194,31 @@ export class MemoryStore {
       }
       throw error;
     }
+  }
+}
+
+async function openReadWriteFile(filePath: string): Promise<FileHandle> {
+  try {
+    return await open(filePath, "r+");
+  } catch (error: unknown) {
+    if (!hasCode(error, "ENOENT")) throw error;
+    return open(filePath, "wx+", 0o600);
+  }
+}
+
+async function writeAtEnd(handle: FileHandle, text: string): Promise<void> {
+  const bytes = Buffer.from(text, "utf8");
+  const start = (await handle.stat()).size;
+  let offset = 0;
+  while (offset < bytes.length) {
+    const { bytesWritten } = await handle.write(
+      bytes,
+      offset,
+      bytes.length - offset,
+      start + offset,
+    );
+    if (bytesWritten === 0) throw new Error("Unable to append memory record.");
+    offset += bytesWritten;
   }
 }
 

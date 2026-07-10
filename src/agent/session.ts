@@ -63,7 +63,7 @@ export class SessionStore {
     let committed = false;
 
     try {
-      const handle = await open(this.filePath, "a+", 0o600);
+        const handle = await openReadWriteFile(this.filePath);
 
       try {
         const [pathInfo, fileInfo] = await Promise.all([
@@ -105,7 +105,7 @@ export class SessionStore {
         if (currentSize + serializedBytes > MAX_SESSION_FILE_BYTES) {
           throw new Error("Session log exceeds the 256 MiB safety limit.");
         }
-        await handle.writeFile(serialized, "utf8");
+        await writeAtEnd(handle, serialized);
         await handle.sync();
         const finalInfo = await handle.stat();
         if (cacheCurrent && this.cachedEvents) {
@@ -189,6 +189,31 @@ export class SessionStore {
       this.cachedIdentity.mtimeMs === info.mtimeMs &&
       this.cachedIdentity.ctimeMs === info.ctimeMs
     );
+  }
+}
+
+async function openReadWriteFile(filePath: string): Promise<FileHandle> {
+  try {
+    return await open(filePath, "r+");
+  } catch (error: unknown) {
+    if (!hasCode(error, "ENOENT")) throw error;
+    return open(filePath, "wx+", 0o600);
+  }
+}
+
+async function writeAtEnd(handle: FileHandle, text: string): Promise<void> {
+  const bytes = Buffer.from(text, "utf8");
+  const start = (await handle.stat()).size;
+  let offset = 0;
+  while (offset < bytes.length) {
+    const { bytesWritten } = await handle.write(
+      bytes,
+      offset,
+      bytes.length - offset,
+      start + offset,
+    );
+    if (bytesWritten === 0) throw new Error("Unable to append session record.");
+    offset += bytesWritten;
   }
 }
 
@@ -374,4 +399,12 @@ function identityOf(info: SessionFileIdentity): SessionFileIdentity {
     ctimeMs: info.ctimeMs,
     birthtimeMs: info.birthtimeMs,
   };
+}
+
+function hasCode(error: unknown, code: string): boolean {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    (error as NodeJS.ErrnoException).code === code
+  );
 }

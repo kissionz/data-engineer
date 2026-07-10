@@ -206,7 +206,9 @@ describe("DockerShellExecutor", () => {
     );
     expect(dependencyMount).toBeDefined();
     expect(dependencyMount).not.toContain("readonly");
-    expect(dependencyMount).toContain(".montane/sandbox/session-no-deps/deps/0");
+    expect(dependencyMount?.replaceAll("\\", "/")).toContain(
+      ".montane/sandbox/session-no-deps/deps/0",
+    );
   });
 
   it("passes cancellation to docker run and cleans up without that signal", async () => {

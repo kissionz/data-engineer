@@ -43,7 +43,11 @@ describe("text file safety layer", () => {
       createHash("sha256").update(text).digest("hex"),
     );
     expect(snapshot.lineEnding).toBe("crlf");
-    expect(snapshot.mode).toBe(0o640);
+    if (process.platform === "win32") {
+      expect(snapshot.mode).toBeTypeOf("number");
+    } else {
+      expect(snapshot.mode).toBe(0o640);
+    }
     expect(snapshot.dev).toBeTypeOf("number");
     expect(snapshot.ino).toBeTypeOf("number");
   });
@@ -100,7 +104,11 @@ describe("text file safety layer", () => {
       { mode: 0o640 },
     );
     expect(created.text).toBe("new\n");
-    expect(created.mode).toBe(0o640);
+    if (process.platform === "win32") {
+      expect(created.mode).toBeTypeOf("number");
+    } else {
+      expect(created.mode).toBe(0o640);
+    }
   });
 
   it("requires the parent directory to exist", async () => {
