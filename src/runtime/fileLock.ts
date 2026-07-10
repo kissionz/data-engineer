@@ -9,6 +9,7 @@ import {
 } from "node:fs/promises";
 import { hostname } from "node:os";
 import { setTimeout as delay } from "node:timers/promises";
+import { sameFileIdentity, type FileIdentityLike } from "./fileIdentity.js";
 
 interface LockRecord {
   pid: number;
@@ -123,8 +124,7 @@ async function removeAgedInvalidLock(
   const current = await lstat(lockPath).catch(() => undefined);
   if (
     !current ||
-    current.dev !== first.dev ||
-    current.ino !== first.ino ||
+    !sameFileIdentity(current, first) ||
     current.mtimeMs !== first.mtimeMs
   ) {
     return false;
@@ -148,7 +148,7 @@ async function readLock(lockPath: string): Promise<LockRecord> {
       (process.platform === "win32" ? 0 : constants.O_NOFOLLOW),
   );
   try {
-    await assertSameFile(lockPath, handle, initial.dev, initial.ino);
+    await assertSameFile(lockPath, handle, initial);
     const parsed = JSON.parse(await handle.readFile("utf8")) as Partial<LockRecord>;
     if (
       !Number.isSafeInteger(parsed.pid) ||
@@ -167,8 +167,7 @@ async function readLock(lockPath: string): Promise<LockRecord> {
 async function assertSameFile(
   lockPath: string,
   handle: FileHandle,
-  expectedDevice: number,
-  expectedInode: number,
+  expected: FileIdentityLike,
 ): Promise<void> {
   const [current, opened] = await Promise.all([
     lstat(lockPath),
@@ -177,10 +176,8 @@ async function assertSameFile(
   if (
     current.isSymbolicLink() ||
     !current.isFile() ||
-    current.dev !== expectedDevice ||
-    current.ino !== expectedInode ||
-    opened.dev !== expectedDevice ||
-    opened.ino !== expectedInode
+    !sameFileIdentity(current, expected) ||
+    !sameFileIdentity(opened, expected)
   ) {
     throw new Error("Lock file changed while it was being opened.");
   }

@@ -7,6 +7,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { acquireFileLock } from "../runtime/fileLock.js";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import {
   MemoryValidationError,
   type MemoryRecord,
@@ -518,8 +519,7 @@ async function assertSafeOpenFile(filePath: string, handle: FileHandle): Promise
   if (
     pathInfo.isSymbolicLink() ||
     !pathInfo.isFile() ||
-    pathInfo.dev !== handleInfo.dev ||
-    pathInfo.ino !== handleInfo.ino
+    !sameFileIdentity(pathInfo, handleInfo)
   ) {
     throw new Error("Refusing a symbolic link or replaced memory store.");
   }

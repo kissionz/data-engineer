@@ -16,6 +16,7 @@ import {
   workspaceStateRoot,
 } from "../runtime/productPaths.js";
 import { setTimeout as delay } from "node:timers/promises";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import { SessionStore } from "./session.js";
 import type { SessionEvent, SessionStatus } from "./types.js";
 export type { SessionStatus } from "./types.js";
@@ -804,7 +805,7 @@ async function renameWithRetry(
 }
 
 function sameFile(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  return sameFileIdentity(left, right);
 }
 
 async function removeIfExists(filePath: string): Promise<void> {

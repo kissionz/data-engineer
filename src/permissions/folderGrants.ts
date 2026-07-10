@@ -11,6 +11,7 @@ import {
 import { homedir } from "node:os";
 import path from "node:path";
 import { acquireFileLock } from "../runtime/fileLock.js";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import { isPathWithin } from "../runtime/pathSafety.js";
 import { userStateRoot } from "../runtime/productPaths.js";
 
@@ -191,8 +192,7 @@ async function loadGrantFile(filePath: string): Promise<FolderGrantRecord[]> {
     if (
       current.isSymbolicLink() ||
       !current.isFile() ||
-      current.dev !== opened.dev ||
-      current.ino !== opened.ino
+      !sameFileIdentity(current, opened)
     ) {
       throw new Error("Folder grant store changed while opening.");
     }

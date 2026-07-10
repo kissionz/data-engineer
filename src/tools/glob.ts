@@ -72,6 +72,10 @@ export class GlobTool implements Tool {
       signal: context?.signal,
     });
 
+    if (ripgrepUnavailable(result)) {
+      return this.executeNative(absPath, pattern, limit, context);
+    }
+
     if (!result.ok && result.exitCode !== 1) {
       return {
         ok: false,
@@ -150,6 +154,23 @@ export class GlobTool implements Tool {
       },
     };
   }
+}
+
+function ripgrepUnavailable(result: {
+  exitCode: number | null;
+  stderr: string;
+  timedOut: boolean;
+  cancelled: boolean;
+}): boolean {
+  return (
+    !result.timedOut &&
+    !result.cancelled &&
+    (result.exitCode === null ||
+      result.exitCode === -2 ||
+      /\bENOENT\b|not recognized as an internal or external command/i.test(
+        result.stderr,
+      ))
+  );
 }
 
 function formatGlobMatches(files: string[]): string {

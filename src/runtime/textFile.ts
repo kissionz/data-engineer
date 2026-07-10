@@ -15,6 +15,7 @@ import {
   throwIfCancelled,
 } from "../agent/cancellation.js";
 import type { Workspace } from "./workspace.js";
+import { sameFileIdentity } from "./fileIdentity.js";
 
 export const DEFAULT_MAX_TEXT_FILE_BYTES = 8 * 1024 * 1024;
 
@@ -52,6 +53,8 @@ export interface TextFileSnapshot {
   lineEnding: TextFileLineEnding;
   dev: number;
   ino: number;
+  birthtimeMs: number;
+  ctimeMs: number;
 }
 
 interface ReadOptions {
@@ -77,6 +80,9 @@ interface CreateOptions {
 interface Identity {
   dev: number;
   ino: number;
+  size: number;
+  birthtimeMs: number;
+  ctimeMs: number;
 }
 
 export async function readTextFileSnapshot(
@@ -338,7 +344,13 @@ export async function atomicCreateTextFile(
         text,
         bytes,
         info?.mode ?? normalizeMode(options.mode ?? 0o666),
-        info ?? { dev: 0, ino: 0 },
+        info ?? {
+          dev: 0,
+          ino: 0,
+          size: bytes.length,
+          birthtimeMs: 0,
+          ctimeMs: 0,
+        },
       );
     }
     throw mapError(error, userPath, options.signal);
@@ -732,6 +744,8 @@ function snapshotFromBytes(
     lineEnding: detectLineEnding(text),
     dev: identity.dev,
     ino: identity.ino,
+    birthtimeMs: identity.birthtimeMs,
+    ctimeMs: identity.ctimeMs,
   };
 }
 
@@ -837,7 +851,7 @@ function normalizeMode(mode: number): number {
 }
 
 function sameIdentity(left: Identity, right: Identity): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  return sameFileIdentity(left, right);
 }
 
 function sha256(bytes: Buffer): string {

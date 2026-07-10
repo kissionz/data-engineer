@@ -51,6 +51,6 @@ describe("Workspace", () => {
     expect(() => workspace.resolve(".harness/sessions/legacy.jsonl"))
       .toThrow("Sensitive path denied");
     expect(workspace.resolve(".montane/skills/review/SKILL.md"))
-      .toBe("/tmp/project/.montane/skills/review/SKILL.md");
+      .toBe(path.resolve("/tmp/project/.montane/skills/review/SKILL.md"));
   });
 });

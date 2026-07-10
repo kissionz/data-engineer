@@ -1,5 +1,6 @@
 import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import { isCanonicalTelemetryEvent } from "./sanitize.js";
 import type {
   CancellationSource,
@@ -73,8 +74,7 @@ export async function readTelemetryReport(
     const info = await handle.stat();
     if (
       !info.isFile() ||
-      info.dev !== initial.dev ||
-      info.ino !== initial.ino ||
+      !sameFileIdentity(info, initial) ||
       info.size > maxBytes
     ) {
       throw new Error("Telemetry report input changed while being opened.");
@@ -99,8 +99,7 @@ export async function readTelemetryReport(
     ]);
     if (
       finalPathInfo.isSymbolicLink() ||
-      finalPathInfo.dev !== info.dev ||
-      finalPathInfo.ino !== info.ino ||
+      !sameFileIdentity(finalPathInfo, info) ||
       finalHandleInfo.size !== info.size
     ) {
       throw new Error("Telemetry report input changed while being read.");

@@ -8,6 +8,7 @@ import {
 import type { Stats } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { acquireFileLock } from "../runtime/fileLock.js";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import type { SessionEvent, SessionEventInput } from "./types.js";
 
 const appendQueues = new Map<string, Promise<unknown>>();
@@ -20,6 +21,7 @@ interface SessionFileIdentity {
   size: number;
   mtimeMs: number;
   ctimeMs: number;
+  birthtimeMs: number;
 }
 
 export class SessionStore {
@@ -182,8 +184,7 @@ export class SessionStore {
   private cacheMatches(info: SessionFileIdentity): boolean {
     return (
       this.cachedIdentity !== undefined &&
-      this.cachedIdentity.dev === info.dev &&
-      this.cachedIdentity.ino === info.ino &&
+      sameFileIdentity(this.cachedIdentity, info) &&
       this.cachedIdentity.size === info.size &&
       this.cachedIdentity.mtimeMs === info.mtimeMs &&
       this.cachedIdentity.ctimeMs === info.ctimeMs
@@ -322,7 +323,7 @@ async function repairUnterminatedTail(handle: FileHandle): Promise<string> {
 }
 
 function sameFile(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  return sameFileIdentity(left, right);
 }
 
 async function readSafeSessionSnapshot(
@@ -353,8 +354,7 @@ async function readSafeSessionSnapshot(
     const text = await handle.readFile("utf8");
     const finalInfo = await handle.stat();
     if (
-      finalInfo.dev !== fileInfo.dev ||
-      finalInfo.ino !== fileInfo.ino ||
+      !sameFile(finalInfo, fileInfo) ||
       finalInfo.size !== fileInfo.size
     ) {
       throw new Error("Session file changed while it was being read.");
@@ -372,5 +372,6 @@ function identityOf(info: SessionFileIdentity): SessionFileIdentity {
     size: info.size,
     mtimeMs: info.mtimeMs,
     ctimeMs: info.ctimeMs,
+    birthtimeMs: info.birthtimeMs,
   };
 }

@@ -14,6 +14,7 @@ import { userStateRoot } from "../runtime/productPaths.js";
 import { z } from "zod";
 import { canonicalHostname } from "../runtime/httpSafety.js";
 import { acquireFileLock } from "../runtime/fileLock.js";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 
 const positiveInteger = z.number().int().positive();
 const nonNegativeInteger = z.number().int().nonnegative();
@@ -288,8 +289,7 @@ export async function loadUserConfig(
     if (
       pathInfo.isSymbolicLink() ||
       !pathInfo.isFile() ||
-      pathInfo.dev !== handleInfo.dev ||
-      pathInfo.ino !== handleInfo.ino
+      !sameFileIdentity(pathInfo, handleInfo)
     ) {
       throw new Error("User config changed while it was being opened.");
     }

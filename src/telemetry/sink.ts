@@ -9,6 +9,7 @@ import {
 import { constants as fsConstants } from "node:fs";
 import path from "node:path";
 import { acquireFileLock } from "../runtime/fileLock.js";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import {
   isCanonicalTelemetryEvent,
   sanitizeTelemetryEvent,
@@ -259,8 +260,7 @@ async function openTelemetryFile(filePath: string): Promise<FileHandle> {
       if (
         pathInfo.isSymbolicLink() ||
         !pathInfo.isFile() ||
-        pathInfo.dev !== handleInfo.dev ||
-        pathInfo.ino !== handleInfo.ino ||
+        !sameFileIdentity(pathInfo, handleInfo) ||
         handleInfo.nlink !== 1
       ) {
         throw new Error(

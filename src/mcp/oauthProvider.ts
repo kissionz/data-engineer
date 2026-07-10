@@ -15,6 +15,7 @@ import {
 import { createServer, type Server } from "node:http";
 import { homedir } from "node:os";
 import path from "node:path";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import type {
   OAuthClientProvider,
   OAuthDiscoveryState,
@@ -234,8 +235,7 @@ export class FileOAuthStateStore implements OAuthStateStore {
       try {
         const opened = await handle.stat();
         if (
-          opened.dev !== info.dev ||
-          opened.ino !== info.ino ||
+          !sameFileIdentity(opened, info) ||
           !opened.isFile()
         ) {
           throw new Error("MCP OAuth state changed while being opened.");

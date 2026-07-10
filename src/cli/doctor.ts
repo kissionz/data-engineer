@@ -166,9 +166,9 @@ function nodeCheck(version: string): DoctorCheck {
     .split(".")
     .slice(0, 2)
     .map((value) => Number.parseInt(value, 10));
-  return major > 22 || (major === 22 && minor >= 12)
+  return major > 22 || (major === 22 && minor >= 13)
     ? pass("Node.js", `v${version}`)
-    : fail("Node.js", `v${version}; Montane requires Node.js 22.12 or newer.`);
+    : fail("Node.js", `v${version}; Montane requires Node.js 22.13 or newer.`);
 }
 
 async function workspaceCheck(workspaceRoot: string): Promise<DoctorCheck> {

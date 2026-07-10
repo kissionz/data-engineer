@@ -1,6 +1,7 @@
 import { lstat, mkdir, open, type FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import type { Tool, ToolExecutionResult } from "./base.js";
 
 export type TodoStatus = "pending" | "in_progress" | "done";
@@ -224,7 +225,7 @@ async function assertSameFile(
 }
 
 function sameFile(left: Stats, right: Stats): boolean {
-  return left.dev === right.dev && left.ino === right.ino;
+  return sameFileIdentity(left, right);
 }
 
 function hasCode(error: unknown, code: string): boolean {

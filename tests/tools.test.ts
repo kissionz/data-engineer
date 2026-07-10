@@ -477,7 +477,7 @@ describe("P0 tools", () => {
         calls.push(options);
         return {
           ok: false,
-          exitCode: null,
+          exitCode: -2,
           stdout: "",
           stderr: "",
           timedOut: false,
@@ -559,8 +559,12 @@ describe("P0 tools", () => {
     });
 
     expect(result.ok).toBe(true);
-    expect(result.content).toContain(path.join("src", "a.ts"));
-    expect(result.content).not.toContain(path.join("src", "c.ts"));
+    expect(result.content).toContain(
+      JSON.stringify({ file_path: path.join("src", "a.ts") }),
+    );
+    expect(result.content).not.toContain(
+      JSON.stringify({ file_path: path.join("src", "c.ts") }),
+    );
     expect(result.data).toMatchObject({ count: 2, truncated: true });
     expect(calls[0]).toMatchObject({
       command: "rg",
@@ -640,9 +644,13 @@ describe("P0 tools", () => {
     ).execute({ pattern: "**/*.sql" });
 
     expect(result.ok).toBe(true);
-    expect(result.content).toContain(path.join("sql", "orders.sql"));
     expect(result.content).toContain(
-      path.join("sql", "reports", "customers.sql"),
+      JSON.stringify({ file_path: path.join("sql", "orders.sql") }),
+    );
+    expect(result.content).toContain(
+      JSON.stringify({
+        file_path: path.join("sql", "reports", "customers.sql"),
+      }),
     );
     expect(result.content).not.toContain("hidden.sql");
     expect(result.data).toMatchObject({
@@ -650,6 +658,35 @@ describe("P0 tools", () => {
       truncated: false,
       engine: "native",
     });
+  });
+
+  it("falls back to native search when ripgrep cannot be spawned", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "montane-tools-"));
+    await writeFile(path.join(root, "marker.txt"), "needle\n", "utf8");
+    const missingRipgrep: CommandExecutor = {
+      async run() {
+        return {
+          ok: false,
+          exitCode: null,
+          stdout: "",
+          stderr: "spawn rg ENOENT",
+          timedOut: false,
+          cancelled: false,
+        };
+      },
+    };
+    const workspace = new Workspace(root);
+
+    const glob = await new GlobTool(workspace, missingRipgrep).execute({
+      pattern: "**/*.txt",
+    });
+    const grep = await new GrepTool(workspace, missingRipgrep).execute({
+      pattern: "needle",
+    });
+
+    expect(glob).toMatchObject({ ok: true, data: { engine: "native" } });
+    expect(grep).toMatchObject({ ok: true, data: { engine: "native" } });
+    expect(grep.content).toContain("marker.txt:1:needle");
   });
 
   it("searches file contents natively when ripgrep is unavailable", async () => {

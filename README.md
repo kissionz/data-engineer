@@ -9,7 +9,7 @@
 
 ## 环境要求
 
-- Node.js 22.12 或更高版本
+- Node.js 22.13 或更高版本
 - Git：供 `GitStatus`、`GitDiff` 和 worktree 隔离模式使用
 - ripgrep (`rg`)：可选，用于加速 `Grep` 和 `Glob`；缺失时自动使用原生搜索
 - Docker（Linux 容器模式）：用于隔离执行 Bash

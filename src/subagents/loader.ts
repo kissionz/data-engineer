@@ -14,6 +14,7 @@ import { parse } from "yaml";
 import { z } from "zod";
 import type { Workspace } from "../runtime/workspace.js";
 import { workspaceStateRoot } from "../runtime/productPaths.js";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import {
   CODE_REVIEWER_SPEC,
   READONLY_SUBAGENT_TOOLS,
@@ -190,10 +191,8 @@ function readAgentSpec(filePath: string, agentsReal: string): SubagentSpec {
     );
     if (
       !opened.isFile() ||
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino ||
-      opened.dev !== canonicalInfo.dev ||
-      opened.ino !== canonicalInfo.ino
+      !sameFileIdentity(opened, before) ||
+      !sameFileIdentity(opened, canonicalInfo)
     ) {
       throw new Error(
         `Subagent spec changed while it was being opened: ${path.basename(filePath)}`,

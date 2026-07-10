@@ -4,6 +4,7 @@ import path from "node:path";
 import { z } from "zod";
 import type { AgentBudget } from "../agent/budget.js";
 import type { ModelPricing } from "../model/base.js";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 
 const MAX_PROJECT_CONFIG_BYTES = 1024 * 1024;
 const positiveInteger = z.number().int().positive();
@@ -204,8 +205,7 @@ function assertSameConfigFile(
     pathInfo.isSymbolicLink() ||
     !pathInfo.isFile() ||
     !handleInfo.isFile() ||
-    pathInfo.dev !== handleInfo.dev ||
-    pathInfo.ino !== handleInfo.ino
+    !sameFileIdentity(pathInfo, handleInfo)
   ) {
     throw new Error("Project config changed while it was being opened.");
   }

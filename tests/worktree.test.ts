@@ -90,6 +90,7 @@ describe("WorktreeManager", () => {
     await git(executor, repositoryRoot, ["init"]);
     await git(executor, repositoryRoot, ["config", "user.email", "test@example.com"]);
     await git(executor, repositoryRoot, ["config", "user.name", "Harness Test"]);
+    await git(executor, repositoryRoot, ["config", "core.autocrlf", "false"]);
     await import("node:fs/promises").then(({ writeFile }) =>
       writeFile(path.join(repositoryRoot, "README.md"), "hello\n", "utf8"),
     );

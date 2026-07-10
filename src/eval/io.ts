@@ -8,6 +8,7 @@ import {
   unlink,
 } from "node:fs/promises";
 import path from "node:path";
+import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import { randomUUID } from "node:crypto";
 import type { z } from "zod";
 
@@ -184,8 +185,7 @@ function assertSameFile(
     pathInfo.isSymbolicLink() ||
     !pathInfo.isFile() ||
     !handleInfo.isFile() ||
-    pathInfo.dev !== handleInfo.dev ||
-    pathInfo.ino !== handleInfo.ino
+    !sameFileIdentity(pathInfo, handleInfo)
   ) {
     throw new Error("Eval input changed while it was being opened.");
   }

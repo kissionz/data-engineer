@@ -85,6 +85,15 @@ export class GrepTool implements Tool {
       signal: context?.signal,
     });
 
+    if (ripgrepUnavailable(result)) {
+      return this.executeNative(
+        absPath,
+        args.pattern,
+        accessOptions,
+        context,
+      );
+    }
+
     const rawOutput = result.stdout || result.stderr || "[No matches]";
     const truncated = rawOutput.length > this.maxOutputChars;
     const output = truncated
@@ -206,4 +215,21 @@ export class GrepTool implements Tool {
       },
     };
   }
+}
+
+function ripgrepUnavailable(result: {
+  exitCode: number | null;
+  stderr: string;
+  timedOut: boolean;
+  cancelled: boolean;
+}): boolean {
+  return (
+    !result.timedOut &&
+    !result.cancelled &&
+    (result.exitCode === null ||
+      result.exitCode === -2 ||
+      /\bENOENT\b|not recognized as an internal or external command/i.test(
+        result.stderr,
+      ))
+  );
 }
