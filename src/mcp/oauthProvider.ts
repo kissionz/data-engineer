@@ -70,7 +70,7 @@ export class McpOAuthProvider implements OAuthClientProvider {
       `http://127.0.0.1:${options.callbackPort}${CALLBACK_PATH}`,
     );
     this.clientMetadata = {
-      client_name: "harness-ts",
+      client_name: "montane-code",
       redirect_uris: [this.redirectUrl.toString()],
       grant_types: ["authorization_code", "refresh_token"],
       response_types: ["code"],

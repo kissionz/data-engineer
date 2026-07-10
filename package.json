@@ -1,18 +1,29 @@
 {
-  "name": "harness-ts",
-  "version": "0.1.0",
+  "name": "montane-code",
+  "version": "0.2.0",
+  "description": "A security-first local coding agent runtime for durable, verifiable software work.",
   "type": "module",
   "bin": {
+    "montane": "./dist/index.js",
+    "montane-worktrees": "./dist/cli/worktreeReport.js",
+    "montane-telemetry-report": "./dist/cli/telemetryReport.js",
     "harness": "./dist/index.js",
     "harness-worktrees": "./dist/cli/worktreeReport.js",
     "harness-telemetry-report": "./dist/cli/telemetryReport.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    ".env.example",
+    "config.example.json"
+  ],
   "engines": {
     "node": ">=22.12.0"
   },
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
+    "prepack": "npm run build",
     "start": "node dist/index.js",
     "worktrees": "node dist/cli/worktreeReport.js",
     "telemetry:report": "node dist/cli/telemetryReport.js",
@@ -23,8 +34,16 @@
     "test:contract": "vitest run tests/openai.test.ts tests/mcp.test.ts",
     "lint": "eslint src tests eslint.config.js vitest.config.ts --max-warnings=0",
     "check": "npm run lint && npm run build && npm test -- --run && npm run test:coverage",
-    "eval": "npm run build --silent && node dist/eval/cli.js"
+    "eval": "npm run build --silent && node dist/eval/cli.js",
+    "pack:check": "npm pack --dry-run"
   },
+  "keywords": [
+    "coding-agent",
+    "developer-tools",
+    "mcp",
+    "openai",
+    "sandbox"
+  ],
   "dependencies": {
     "@inquirer/prompts": "^7.0.0",
     "@modelcontextprotocol/sdk": "1.29.0",

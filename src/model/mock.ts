@@ -26,7 +26,13 @@ export class MockModel implements ModelClient {
       };
     }
 
-    _options.onTextDelta?.("Done.");
-    return { finalText: "Done.", stopReason: "end_turn" };
+    const toolResult = [..._options.messages]
+      .reverse()
+      .find((message) => message.role === "tool")?.toolResult;
+    const finalText = toolResult?.ok
+      ? "Mock loop completed after a successful Read call."
+      : "Mock loop completed; the scripted Read call failed as expected in this workspace.";
+    _options.onTextDelta?.(finalText);
+    return { finalText, stopReason: "end_turn" };
   }
 }

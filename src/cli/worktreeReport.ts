@@ -5,7 +5,7 @@ import { LocalCommandExecutor } from "../runtime/localExecutor.js";
 import { inspectWorktrees } from "../runtime/worktreeReport.js";
 
 const program = new Command()
-  .name("harness-worktrees")
+  .name("montane-worktrees")
   .description("List Git worktrees and inspect their status without modifying them")
   .option("--cwd <path>", "Repository or worktree path", process.cwd())
   .parse();

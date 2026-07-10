@@ -30,13 +30,13 @@ export class WorktreeManager {
       this.configuredWorktreesRoot ??
       path.join(
         path.dirname(repositoryRoot),
-        `${path.basename(repositoryRoot)}-harness-worktrees`,
+        `${path.basename(repositoryRoot)}-montane-worktrees`,
       );
     await ensureSafeDirectory(worktreesRoot);
 
     const id = createWorktreeId();
     const worktreePath = path.join(worktreesRoot, id);
-    const branch = `harness/${id}`;
+    const branch = `montane/${id}`;
     const existing = await lstat(worktreePath).catch(() => null);
 
     if (existing) {

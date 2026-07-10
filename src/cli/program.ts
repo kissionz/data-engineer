@@ -31,8 +31,9 @@ export interface CliOptions {
 export function parseCli(): { program: Command; options: CliOptions } {
   const program = new Command();
   program
-    .name("harness")
-    .description("TypeScript local coding agent harness")
+    .name("montane")
+    .description("Montane Code — a security-first local coding agent")
+    .version("0.2.0")
     .option("-t, --task <task>", "Task to run")
     .option("--config <path>", "Trusted user config file")
     .option("--env-file <path>", "Explicit environment file to load")
@@ -93,10 +94,13 @@ export function parseCli(): { program: Command; options: CliOptions } {
       [
         "",
         "MCP configuration:",
-        "  harness mcp add maxcompute",
-        "  harness mcp add custom",
-        "  harness mcp list",
-        "  harness mcp remove <id>",
+        "  montane doctor",
+        "  montane mcp add maxcompute",
+        "  montane mcp add custom",
+        "  montane mcp list",
+        "  montane mcp remove <id>",
+        "",
+        "Legacy harness command aliases remain available during the 0.x series.",
       ].join("\n"),
     )
     .parse();
@@ -108,9 +112,14 @@ export function optionOrEnv(
   optionName: string,
   optionValue: string,
   environmentName: string,
+  legacyEnvironmentName?: string,
 ): string {
   return program.getOptionValueSource(optionName) === "default"
-    ? process.env[environmentName] ?? optionValue
+    ? process.env[environmentName] ??
+        (legacyEnvironmentName
+          ? process.env[legacyEnvironmentName]
+          : undefined) ??
+        optionValue
     : optionValue;
 }
 
@@ -120,10 +129,16 @@ export function resolveStringOption(
   optionValue: string,
   environmentName: string,
   configValue?: string,
+  legacyEnvironmentName?: string,
 ): string {
   return program.getOptionValueSource(optionName) === "cli"
     ? optionValue
-    : process.env[environmentName] ?? configValue ?? optionValue;
+    : process.env[environmentName] ??
+        (legacyEnvironmentName
+          ? process.env[legacyEnvironmentName]
+          : undefined) ??
+        configValue ??
+        optionValue;
 }
 
 export function resolveOptionalStringOption(
@@ -132,10 +147,16 @@ export function resolveOptionalStringOption(
   optionValue: string | undefined,
   environmentName: string,
   configValue?: string,
+  legacyEnvironmentName?: string,
 ): string | undefined {
   return program.getOptionValueSource(optionName) === "cli"
     ? optionValue
-    : process.env[environmentName] ?? configValue ?? optionValue;
+    : process.env[environmentName] ??
+        (legacyEnvironmentName
+          ? process.env[legacyEnvironmentName]
+          : undefined) ??
+        configValue ??
+        optionValue;
 }
 
 export function numericConfig(value: number | undefined): string | undefined {

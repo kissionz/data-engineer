@@ -6,7 +6,7 @@ import path from "node:path";
 import { readTelemetryReport } from "../telemetry/report.js";
 
 const program = new Command()
-  .name("harness-telemetry-report")
+  .name("montane-telemetry-report")
   .description("Build a content-free aggregate report from local telemetry JSONL")
   .option(
     "--file <path>",

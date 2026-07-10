@@ -90,6 +90,7 @@ import {
   resolveStringOption,
 } from "./cli/program.js";
 import { runMcpConfigCommand } from "./cli/mcpConfig.js";
+import { runDoctorCommand } from "./cli/doctor.js";
 import {
   defaultUserConfigPath,
   loadUserConfig,
@@ -112,13 +113,19 @@ let activeMcpManager: McpManager | undefined;
 let activeTelemetrySink: TelemetrySink = noopTelemetrySink;
 
 async function main(): Promise<void> {
+  if (await runDoctorCommand()) {
+    return;
+  }
   if (await runMcpConfigCommand()) {
     return;
   }
   const { program, options: opts } = parseCli();
   const sourceWorkspaceRoot = path.resolve(opts.cwd);
   const userConfigPath =
-    opts.config ?? process.env.HARNESS_CONFIG ?? defaultUserConfigPath();
+    opts.config ??
+    process.env.MONTANE_CONFIG ??
+    process.env.HARNESS_CONFIG ??
+    defaultUserConfigPath();
   const userConfig = await loadUserConfig(userConfigPath);
   const envFile = selectEnvFile({
     workspaceRoot: sourceWorkspaceRoot,
@@ -182,42 +189,49 @@ async function main(): Promise<void> {
       program,
       "bashSandbox",
       opts.bashSandbox,
+      "MONTANE_BASH_SANDBOX",
       "HARNESS_BASH_SANDBOX",
     ),
     image: optionOrEnv(
       program,
       "sandboxImage",
       opts.sandboxImage,
+      "MONTANE_SANDBOX_IMAGE",
       "HARNESS_SANDBOX_IMAGE",
     ),
     pull: optionOrEnv(
       program,
       "sandboxPull",
       opts.sandboxPull,
+      "MONTANE_SANDBOX_PULL",
       "HARNESS_SANDBOX_PULL",
     ),
     network: optionOrEnv(
       program,
       "sandboxNetwork",
       opts.sandboxNetwork,
+      "MONTANE_SANDBOX_NETWORK",
       "HARNESS_SANDBOX_NETWORK",
     ),
     memory: optionOrEnv(
       program,
       "sandboxMemory",
       opts.sandboxMemory,
+      "MONTANE_SANDBOX_MEMORY",
       "HARNESS_SANDBOX_MEMORY",
     ),
     cpus: optionOrEnv(
       program,
       "sandboxCpus",
       opts.sandboxCpus,
+      "MONTANE_SANDBOX_CPUS",
       "HARNESS_SANDBOX_CPUS",
     ),
     pids: optionOrEnv(
       program,
       "sandboxPids",
       opts.sandboxPids,
+      "MONTANE_SANDBOX_PIDS",
       "HARNESS_SANDBOX_PIDS",
     ),
   });
@@ -258,8 +272,9 @@ async function main(): Promise<void> {
       program,
       "maxTurns",
       opts.maxTurns,
-      "HARNESS_MAX_TURNS",
+      "MONTANE_MAX_TURNS",
       numericConfig(userConfig.budget?.maxTurns),
+      "HARNESS_MAX_TURNS",
     ),
     "--max-turns",
   );
@@ -270,8 +285,9 @@ async function main(): Promise<void> {
         program,
         "maxWallTimeMs",
         opts.maxWallTimeMs,
-        "HARNESS_MAX_WALL_TIME_MS",
+        "MONTANE_MAX_WALL_TIME_MS",
         numericConfig(userConfig.budget?.maxWallTimeMs),
+        "HARNESS_MAX_WALL_TIME_MS",
       ),
       "--max-wall-time-ms",
     ),
@@ -280,8 +296,9 @@ async function main(): Promise<void> {
         program,
         "maxInputTokens",
         opts.maxInputTokens,
-        "HARNESS_MAX_INPUT_TOKENS",
+        "MONTANE_MAX_INPUT_TOKENS",
         numericConfig(userConfig.budget?.maxInputTokens),
+        "HARNESS_MAX_INPUT_TOKENS",
       ),
       "--max-input-tokens",
     ),
@@ -290,8 +307,9 @@ async function main(): Promise<void> {
         program,
         "maxOutputTokens",
         opts.maxOutputTokens,
-        "HARNESS_MAX_OUTPUT_TOKENS",
+        "MONTANE_MAX_OUTPUT_TOKENS",
         numericConfig(userConfig.budget?.maxOutputTokens),
+        "HARNESS_MAX_OUTPUT_TOKENS",
       ),
       "--max-output-tokens",
     ),
@@ -300,8 +318,9 @@ async function main(): Promise<void> {
         program,
         "maxToolCalls",
         opts.maxToolCalls,
-        "HARNESS_MAX_TOOL_CALLS",
+        "MONTANE_MAX_TOOL_CALLS",
         numericConfig(userConfig.budget?.maxToolCalls),
+        "HARNESS_MAX_TOOL_CALLS",
       ),
       "--max-tool-calls",
     ),
@@ -310,8 +329,9 @@ async function main(): Promise<void> {
         program,
         "maxModelRetries",
         opts.maxModelRetries,
-        "HARNESS_MAX_MODEL_RETRIES",
+        "MONTANE_MAX_MODEL_RETRIES",
         numericConfig(userConfig.budget?.maxModelRetries),
+        "HARNESS_MAX_MODEL_RETRIES",
       ),
       "--max-model-retries",
     ),
@@ -701,7 +721,7 @@ async function runInteractiveSession(
   createRuntime: (session: ManagedSession) => SessionRuntime,
 ): Promise<void> {
   let runtime = initialRuntime;
-  console.log(`Interactive harness session started. Session: ${runtime.session.id}`);
+  console.log(`Montane Code session started. Session: ${runtime.session.id}`);
   console.log(
     "Commands: /new, /resume <id>, /session, /sessions, /inspect [id], /exit",
   );
@@ -899,7 +919,7 @@ function assertModelConfiguration(provider: string): void {
         "Set up your local environment:",
         "  1. Set OPENAI_API_KEY in the shell, or add it to a trusted env file.",
         "  2. Select that file with --env-file or user config envFile.",
-        "  3. Otherwise, Harness loads .env from the workspace root.",
+        "  3. Otherwise, Montane Code loads .env from the workspace root.",
         "",
         "For loop-only development without an API call, run:",
         "  npm start -- --provider mock --task \"Inspect README.md\"",

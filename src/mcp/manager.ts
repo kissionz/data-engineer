@@ -80,8 +80,8 @@ export class McpManager {
 
 async function connectServer(config: McpServerConfig): Promise<McpConnection> {
   const client = new Client({
-    name: "harness-ts",
-    version: "0.1.0",
+    name: "montane-code",
+    version: "0.2.0",
   });
   const httpSetup =
     config.transport.type === "http"

@@ -23,6 +23,22 @@ export async function runEvalCli(
   argv: string[],
   workspaceRoot = process.cwd(),
 ): Promise<number> {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    process.stdout.write(
+      [
+        "Usage: montane eval [options]",
+        "",
+        "Options:",
+        "  --suite <path>      Eval suite JSON",
+        "  --report <path>     Output report JSON",
+        "  --baseline <path>   Baseline report for regression comparison",
+        "  --no-git-sha        Omit the current Git SHA",
+        "  -h, --help          Display help",
+        "",
+      ].join("\n"),
+    );
+    return 0;
+  }
   const options = parseArgs(argv);
   const suite = await readSafeJson(
     workspaceRoot,

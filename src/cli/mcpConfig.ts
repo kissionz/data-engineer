@@ -51,7 +51,7 @@ export async function runMcpConfigCommand(
 
   const program = new Command();
   program
-    .name("harness mcp")
+    .name("montane mcp")
     .description("Configure trusted MCP servers without editing JSON");
 
   program
@@ -97,7 +97,7 @@ export async function runMcpConfigCommand(
       await removeServer(id, options);
     });
 
-  await program.parseAsync(["node", "harness-mcp", ...argv.slice(1)]);
+  await program.parseAsync(["node", "montane-mcp", ...argv.slice(1)]);
   return true;
 }
 
@@ -149,14 +149,14 @@ async function addServer(
     parsedServer.transport.type === "http" &&
     parsedServer.transport.auth?.type === "oauth"
   ) {
-    console.log("OAuth authorization will start on the next Harness launch.");
+    console.log("OAuth authorization will start on the next Montane Code launch.");
   } else if (kind === "maxcompute-local") {
     console.log(
       "Local MaxCompute MCP will inherit only its allowlisted environment variables.",
     );
     if (!options.serverConfig) {
       console.log(
-        "Set MAXCOMPUTE_ENDPOINT, MAXCOMPUTE_DEFAULT_PROJECT, and an Alibaba Cloud credential source before launching Harness.",
+        "Set MAXCOMPUTE_ENDPOINT, MAXCOMPUTE_DEFAULT_PROJECT, and an Alibaba Cloud credential source before launching Montane Code.",
       );
     }
   }
@@ -473,6 +473,7 @@ function parseServer(value: unknown): McpServerConfig {
 function resolveConfigPath(option: string | undefined): string {
   return path.resolve(
     option ??
+      process.env.MONTANE_CONFIG ??
       process.env.HARNESS_CONFIG ??
       defaultUserConfigPath(),
   );

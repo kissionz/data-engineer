@@ -1,6 +1,10 @@
-# harness-ts
+# Montane Code
 
-`harness-ts` 是一个基于 TypeScript / Node.js 的本地编程 Agent 运行时。它可以在指定工作区中读取和修改代码、执行受控命令、调用 OpenAI Responses API，并把会话、工具调用和恢复信息持久化到本地。
+**Montane Code（山境）** 是一个基于 TypeScript / Node.js 的安全优先本地编程 Agent。它可以在指定工作区中读取和修改代码、执行受控命令、调用模型与 MCP 服务，并把会话、工具调用和恢复信息持久化到本地。
+
+> 0.2 版本完成了从 `harness-ts` 到 Montane Code 的品牌迁移。主命令为
+> `montane`；旧的 `harness` 命令、`HARNESS_*` 环境变量和 `.harness`
+> 数据目录在 0.x 系列继续兼容，现有会话和配置无需迁移。
 
 ## 环境要求
 
@@ -42,7 +46,7 @@ cp .env.example .env
 npm start -- --task "Inspect this project"
 ```
 
-`harness-ts` 默认自动查找 Harness 安装或源码根目录中的 `.env`，因此通过 `npm link` 从其他项目启动时无需复制 API Key 或创建额外配置；随后还会从 `--cwd` 工作区根目录的 `.env` 补充尚未设置的项目变量。`--env-file` 可显式选择其他可信文件，相对路径仍以工作区为基准。也可以在可信用户配置中设置 `envFile`。显式 `--env-file`、用户配置 `envFile`、自动发现策略三者依次优先；shell 中已经设置的环境变量始终优先，不会被 env 文件覆盖。
+Montane Code 默认自动查找安装或源码根目录中的 `.env`，因此通过 `npm link` 从其他项目启动时无需复制 API Key 或创建额外配置；随后还会从 `--cwd` 工作区根目录的 `.env` 补充尚未设置的项目变量。`--env-file` 可显式选择其他可信文件，相对路径仍以工作区为基准。也可以在可信用户配置中设置 `envFile`。显式 `--env-file`、用户配置 `envFile`、自动发现策略三者依次优先；shell 中已经设置的环境变量始终优先，不会被 env 文件覆盖。
 
 默认使用真实的 OpenAI provider，必须提供 `OPENAI_API_KEY`。只想测试 Agent 循环而不发起 API 请求时，需要明确启用 mock provider：
 
@@ -51,6 +55,13 @@ npm run dev -- --provider mock --task "Inspect README.md"
 ```
 
 `npm start` 运行已构建的 `dist/index.js`；修改源码后应重新执行 `npm run build`。开发时可使用 `npm run dev` 直接运行 TypeScript 源码。
+
+构建并通过 `npm link` 安装后，也可以直接使用正式命令：
+
+```bash
+montane doctor
+montane --task "Inspect this project"
+```
 
 ## 从 GitHub 更新
 
@@ -183,7 +194,7 @@ npm start -- --resume 20260627-120000-a1b2c3
 }
 ```
 
-可通过 `--config <path>` 或 `HARNESS_CONFIG` 改用其他可信配置文件。`envFile` 可以是绝对路径；相对路径以用户配置文件所在目录为基准。在 Windows JSON 中需要把反斜杠写成 `\\`，例如 `"envFile": "D:\\project\\data-engineer\\.env"`。API Key 和 MCP token 不得直接写入 JSON 配置，必须通过环境变量或 `envFile` 指向的可信文件提供。
+可通过 `--config <path>` 或 `MONTANE_CONFIG` 改用其他可信配置文件；旧的 `HARNESS_CONFIG` 仍兼容。`envFile` 可以是绝对路径；相对路径以用户配置文件所在目录为基准。在 Windows JSON 中需要把反斜杠写成 `\\`，例如 `"envFile": "D:\\project\\data-engineer\\.env"`。API Key 和 MCP token 不得直接写入 JSON 配置，必须通过环境变量或 `envFile` 指向的可信文件提供。
 
 在 macOS 和 Linux 上，配置文件必须由当前用户拥有，并且不能对 group 或 others 开放写权限。Windows 不执行 Unix 文件所有者和 mode 检查，但仍应使用仅当前用户可访问的位置保存配置。
 
@@ -203,7 +214,7 @@ OPENAI_BASE_URL=https://api.openai.com/v1
 npm start -- --env-file .env
 ```
 
-env-file 只负责把值加入进程环境，不会把它变成普通 JSON 配置。CLI `--env-file` 的优先级高于用户配置中的 `envFile`；两者都未设置时，Harness 先加载安装或源码根目录 `.env`，再从工作区 `.env` 补充缺失变量。显式设置在 shell 中的变量仍然具有最高优先级。不要提交含有真实密钥的 `.env`，也不要加载不可信仓库提供的 env-file。
+env-file 只负责把值加入进程环境，不会把它变成普通 JSON 配置。CLI `--env-file` 的优先级高于用户配置中的 `envFile`；两者都未设置时，Montane Code 先加载安装或源码根目录 `.env`，再从工作区 `.env` 补充缺失变量。显式设置在 shell 中的变量仍然具有最高优先级。不要提交含有真实密钥的 `.env`，也不要加载不可信仓库提供的 env-file。
 
 ### 配置优先级
 
@@ -215,14 +226,16 @@ env-file 只负责把值加入进程环境，不会把它变成普通 JSON 配�
 - `OPENAI_PROVIDER`：`openai`，或仅供显式本地循环测试的 `mock`。
 - `OPENAI_MODEL`：覆盖模型名，默认 `gpt-4.1`。
 - `OPENAI_BASE_URL`：OpenAI-compatible API Base URL，默认 `https://api.openai.com/v1`。
-- `HARNESS_CONFIG`：可信用户配置文件路径。
-- `HARNESS_BASH_SANDBOX`：`auto`、`docker`、`host` 或 `off`。
-- `HARNESS_SANDBOX_IMAGE`：Bash 使用的 Docker image。
-- `HARNESS_SANDBOX_PULL`：`never` 或 `missing`。
-- `HARNESS_SANDBOX_NETWORK`：`none` 或 `bridge`。
-- `HARNESS_MAX_TURNS`、`HARNESS_MAX_WALL_TIME_MS`。
-- `HARNESS_MAX_INPUT_TOKENS`、`HARNESS_MAX_OUTPUT_TOKENS`。
-- `HARNESS_MAX_TOOL_CALLS`、`HARNESS_MAX_MODEL_RETRIES`。
+- `MONTANE_CONFIG`：可信用户配置文件路径。
+- `MONTANE_BASH_SANDBOX`：`auto`、`docker`、`host` 或 `off`。
+- `MONTANE_SANDBOX_IMAGE`：Bash 使用的 Docker image。
+- `MONTANE_SANDBOX_PULL`：`never` 或 `missing`。
+- `MONTANE_SANDBOX_NETWORK`：`none` 或 `bridge`。
+- `MONTANE_MAX_TURNS`、`MONTANE_MAX_WALL_TIME_MS`。
+- `MONTANE_MAX_INPUT_TOKENS`、`MONTANE_MAX_OUTPUT_TOKENS`。
+- `MONTANE_MAX_TOOL_CALLS`、`MONTANE_MAX_MODEL_RETRIES`。
+
+对应的 `HARNESS_*` 名称在 0.x 系列作为兼容别名继续生效；两者同时设置时，`MONTANE_*` 优先。
 
 也可以直接通过 CLI 指定模型：
 
@@ -342,7 +355,7 @@ npm run eval -- --suite evals/deterministic.v1.json \
 Memory 与会话恢复不是同一机制：Memory 用于跨会话保留明确的信息；`.harness/sessions/` 中的事件日志用于当前任务的连续性和恢复。
 
 文件工具默认只能访问当前工作区。若 `ListDirectory`、`Read`、`Write`、`Edit`、`Grep`、`Glob`
-或 Bash 的 `cwd` 明确指向工作区外路径，Harness 会先展示目标路径并请求用户批准。
+或 Bash 的 `cwd` 明确指向工作区外路径，Montane Code 会先展示目标路径并请求用户批准。
 `.git`、`node_modules`、`.env*` 等敏感路径仍会直接拒绝，工作区内的 symlink
 也不能借此逃逸到外部目录。
 
@@ -435,24 +448,24 @@ Windows 的绝对路径可使用 JSON 转义形式，例如 `"C:\\path\\to\\serv
 
 ```bash
 # 全局安装或 npm link 后
-harness mcp add maxcompute
+montane mcp add maxcompute
 
 # 从源码目录运行
 npm start -- mcp add maxcompute
 
 # MaxCompute 仅允许 VPC 访问时
-harness mcp add maxcompute --vpc --force
+montane mcp add maxcompute --vpc --force
 
 # 查看和删除
-harness mcp list
-harness mcp remove maxcompute
+montane mcp list
+montane mcp remove maxcompute
 ```
 
 MaxCompute 使用内置 Remote MCP OAuth 预设，无需手工填写 URL。自定义
 Streamable HTTP 服务使用交互式向导：
 
 ```bash
-harness mcp add custom
+montane mcp add custom
 ```
 
 `--vpc` 是单个 MCP Server 的显式网络授权：它允许该精确 host 解析到
@@ -478,12 +491,12 @@ MaxCompute VPC Endpoint，可改用官方 Local MCP。先安装 `uv`、克隆官
 仓库并在仓库目录执行一次 `uv sync`，然后运行：
 
 ```powershell
-harness mcp add maxcompute-local `
+montane mcp add maxcompute-local `
   --directory D:\project\alibabacloud-maxcompute-mcp-server `
   --force
 ```
 
-从 Harness 源码运行时使用：
+从 Montane Code 源码运行时使用：
 
 ```powershell
 npm start -- mcp add maxcompute-local `
@@ -491,7 +504,7 @@ npm start -- mcp add maxcompute-local `
   --force
 ```
 
-Local MCP 使用 stdio，不走 Remote MCP OAuth。可以在 Harness 自动加载的
+Local MCP 使用 stdio，不走 Remote MCP OAuth。可以在 Montane Code 自动加载的
 可信 `.env` 中配置上海 VPC Endpoint、默认 project 和一种阿里云凭证来源：
 
 ```dotenv
@@ -506,14 +519,14 @@ ALIBABA_CLOUD_ACCESS_KEY_SECRET=your_access_key_secret
 # ALIBABA_CLOUD_CREDENTIALS_URI=http://trusted-host/credentials
 ```
 
-Harness 配置只保存环境变量名，不保存这些凭证值。若已单独维护官方
+Montane Code 配置只保存环境变量名，不保存这些凭证值。若已单独维护官方
 MCMCP `config.json`，可额外传入
 `--server-config D:\absolute\path\config.json`。
 
 在 CI 或脚本中也可以完全非交互配置：
 
 ```bash
-harness mcp add custom --yes \
+montane mcp add custom --yes \
   --id remote_docs \
   --url https://mcp.example.com/mcp \
   --auth bearer \
@@ -567,7 +580,7 @@ Windows PowerShell 使用相同命令，不需要手工定位
 }
 ```
 
-首次连接时 Harness 会输出授权 URL，并在 `browser` 模式下尝试打开浏览器。
+首次连接时 Montane Code 会输出授权 URL，并在 `browser` 模式下尝试打开浏览器。
 OAuth 使用 loopback callback、PKCE 和 MCP SDK 的授权服务器发现流程；授权状态按
 server ID 与 URL 隔离保存在 `~/.harness/mcp-oauth/`，文件权限限制为当前用户可读写。
 无图形环境可将 `redirectMode` 改为 `manual`，在其他浏览器中打开输出的 URL；
@@ -792,7 +805,7 @@ npm start -- --worktree --task "Refactor the parser and run tests"
 npm start -- --worktree --worktree-base main
 ```
 
-运行时会打印生成的 `harness/<id>` branch 和 worktree path。Agent 的 Workspace、Session、Todo、Skills 和 sandbox 状态都会以该 worktree 为根目录。源 repository 必须保持 clean，避免未提交改动被静默遗漏。
+运行时会打印生成的 `montane/<id>` branch 和 worktree path。Agent 的 Workspace、Session、Todo、Skills 和 sandbox 状态都会以该 worktree 为根目录。源 repository 必须保持 clean，避免未提交改动被静默遗漏。
 
 退出后 worktree 会保留。使用打印出的路径继续：
 
@@ -805,9 +818,9 @@ npm start -- --cwd /path/to/worktree --resume latest
 ```bash
 git -C /path/to/worktree status
 git -C /path/to/worktree diff
-git merge harness/<id>
+git merge montane/<id>
 git worktree remove /path/to/worktree
-git branch -d harness/<id>
+git branch -d montane/<id>
 ```
 
 运行时不会自动 merge 或删除 worktree。`--worktree` 不能与 `--resume` 同时使用；继续已有 worktree 时应通过 `--cwd` 进入对应路径，再使用 `--resume`。
@@ -820,7 +833,7 @@ worktree 的 clean/dirty 状态：
 ```bash
 npm run worktrees -- --cwd /path/to/repository
 # 或安装 package 后：
-harness-worktrees --cwd /path/to/repository
+montane-worktrees --cwd /path/to/repository
 ```
 
 输出为 JSON，只包含 worktree path、HEAD、branch、锁定/可清理标记及变更数量。
@@ -836,7 +849,7 @@ harness-worktrees --cwd /path/to/repository
 npm run telemetry:report
 npm run telemetry:report -- --file /path/to/telemetry.jsonl
 # 或安装 package 后：
-harness-telemetry-report --file /path/to/telemetry.jsonl
+montane-telemetry-report --file /path/to/telemetry.jsonl
 ```
 
 报告只统计任务成功率、模型请求数与 token/cost、工具调用数和取消次数；不会输出

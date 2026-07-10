@@ -7,7 +7,10 @@ import {
 import { createInterface as createPromisesInterface } from "node:readline/promises";
 
 const INPUT_PROMPT = "› ";
-const ANSI_PATTERN = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+const ANSI_PATTERN = new RegExp(
+  `${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`,
+  "g",
+);
 const USER_HIGHLIGHT = "\u001b[48;5;236m";
 const RESET = "\u001b[0m";
 
@@ -212,7 +215,7 @@ export class InteractivePrompt {
 
       this.showSubmittedUserMessage(trimmed);
       this.guidanceHandler?.(trimmed);
-      this.rl.write("↳ queued\n");
+      process.stdout.write("↳ queued\n");
       this.rl.prompt();
     };
     this.rl.on("line", this.taskLineHandler);

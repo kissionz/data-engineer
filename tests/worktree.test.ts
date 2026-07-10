@@ -31,7 +31,7 @@ describe("WorktreeManager", () => {
     expect(info).toMatchObject({
       repositoryRoot: canonicalRepositoryRoot,
       baseRef: "main",
-      branch: expect.stringMatching(/^harness\//),
+      branch: expect.stringMatching(/^montane\//),
       path: expect.stringMatching(
         new RegExp(`^${escapeRegExp(worktreesRoot)}${escapeRegExp(path.sep)}`),
       ),
