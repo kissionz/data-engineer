@@ -34,13 +34,26 @@ export class CheckpointManager {
 
   constructor(
     private readonly workspace: Workspace,
-    sessionId: string,
+    sessionDirectory: string,
   ) {
-    this.filePath = path.join(
+    const sessionsRoot = path.join(
       workspaceStateRoot(workspace.root),
-      "checkpoints",
-      `${sessionId}.json`,
+      "sessions",
     );
+    const resolvedDirectory = path.resolve(sessionDirectory);
+    const relative = path.relative(sessionsRoot, resolvedDirectory);
+    if (
+      !relative ||
+      path.isAbsolute(relative) ||
+      relative.startsWith(`..${path.sep}`) ||
+      relative === ".." ||
+      path.dirname(relative) !== "."
+    ) {
+      throw new Error(
+        "Checkpoint storage must be one managed session directory.",
+      );
+    }
+    this.filePath = path.join(resolvedDirectory, "checkpoints.json");
   }
 
   wrap(tool: Tool): Tool {

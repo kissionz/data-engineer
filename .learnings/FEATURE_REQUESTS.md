@@ -229,3 +229,32 @@ Version every existing machine-output event, expose one discriminated `MachineEv
 - **Notes**: Added schema version 1 to every machine-output event and exported one SDK union plus the version constant. Internal session logs and tool execution paths remain unchanged.
 
 ---
+
+## [FEAT-20260720-004] cohesive_session_storage
+
+**Logged**: 2026-07-20T17:30:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Requested Capability
+Replace the fragmented session persistence layout with the strongest evaluated architecture instead of adding more commands around the old structure.
+
+### User Context
+Session events, metadata, Todo state, checkpoints, locks, and subagent logs were spread across unrelated flat paths. That made listing scan full logs and made future fork/rewind operations depend on assembling multiple stores.
+
+### Complexity Estimate
+medium
+
+### Suggested Implementation
+Keep the proven append-only JSONL event log, but replace the flat layout with one directory per session. Treat `summary.json` as the list index, co-locate Todo/checkpoints/leases, nest child audit logs, and migrate then remove the superseded flat paths.
+
+### Metadata
+- Frequency: first_time
+- Related Features: session resume, checkpoints, Todo, subagents
+
+### Resolution
+- **Resolved**: 2026-07-20T17:30:00+08:00
+- **Notes**: Replaced flat persistence with cohesive session directories and a locked, resumable v2 migration. Session listing now reads summaries directly; the old todos, checkpoints, lock, and child-log paths are no longer used after migration.
+
+---

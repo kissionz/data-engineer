@@ -521,3 +521,35 @@ Use a disposable writable npm cache for package dry runs instead of changing glo
 - **Notes**: Reran `npm run pack:check` with a temporary cache; the package and SDK declarations were generated successfully.
 
 ---
+
+## [ERR-20260720-004] checkpoint_constructor_path_ambiguity
+
+**Logged**: 2026-07-20T17:25:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The first checkpoint-layout migration changed a constructor argument from session ID to file path without making the new contract structurally explicit.
+
+### Error
+```
+Checkpoint tests created session-a, session-b, and session-c in the repository root.
+```
+
+### Context
+- Replaced the flat global checkpoint directory with per-session storage.
+- Existing tests still passed short IDs, which `path.resolve()` interpreted as repository-relative files.
+
+### Suggested Fix
+Accept a managed session directory, enforce that it is exactly one child below the workspace session root, and derive `checkpoints.json` internally.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/runtime/checkpoints.ts, tests/checkpoints.test.ts
+
+### Resolution
+- **Resolved**: 2026-07-20T17:25:00+08:00
+- **Notes**: Removed the test artifacts and constrained checkpoint storage to one managed per-session directory.
+
+---

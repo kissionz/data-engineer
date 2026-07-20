@@ -172,7 +172,10 @@ export class TaskTool implements Tool {
     const childSessionPath = path.join(
       workspaceStateRoot(this.workspace.root),
       "sessions",
-      `${childSessionId}.jsonl`,
+      safeSegment(this.parentSessionId),
+      "subagents",
+      childSessionId,
+      "events.jsonl",
     );
     const telemetry = this.telemetry
       ? new SessionTelemetryObserver(this.telemetry.sink, {

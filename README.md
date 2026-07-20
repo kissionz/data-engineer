@@ -772,7 +772,22 @@ npm start -- --sandbox-network bridge
 
 ## 会话、日志与上下文压缩
 
-会话日志、元数据和任务 Todo 分别持久化在 `.montane/sessions/` 和 `.montane/todos/`。新事件包含 session ID、唯一 event ID、单调递增 sequence 和 timestamp；元数据记录可选会话名称、模型及 lifecycle state。
+每个会话作为一个完整单元持久化在 `.montane/sessions/<session-id>/`：
+
+```text
+events.jsonl       # 权威事件日志
+summary.json       # 列表与恢复使用的会话摘要
+todos.json         # 当前任务 Todo
+checkpoints.json   # 文件编辑 checkpoint（首次编辑后创建）
+lease.lock         # 仅在会话被进程占用时存在
+subagents/         # 该会话的只读子代理日志
+```
+
+新事件包含 session ID、唯一 event ID、单调递增 sequence 和 timestamp；
+`summary.json` 记录可选会话名称、模型及 lifecycle state，`/sessions` 直接读取摘要，
+不再逐个扫描完整事件日志。旧版平铺在 `sessions/`、`todos/` 和 `checkpoints/`
+中的会话文件会在首次启动时通过带锁、可重入的布局迁移移入会话目录；迁移完成后
+只保留新布局。
 
 已完成的 `toolCallId` 可从日志恢复。已经开始但被中断的执行会标记为 `unknown_outcome`，不会自动再次运行。该状态用于任务恢复，不等同于长期 Memory。
 

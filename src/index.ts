@@ -605,7 +605,7 @@ function createAgent(
   const skillLoader = new SkillLoader(options.workspace);
   const checkpoints = new CheckpointManager(
     options.workspace,
-    options.session.id,
+    options.session.directoryPath,
   );
   hooks.register("BeforeToolUse", protectSensitiveWrites);
 

@@ -76,15 +76,29 @@ describe("TaskTool", () => {
     );
     expect(model.firstSystemMessage).toContain("strict read-only code reviewer");
 
-    const sessionFiles = await readdir(
-      path.join(root, ".montane", "sessions"),
+    const subagentsDir = path.join(
+      root,
+      ".montane",
+      "sessions",
+      "parent-session",
+      "subagents",
     );
-    const childFile = sessionFiles.find((name) =>
+    const sessionFiles = await readdir(
+      subagentsDir,
+    );
+    const childDirectory = sessionFiles.find((name) =>
       name.startsWith(".sub-parent-session-code-reviewer-"),
     );
-    expect(childFile).toBeDefined();
+    expect(childDirectory).toBeDefined();
     expect(
-      await readFile(path.join(root, ".montane", "sessions", childFile as string), "utf8"),
+      await readFile(
+        path.join(
+          subagentsDir,
+          childDirectory as string,
+          "events.jsonl",
+        ),
+        "utf8",
+      ),
     ).toContain('"type":"assistant_final"');
   });
 

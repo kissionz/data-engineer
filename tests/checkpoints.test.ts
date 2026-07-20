@@ -18,7 +18,7 @@ describe("CheckpointManager", () => {
   it("leaves read-only tools unchanged and reports an empty undo stack", async () => {
     const root = await fixture();
     const workspace = new Workspace(root);
-    const manager = new CheckpointManager(workspace, "session-empty");
+    const manager = checkpointManager(workspace, root, "session-empty");
     const read = new ReadTool(workspace);
 
     expect(manager.wrap(read)).toBe(read);
@@ -32,13 +32,25 @@ describe("CheckpointManager", () => {
     const root = await fixture();
     await writeFile(path.join(root, "a.txt"), "before\n");
     const workspace = new Workspace(root);
-    const manager = new CheckpointManager(workspace, "session-a");
+    const manager = checkpointManager(workspace, root, "session-a");
     const result = await manager.wrap(new EditTool(workspace)).execute(
       { file_path: "a.txt", old_string: "before", new_string: "after" },
       { toolCallId: "edit-1" },
     );
 
     expect(result.ok).toBe(true);
+    await expect(
+      readFile(
+        path.join(
+          root,
+          ".montane",
+          "sessions",
+          "session-a",
+          "checkpoints.json",
+        ),
+        "utf8",
+      ),
+    ).resolves.toContain('"toolCallId":"edit-1"');
     await expect(manager.undoLatest()).resolves.toMatchObject({ restored: true });
     await expect(readFile(path.join(root, "a.txt"), "utf8")).resolves.toBe("before\n");
   });
@@ -46,7 +58,7 @@ describe("CheckpointManager", () => {
   it("removes a newly created file", async () => {
     const root = await fixture();
     const workspace = new Workspace(root);
-    const manager = new CheckpointManager(workspace, "session-b");
+    const manager = checkpointManager(workspace, root, "session-b");
     await manager.wrap(new WriteTool(workspace)).execute(
       { file_path: "created.txt", content: "created\n" },
       { toolCallId: "write-1" },
@@ -60,7 +72,7 @@ describe("CheckpointManager", () => {
     const root = await fixture();
     await writeFile(path.join(root, "a.txt"), "before\n");
     const workspace = new Workspace(root);
-    const manager = new CheckpointManager(workspace, "session-c");
+    const manager = checkpointManager(workspace, root, "session-c");
     await manager.wrap(new EditTool(workspace)).execute(
       { file_path: "a.txt", old_string: "before", new_string: "after" },
       { toolCallId: "edit-1" },
@@ -75,7 +87,7 @@ describe("CheckpointManager", () => {
     const root = await fixture();
     await writeFile(path.join(root, "exists.txt"), "existing\n");
     const workspace = new Workspace(root);
-    const manager = new CheckpointManager(workspace, "session-failed");
+    const manager = checkpointManager(workspace, root, "session-failed");
     const result = await manager.wrap(new WriteTool(workspace)).execute(
       { file_path: "exists.txt", content: "replacement\n" },
       { toolCallId: "write-failed" },
@@ -84,7 +96,33 @@ describe("CheckpointManager", () => {
     expect(result.ok).toBe(false);
     await expect(manager.undoLatest()).resolves.toMatchObject({ restored: false });
   });
+
+  it("rejects checkpoint storage outside a managed session directory", async () => {
+    const root = await fixture();
+    const workspace = new Workspace(root);
+
+    expect(() => new CheckpointManager(workspace, root)).toThrow(
+      "one managed session directory",
+    );
+    expect(
+      () => new CheckpointManager(
+        workspace,
+        path.join(root, ".montane", "sessions", "parent", "nested"),
+      ),
+    ).toThrow("one managed session directory");
+  });
 });
+
+function checkpointManager(
+  workspace: Workspace,
+  root: string,
+  sessionId: string,
+): CheckpointManager {
+  return new CheckpointManager(
+    workspace,
+    path.join(root, ".montane", "sessions", sessionId),
+  );
+}
 
 async function fixture(): Promise<string> {
   const root = await mkdtemp(path.join(os.tmpdir(), "montane-checkpoint-"));

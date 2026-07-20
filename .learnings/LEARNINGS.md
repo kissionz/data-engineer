@@ -69,3 +69,28 @@ For each iteration, document the missing user outcome, reuse the narrowest exist
 - Pattern-Key: simplify.single_primary_path
 
 ---
+
+## [LRN-20260720-002] correction
+
+**Logged**: 2026-07-20T17:30:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Non-redundancy requires choosing the best architecture and replacing inferior paths, not preserving existing behavior by default.
+
+### Details
+The previous interpretation treated an existing capability as a reason to avoid stronger alternatives and reduced session evolution to additive metadata polish. The user clarified that alternatives must be evaluated on correctness, simplicity, maintainability, and user outcome. When a candidate is materially better, the right change is a bounded replacement that removes the superseded implementation and migrates its consumers, rather than adding another option or decorating the old design.
+
+### Suggested Action
+For each Grok-inspired iteration, compare the current and candidate designs, choose one winner, define the deletion and migration boundary, and verify that only the winning path remains. Do not use “already exists” as a reason to retain a weaker abstraction.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/agent/sessionManager.ts, src/runtime/checkpoints.ts, src/tools/registry.ts
+- Tags: replacement, architecture, simplicity, migration, non-redundancy
+- See Also: LRN-20260720-001
+- Pattern-Key: simplify.replace_inferior_path
+
+---

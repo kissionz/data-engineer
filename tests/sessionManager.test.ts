@@ -28,7 +28,10 @@ describe("SessionManager", () => {
       id: first.id,
     });
     await expect(manager.list()).resolves.toEqual(
-      expect.arrayContaining([first.id, second.id]),
+      expect.arrayContaining([
+        expect.objectContaining({ id: first.id }),
+        expect.objectContaining({ id: second.id }),
+      ]),
     );
     expect(first.todoPath).not.toBe(second.todoPath);
     await expect(readFile(first.todoPath, "utf8")).resolves.toBe("[]\n");
@@ -40,9 +43,10 @@ describe("SessionManager", () => {
     const root = await makeRoot();
     const manager = new SessionManager(root, {
       model: "production-model",
+    });
+    const session = await manager.create({
       parentSessionId: "parent-session",
     });
-    const session = await manager.create();
     const created = await session.readMetadata();
 
     expect(created).toMatchObject({
@@ -113,8 +117,10 @@ describe("SessionManager", () => {
     const root = await makeRoot();
     const sessionsDir = path.join(root, ".montane", "sessions");
     const todosDir = path.join(root, ".montane", "todos");
+    const checkpointsDir = path.join(root, ".montane", "checkpoints");
     await mkdir(sessionsDir, { recursive: true });
     await mkdir(todosDir);
+    await mkdir(checkpointsDir);
     await writeFile(
       path.join(sessionsDir, "old-session.jsonl"),
       [
@@ -125,6 +131,11 @@ describe("SessionManager", () => {
       "utf8",
     );
     await writeFile(path.join(todosDir, "old-session.json"), "[]\n", "utf8");
+    await writeFile(
+      path.join(checkpointsDir, "old-session.json"),
+      '[{"legacy":true}]\n',
+      "utf8",
+    );
 
     const session = await new SessionManager(root, {
       model: "resume-model",
@@ -141,7 +152,24 @@ describe("SessionManager", () => {
     await expect(readFile(session.metadataPath, "utf8")).resolves.toContain(
       '"lastSequence": 2',
     );
+    await expect(readFile(session.checkpointPath, "utf8")).resolves.toContain(
+      '"legacy":true',
+    );
+    await expect(lstat(todosDir)).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(lstat(checkpointsDir)).rejects.toMatchObject({ code: "ENOENT" });
     await session.release();
+  });
+
+  it("lists from summary files without parsing authoritative event logs", async () => {
+    const root = await makeRoot();
+    const manager = new SessionManager(root);
+    const session = await manager.create();
+    await session.release();
+    await writeFile(session.sessionPath, "{broken}\n", "utf8");
+
+    await expect(manager.list()).resolves.toEqual([
+      expect.objectContaining({ id: session.id }),
+    ]);
   });
 
   it("inspects current metadata without acquiring the writer lease", async () => {
@@ -198,8 +226,14 @@ describe("SessionManager", () => {
       lastSequence: 1,
     });
     await expect(
-      readFile(path.join(sessionsDir, "inspect-old.meta.json"), "utf8"),
+      readFile(
+        path.join(sessionsDir, "inspect-old", "summary.json"),
+        "utf8",
+      ),
     ).resolves.toContain('"lastSequence": 1');
+    await expect(
+      lstat(path.join(sessionsDir, "inspect-old.jsonl")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("rebuilds corrupt regular metadata from the event log", async () => {
@@ -289,11 +323,17 @@ describe("SessionManager", () => {
 
     const current = await manager.start();
     const sessions = await manager.list();
-    const migratedId = sessions.find((id) => id !== current.id);
+    const migratedId = sessions.find((item) => item.id !== current.id)?.id;
 
     expect(migratedId).toBeDefined();
     await expect(
       readFile(path.join(sessionsDir, `${migratedId}.jsonl`), "utf8"),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expect(
+      readFile(
+        path.join(sessionsDir, String(migratedId), "events.jsonl"),
+        "utf8",
+      ),
     ).resolves.toContain('"text":"legacy"');
   });
 
@@ -326,11 +366,8 @@ describe("SessionManager", () => {
     await owner.release();
 
     const lockPath = path.join(
-      root,
-      ".montane",
-      "sessions",
-      ".locks",
-      `${owner.id}.lock`,
+      owner.directoryPath,
+      "lease.lock",
     );
     await writeFile(
       lockPath,
@@ -368,10 +405,20 @@ describe("SessionManager", () => {
     const sessionsDir = path.join(root, ".montane", "sessions");
 
     expect(await readdir(sessionsDir)).toEqual(
-      expect.arrayContaining(["current", `${session.id}.jsonl`]),
+      expect.arrayContaining(["current", session.id]),
     );
     expect((await readdir(sessionsDir)).filter((name) => name.startsWith(".current.")))
       .toEqual([]);
+    expect(await readdir(session.directoryPath)).toEqual(
+      expect.arrayContaining([
+        "events.jsonl",
+        "lease.lock",
+        "summary.json",
+        "todos.json",
+      ]),
+    );
+    await expect(readFile(path.join(sessionsDir, ".layout-v2"), "utf8"))
+      .resolves.toBe("2\n");
   });
 
   it.runIf(process.platform !== "win32")(

@@ -152,15 +152,14 @@ async function handleCommand(
   }
   if (command === "/sessions") {
     const sessions = await sessionManager.list();
-    const rows = await Promise.all(sessions.map(async (id) => {
-      const metadata = await sessionManager.inspect(id);
+    const rows = sessions.map((metadata) => {
       return [
-        id,
+        metadata.id,
         metadata.status,
         metadata.model,
         ...(metadata.title ? [metadata.title] : []),
       ].join("\t");
-    }));
+    });
     console.log(rows.length > 0 ? rows.join("\n") : "[No sessions]");
     return { handled: true, runtime };
   }

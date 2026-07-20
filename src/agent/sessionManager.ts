@@ -6,6 +6,7 @@ import {
   open,
   readdir,
   rename,
+  rmdir,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -17,6 +18,7 @@ import {
 } from "../runtime/productPaths.js";
 import { setTimeout as delay } from "node:timers/promises";
 import { sameFileIdentity } from "../runtime/fileIdentity.js";
+import { acquireFileLock } from "../runtime/fileLock.js";
 import { SessionStore } from "./session.js";
 import type { SessionEvent, SessionStatus } from "./types.js";
 export type { SessionStatus } from "./types.js";
@@ -35,14 +37,20 @@ export interface SessionMetadata {
 
 export interface SessionManagerOptions {
   model?: string;
+}
+
+export interface CreateSessionOptions {
   parentSessionId?: string;
+  title?: string;
 }
 
 export interface ManagedSession {
   id: string;
+  directoryPath: string;
   sessionPath: string;
   todoPath: string;
   metadataPath: string;
+  checkpointPath: string;
   readMetadata(): Promise<SessionMetadata>;
   updateTitle(title: string): Promise<SessionMetadata>;
   updateStatus(status: SessionStatus): Promise<SessionMetadata>;
@@ -52,9 +60,11 @@ export interface ManagedSession {
 
 interface SessionFiles {
   id: string;
+  directoryPath: string;
   sessionPath: string;
   todoPath: string;
   metadataPath: string;
+  checkpointPath: string;
 }
 
 interface SessionLock {
@@ -67,25 +77,22 @@ interface SessionLock {
 export class SessionManager {
   private readonly workspaceRoot: string;
   private readonly model: string;
-  private readonly parentSessionId?: string;
   private readonly stateDir: string;
   private readonly stateLabel: string;
   private readonly sessionsDir: string;
-  private readonly todosDir: string;
-  private readonly locksDir: string;
   private readonly currentFile: string;
+  private readonly layoutMarker: string;
   private readonly activeSessions = new Map<string, ManagedSession>();
+  private storageReady?: Promise<void>;
 
   constructor(workspaceRoot: string, options: SessionManagerOptions = {}) {
     this.workspaceRoot = path.resolve(workspaceRoot);
     this.model = options.model ?? "unknown";
-    this.parentSessionId = options.parentSessionId;
     this.stateDir = workspaceStateRoot(this.workspaceRoot);
     this.stateLabel = stateDirectoryLabel(this.stateDir);
     this.sessionsDir = path.join(this.stateDir, "sessions");
-    this.todosDir = path.join(this.stateDir, "todos");
-    this.locksDir = path.join(this.sessionsDir, ".locks");
     this.currentFile = path.join(this.sessionsDir, "current");
+    this.layoutMarker = path.join(this.sessionsDir, ".layout-v2");
   }
 
   async start(resume?: string): Promise<ManagedSession> {
@@ -98,12 +105,21 @@ export class SessionManager {
     return this.create();
   }
 
-  async create(): Promise<ManagedSession> {
+  async create(options: CreateSessionOptions = {}): Promise<ManagedSession> {
     await this.ensureStorageDirectories();
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const id = createSessionId();
       const session = this.describe(id);
+
+      try {
+        await mkdir(session.directoryPath, { mode: 0o700 });
+      } catch (error: unknown) {
+        if (hasCode(error, "EEXIST")) {
+          continue;
+        }
+        throw error;
+      }
 
       try {
         await writeFile(session.sessionPath, "", {
@@ -112,6 +128,7 @@ export class SessionManager {
           mode: 0o600,
         });
       } catch (error: unknown) {
+        await removeSessionDirectory(session);
         if (hasCode(error, "EEXIST")) {
           continue;
         }
@@ -125,7 +142,7 @@ export class SessionManager {
           mode: 0o600,
         });
       } catch (error: unknown) {
-        await removeIfExists(session.sessionPath);
+        await removeSessionDirectory(session);
         if (hasCode(error, "EEXIST")) {
           continue;
         }
@@ -133,12 +150,9 @@ export class SessionManager {
       }
 
       try {
-        await this.createMetadata(session);
+        await this.createMetadata(session, options);
       } catch (error: unknown) {
-        await Promise.all([
-          removeIfExists(session.sessionPath),
-          removeIfExists(session.todoPath),
-        ]);
+        await removeSessionDirectory(session);
         throw error;
       }
 
@@ -150,11 +164,7 @@ export class SessionManager {
         return managed;
       } catch (error: unknown) {
         await managed?.release();
-        await Promise.all([
-          removeIfExists(session.sessionPath),
-          removeIfExists(session.todoPath),
-          removeIfExists(session.metadataPath),
-        ]);
+        await removeSessionDirectory(session);
         throw error;
       }
     }
@@ -190,16 +200,19 @@ export class SessionManager {
     }
   }
 
-  async list(limit = 20): Promise<string[]> {
+  async list(limit = 20): Promise<SessionMetadata[]> {
     await this.ensureStorageDirectories();
     const entries = await readdir(this.sessionsDir, { withFileTypes: true });
+    const summaries = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory() && isValidSessionId(entry.name))
+        .map((entry) => this.ensureMetadata(this.describe(entry.name))),
+    );
 
-    return entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-      .map((entry) => entry.name.slice(0, -".jsonl".length))
-      .filter((id) => id !== "latest" && isValidSessionId(id))
-      .sort()
-      .reverse()
+    return summaries
+      .sort((left, right) =>
+        right.updatedAt.localeCompare(left.updatedAt) ||
+        right.id.localeCompare(left.id))
       .slice(0, Math.max(1, limit));
   }
 
@@ -243,32 +256,44 @@ export class SessionManager {
         metadata.lastSequence,
         latestEvent?.sequence ?? 0,
       ),
-      updatedAt: latestEvent?.timestamp ?? metadata.updatedAt,
+      updatedAt:
+        latestEvent?.timestamp && latestEvent.timestamp > metadata.updatedAt
+          ? latestEvent.timestamp
+          : metadata.updatedAt,
     };
   }
 
   private describe(id: string): SessionFiles {
     const safeId = validateRealSessionId(id);
 
+    const directoryPath = path.join(this.sessionsDir, safeId);
     return {
       id: safeId,
-      sessionPath: path.join(this.sessionsDir, `${safeId}.jsonl`),
-      todoPath: path.join(this.todosDir, `${safeId}.json`),
-      metadataPath: path.join(this.sessionsDir, `${safeId}.meta.json`),
+      directoryPath,
+      sessionPath: path.join(directoryPath, "events.jsonl"),
+      todoPath: path.join(directoryPath, "todos.json"),
+      metadataPath: path.join(directoryPath, "summary.json"),
+      checkpointPath: path.join(directoryPath, "checkpoints.json"),
     };
   }
 
-  private async createMetadata(session: SessionFiles): Promise<SessionMetadata> {
+  private async createMetadata(
+    session: SessionFiles,
+    options: CreateSessionOptions = {},
+  ): Promise<SessionMetadata> {
     const timestamp = new Date().toISOString();
     const metadata: SessionMetadata = {
       id: session.id,
+      ...(options.title ? { title: normalizeSessionTitle(options.title) } : {}),
       workspaceRoot: this.workspaceRoot,
       model: this.model,
       createdAt: timestamp,
       updatedAt: timestamp,
       status: "running",
       lastSequence: 0,
-      ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
+      ...(options.parentSessionId
+        ? { parentSessionId: validateRealSessionId(options.parentSessionId) }
+        : {}),
     };
     await writeMetadataAtomic(session.metadataPath, metadata, false);
     return metadata;
@@ -315,17 +340,111 @@ export class SessionManager {
           ),
         ) ?? "running",
       lastSequence: latestEvent?.sequence ?? 0,
-      ...(this.parentSessionId ? { parentSessionId: this.parentSessionId } : {}),
     };
     await writeMetadataAtomic(session.metadataPath, metadata, replaceExisting);
     return metadata;
   }
 
   private async ensureStorageDirectories(): Promise<void> {
+    this.storageReady ??= this.prepareStorage();
+    await this.storageReady;
+  }
+
+  private async prepareStorage(): Promise<void> {
     await ensureDirectory(this.stateDir, this.stateLabel);
     await ensureDirectory(this.sessionsDir, `${this.stateLabel}/sessions`);
-    await ensureDirectory(this.todosDir, `${this.stateLabel}/todos`);
-    await ensureDirectory(this.locksDir, `${this.stateLabel}/sessions/.locks`);
+    const releaseMigrationLock = await acquireFileLock(this.layoutMarker, {
+      lockPath: `${this.layoutMarker}.lock`,
+      label: "session layout migration",
+    });
+    try {
+      if (await hasLayoutMarker(this.layoutMarker)) {
+        return;
+      }
+      await this.migrateFlatLayout();
+      await writeFile(this.layoutMarker, "2\n", {
+        encoding: "utf8",
+        flag: "wx",
+        mode: 0o600,
+      });
+      await syncDirectory(this.sessionsDir);
+    } finally {
+      await releaseMigrationLock();
+    }
+  }
+
+  private async migrateFlatLayout(): Promise<void> {
+    const entries = await readdir(this.sessionsDir, { withFileTypes: true });
+    const legacyTodosDir = path.join(this.stateDir, "todos");
+    const legacyCheckpointsDir = path.join(this.stateDir, "checkpoints");
+    const sessionIds = new Set<string>();
+
+    for (const entry of entries) {
+      if (
+        entry.isSymbolicLink() &&
+        entry.name.endsWith(".jsonl")
+      ) {
+        throw new Error(
+          `Refusing to migrate symbolic link at ${this.stateLabel}/sessions/${entry.name}.`,
+        );
+      }
+      if (entry.isDirectory() && isValidSessionId(entry.name)) {
+        sessionIds.add(entry.name);
+      } else if (
+        entry.isFile() &&
+        entry.name.endsWith(".jsonl") &&
+        entry.name !== "latest.jsonl"
+      ) {
+        const id = entry.name.slice(0, -".jsonl".length);
+        if (isValidSessionId(id)) {
+          sessionIds.add(id);
+        }
+      }
+    }
+
+    for (const id of sessionIds) {
+      const session = this.describe(id);
+      await ensureDirectory(
+        session.directoryPath,
+        `${this.stateLabel}/sessions/${id}`,
+      );
+      await moveLegacyFile(
+        path.join(this.sessionsDir, `${id}.jsonl`),
+        session.sessionPath,
+        `Legacy event log for session ${id}`,
+        true,
+      );
+      await assertRegularFile(session.sessionPath, `Session ${id}`);
+      await moveLegacyFile(
+        path.join(this.sessionsDir, `${id}.meta.json`),
+        session.metadataPath,
+        `Legacy metadata for session ${id}`,
+        true,
+      );
+      await moveLegacyFile(
+        path.join(legacyTodosDir, `${id}.json`),
+        session.todoPath,
+        `Legacy todo file for session ${id}`,
+        true,
+      );
+      await moveLegacyFile(
+        path.join(legacyCheckpointsDir, `${id}.json`),
+        session.checkpointPath,
+        `Legacy checkpoint file for session ${id}`,
+        true,
+      );
+      await ensureRegularFile(
+        session.todoPath,
+        "[]\n",
+        `Todo file for session ${id}`,
+      );
+      await this.ensureMetadata(session);
+    }
+
+    await Promise.all([
+      removeDirectoryIfEmpty(legacyTodosDir),
+      removeDirectoryIfEmpty(legacyCheckpointsDir),
+    ]);
   }
 
   private async setCurrent(id: string): Promise<void> {
@@ -380,7 +499,7 @@ export class SessionManager {
 
   private async migrateLegacySession(): Promise<string> {
     const legacySessionPath = path.join(this.sessionsDir, "latest.jsonl");
-    const legacyTodoPath = path.join(this.todosDir, "latest.json");
+    const legacyTodoPath = path.join(this.stateDir, "todos", "latest.json");
     let sessionContents: string;
 
     try {
@@ -406,12 +525,22 @@ export class SessionManager {
       const session = this.describe(id);
 
       try {
+        await mkdir(session.directoryPath, { mode: 0o700 });
+      } catch (error: unknown) {
+        if (hasCode(error, "EEXIST")) {
+          continue;
+        }
+        throw error;
+      }
+
+      try {
         await writeFile(session.sessionPath, sessionContents, {
           encoding: "utf8",
           flag: "wx",
           mode: 0o600,
         });
       } catch (error: unknown) {
+        await removeSessionDirectory(session);
         if (hasCode(error, "EEXIST")) {
           continue;
         }
@@ -427,11 +556,7 @@ export class SessionManager {
         await this.ensureMetadata(session);
         await this.setCurrent(id);
       } catch (error: unknown) {
-        await Promise.all([
-          removeIfExists(session.sessionPath),
-          removeIfExists(session.todoPath),
-          removeIfExists(session.metadataPath),
-        ]);
+        await removeSessionDirectory(session);
         if (hasCode(error, "EEXIST")) {
           continue;
         }
@@ -440,6 +565,7 @@ export class SessionManager {
 
       await removeIfExists(legacySessionPath);
       await removeIfExists(legacyTodoPath);
+      await removeDirectoryIfEmpty(path.dirname(legacyTodoPath));
       return id;
     }
 
@@ -468,8 +594,11 @@ export class SessionManager {
       return active;
     }
 
-    await ensureDirectory(this.locksDir, `${this.stateLabel}/sessions/.locks`);
-    const lockPath = path.join(this.locksDir, `${session.id}.lock`);
+    await ensureDirectory(
+      session.directoryPath,
+      `${this.stateLabel}/sessions/${session.id}`,
+    );
+    const lockPath = path.join(session.directoryPath, "lease.lock");
 
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const lock: SessionLock = {
@@ -567,6 +696,70 @@ export class SessionManager {
 
     throw new Error(`Unable to acquire session lease: ${session.id}`);
   }
+}
+
+async function hasLayoutMarker(markerPath: string): Promise<boolean> {
+  try {
+    const version = (await readSafeFile(markerPath, "Session layout marker")).trim();
+    if (version !== "2") {
+      throw new Error(`Unsupported session layout version: ${version || "empty"}.`);
+    }
+    return true;
+  } catch (error: unknown) {
+    if (hasCode(error, "ENOENT")) {
+      return false;
+    }
+    throw error;
+  }
+}
+
+async function moveLegacyFile(
+  sourcePath: string,
+  destinationPath: string,
+  label: string,
+  optional = false,
+): Promise<void> {
+  try {
+    await assertRegularFile(sourcePath, label);
+  } catch (error: unknown) {
+    if (optional && hasCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
+  }
+
+  try {
+    await lstat(destinationPath);
+    throw new Error(
+      `Refusing ambiguous session migration: both ${label} and its destination exist.`,
+    );
+  } catch (error: unknown) {
+    if (!hasCode(error, "ENOENT")) {
+      throw error;
+    }
+  }
+  await renameWithRetry(sourcePath, destinationPath);
+}
+
+async function removeDirectoryIfEmpty(directoryPath: string): Promise<void> {
+  try {
+    await rmdir(directoryPath);
+  } catch (error: unknown) {
+    if (!hasCode(error, "ENOENT") && !hasCode(error, "ENOTEMPTY")) {
+      throw error;
+    }
+  }
+}
+
+async function removeSessionDirectory(session: SessionFiles): Promise<void> {
+  await Promise.all([
+    removeIfExists(session.sessionPath),
+    removeIfExists(session.todoPath),
+    removeIfExists(session.metadataPath),
+    removeIfExists(session.checkpointPath),
+    removeIfExists(path.join(session.directoryPath, "lease.lock")),
+  ]);
+  await removeDirectoryIfEmpty(session.directoryPath);
 }
 
 async function ensureDirectory(directoryPath: string, label: string): Promise<void> {
