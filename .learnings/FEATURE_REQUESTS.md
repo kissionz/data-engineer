@@ -200,3 +200,32 @@ Store one optional, explicitly assigned title in existing session metadata, expo
 - **Notes**: Added one normalized metadata title and one interactive rename command; no automatic naming, alias layer, or search index was introduced.
 
 ---
+
+## [FEAT-20260720-003] versioned_machine_event_boundary
+
+**Logged**: 2026-07-20T17:15:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: protocol
+
+### Requested Capability
+Adopt a stable Tool/Event boundary without adding a parallel event framework.
+
+### User Context
+Machine consumers need one predictable output contract. Previously only the final JSON result carried a schema version, while streamed text and tool events were implicit shapes.
+
+### Complexity Estimate
+small
+
+### Suggested Implementation
+Version every existing machine-output event, expose one discriminated `MachineEvent` union from the SDK, and retain the current reporter as the sole serialization path.
+
+### Metadata
+- Frequency: first_time
+- Related Features: stream-json, SDK, tool reporting
+
+### Resolution
+- **Resolved**: 2026-07-20T17:15:00+08:00
+- **Notes**: Added schema version 1 to every machine-output event and exported one SDK union plus the version constant. Internal session logs and tool execution paths remain unchanged.
+
+---

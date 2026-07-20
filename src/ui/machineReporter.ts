@@ -4,9 +4,22 @@ import type { ToolExecutionResult } from "../tools/base.js";
 import { summarizeToolCall } from "./toolPresentation.js";
 
 export type OutputFormat = "text" | "json" | "stream-json";
+export const MACHINE_OUTPUT_SCHEMA_VERSION = 1 as const;
+
+export interface MachineTextDeltaEvent {
+  type: "text_delta";
+  schemaVersion: typeof MACHINE_OUTPUT_SCHEMA_VERSION;
+  delta: string;
+}
+
+export interface MachineTextEndEvent {
+  type: "text_end";
+  schemaVersion: typeof MACHINE_OUTPUT_SCHEMA_VERSION;
+}
 
 export interface MachineToolEvent {
   type: "tool";
+  schemaVersion: typeof MACHINE_OUTPUT_SCHEMA_VERSION;
   id: string;
   name: string;
   summary: string;
@@ -16,7 +29,7 @@ export interface MachineToolEvent {
 
 export interface MachineResult {
   type: "result";
-  schemaVersion: 1;
+  schemaVersion: typeof MACHINE_OUTPUT_SCHEMA_VERSION;
   sessionId: string;
   status: "completed" | "cancelled" | "failed";
   text: string;
@@ -28,6 +41,12 @@ export interface MachineResult {
     estimatedCostUsd: number;
   };
 }
+
+export type MachineEvent =
+  | MachineTextDeltaEvent
+  | MachineTextEndEvent
+  | MachineToolEvent
+  | MachineResult;
 
 export class MachineReporter implements AgentReporter {
   private readonly text: string[] = [];
@@ -42,13 +61,20 @@ export class MachineReporter implements AgentReporter {
   onTextDelta(delta: string): void {
     this.text.push(delta);
     if (this.format === "stream-json") {
-      this.emit({ type: "text_delta", delta });
+      this.emit({
+        type: "text_delta",
+        schemaVersion: MACHINE_OUTPUT_SCHEMA_VERSION,
+        delta,
+      });
     }
   }
 
   onTextEnd(): void {
     if (this.format === "stream-json") {
-      this.emit({ type: "text_end" });
+      this.emit({
+        type: "text_end",
+        schemaVersion: MACHINE_OUTPUT_SCHEMA_VERSION,
+      });
     }
   }
 
@@ -59,6 +85,7 @@ export class MachineReporter implements AgentReporter {
   ): void {
     const event: MachineToolEvent = {
       type: "tool",
+      schemaVersion: MACHINE_OUTPUT_SCHEMA_VERSION,
       id: call.id,
       name: call.name,
       summary: summarizeToolCall(call),
@@ -79,7 +106,7 @@ export class MachineReporter implements AgentReporter {
   ): MachineResult {
     const result: MachineResult = {
       type: "result",
-      schemaVersion: 1,
+      schemaVersion: MACHINE_OUTPUT_SCHEMA_VERSION,
       sessionId,
       status,
       text: resultText ?? this.text.join(""),
@@ -92,7 +119,7 @@ export class MachineReporter implements AgentReporter {
 
   dispose(): void {}
 
-  private emit(value: unknown): void {
+  private emit(value: MachineEvent): void {
     this.write(`${JSON.stringify(value)}\n`);
   }
 }

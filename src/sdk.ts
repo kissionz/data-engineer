@@ -42,9 +42,15 @@ export {
   workspaceStateRoot,
   userStateRoot,
 } from "./runtime/productPaths.js";
-export { MachineReporter } from "./ui/machineReporter.js";
+export {
+  MACHINE_OUTPUT_SCHEMA_VERSION,
+  MachineReporter,
+} from "./ui/machineReporter.js";
 export type {
+  MachineEvent,
   MachineResult,
+  MachineTextDeltaEvent,
+  MachineTextEndEvent,
   MachineToolEvent,
   OutputFormat,
 } from "./ui/machineReporter.js";

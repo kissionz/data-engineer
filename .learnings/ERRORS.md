@@ -488,3 +488,36 @@ Check Unicode code points directly when validating control characters.
 - **Notes**: Replaced the regular expression with an explicit code-point predicate and reran the complete quality gate.
 
 ---
+
+## [ERR-20260720-003] npm_pack_user_cache_permission
+
+**Logged**: 2026-07-20T17:20:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+The optional npm package dry run could not write to the user's npm cache because it contains root-owned files.
+
+### Error
+```
+npm error code EPERM
+npm error path /Users/kissionz/.npm/_cacache/tmp/...
+```
+
+### Context
+- Full lint, build, test, and coverage validation had already passed.
+- The failure occurred only while verifying the generated npm package through the global user cache.
+
+### Suggested Fix
+Use a disposable writable npm cache for package dry runs instead of changing global ownership during a scoped repository task.
+
+### Metadata
+- Reproducible: yes
+- Related Files: package.json
+
+### Resolution
+- **Resolved**: 2026-07-20T17:20:00+08:00
+- **Notes**: Reran `npm run pack:check` with a temporary cache; the package and SDK declarations were generated successfully.
+
+---

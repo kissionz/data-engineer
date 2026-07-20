@@ -163,6 +163,8 @@ montane --task "Inspect README.md" --quiet
 
 `--permission-mode` 支持 `default`、`plan`、`accept-edits` 和 `deny`。npm 包根入口
 导出 Agent loop、模型适配器、权限、会话、工具与机器输出类型，可作为 TypeScript SDK 使用。
+`json` 与 `stream-json` 的每个输出对象都带 `schemaVersion: 1`；SDK 导出的
+`MachineEvent` 是文本增量、文本结束、工具状态和最终结果的稳定判别联合类型。
 
 ### 后台命令
 

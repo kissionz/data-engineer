@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { MachineReporter } from "../src/ui/machineReporter.js";
+import {
+  MACHINE_OUTPUT_SCHEMA_VERSION,
+  MachineReporter,
+} from "../src/ui/machineReporter.js";
 
 describe("MachineReporter", () => {
   it("emits one stable JSON result in json mode", () => {
@@ -50,6 +53,14 @@ describe("MachineReporter", () => {
       "text_end",
       "tool",
       "result",
+    ]);
+    expect(
+      output.map((line) => JSON.parse(line).schemaVersion),
+    ).toEqual([
+      MACHINE_OUTPUT_SCHEMA_VERSION,
+      MACHINE_OUTPUT_SCHEMA_VERSION,
+      MACHINE_OUTPUT_SCHEMA_VERSION,
+      MACHINE_OUTPUT_SCHEMA_VERSION,
     ]);
   });
 });
