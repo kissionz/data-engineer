@@ -124,6 +124,7 @@ npm start
 
 ```text
 /new
+/fork
 /resume <session-id|latest>
 /rename <session-title>
 /session
@@ -142,6 +143,7 @@ npm start
 ```
 
 - `/new`：创建并切换到新会话。
+- `/fork`：复制当前对话与 Todo，记录父会话并切换到新的会话分支。
 - `/resume <session-id|latest>`：恢复指定会话或最近选择的会话。
 - `/rename <session-title>`：为当前会话设置便于识别的名称。
 - `/session`：显示当前会话 ID、状态和模型。
@@ -788,6 +790,10 @@ subagents/         # 该会话的只读子代理日志
 不再逐个扫描完整事件日志。旧版平铺在 `sessions/`、`todos/` 和 `checkpoints/`
 中的会话文件会在首次启动时通过带锁、可重入的布局迁移移入会话目录；迁移完成后
 只保留新布局。
+
+`/fork` 会为复制的事件生成新的 session/event ID，保留父会话引用并复制 Todo。
+分叉后交互运行时切换到子会话，不会让两个会话并行写同一工作区。旧 checkpoint
+不会复制到子会话，避免子会话撤销父会话留下的文件历史。
 
 已完成的 `toolCallId` 可从日志恢复。已经开始但被中断的执行会标记为 `unknown_outcome`，不会自动再次运行。该状态用于任务恢复，不等同于长期 Memory。
 

@@ -20,7 +20,11 @@ import { setTimeout as delay } from "node:timers/promises";
 import { sameFileIdentity } from "../runtime/fileIdentity.js";
 import { acquireFileLock } from "../runtime/fileLock.js";
 import { SessionStore } from "./session.js";
-import type { SessionEvent, SessionStatus } from "./types.js";
+import type {
+  SessionEvent,
+  SessionEventInput,
+  SessionStatus,
+} from "./types.js";
 export type { SessionStatus } from "./types.js";
 
 export interface SessionMetadata {
@@ -196,6 +200,48 @@ export class SessionManager {
       return managed;
     } catch (error: unknown) {
       await managed.release();
+      throw error;
+    }
+  }
+
+  async fork(source: ManagedSession): Promise<ManagedSession> {
+    await this.ensureStorageDirectories();
+    const sourceId = validateRealSessionId(source.id);
+    if (this.activeSessions.get(sourceId) !== source) {
+      throw new Error(`Cannot fork an unmanaged session: ${sourceId}`);
+    }
+
+    const [events, todos] = await Promise.all([
+      new SessionStore(source.sessionPath, sourceId).load(),
+      readSafeFile(source.todoPath, `Todo file for session ${sourceId}`),
+    ]);
+    const child = await this.create({ parentSessionId: sourceId });
+
+    try {
+      await writeManagedTextAtomic(
+        child.todoPath,
+        todos,
+        `Todo file for session ${child.id}`,
+      );
+      const childStore = new SessionStore(child.sessionPath, child.id);
+      let lastSequence = 0;
+      for (const event of events) {
+        lastSequence = (
+          await childStore.append(withoutSessionEnvelope(event))
+        ).sequence;
+      }
+      lastSequence = (
+        await childStore.append({
+          type: "session_status_changed",
+          status: "running",
+        })
+      ).sequence;
+      await child.updateLastSequence(lastSequence);
+      return child;
+    } catch (error: unknown) {
+      await child.release();
+      await removeSessionDirectory(this.describe(child.id));
+      await this.setCurrent(sourceId);
       throw error;
     }
   }
@@ -709,6 +755,41 @@ async function hasLayoutMarker(markerPath: string): Promise<boolean> {
     if (hasCode(error, "ENOENT")) {
       return false;
     }
+    throw error;
+  }
+}
+
+function withoutSessionEnvelope(event: SessionEvent): SessionEventInput {
+  const input = { ...event } as Record<string, unknown>;
+  delete input.eventId;
+  delete input.sequence;
+  delete input.sessionId;
+  delete input.timestamp;
+  delete input.ts;
+  return input as SessionEventInput;
+}
+
+async function writeManagedTextAtomic(
+  filePath: string,
+  contents: string,
+  label: string,
+): Promise<void> {
+  await assertRegularFile(filePath, label);
+  const temporaryPath = path.join(
+    path.dirname(filePath),
+    `.${path.basename(filePath)}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`,
+  );
+  const temporary = await open(temporaryPath, "wx", 0o600);
+  try {
+    await temporary.writeFile(contents, "utf8");
+    await temporary.sync();
+    await temporary.close();
+    await assertRegularFile(filePath, label);
+    await renameWithRetry(temporaryPath, filePath);
+    await syncDirectory(path.dirname(filePath));
+  } catch (error: unknown) {
+    await temporary.close().catch(() => undefined);
+    await removeIfExists(temporaryPath);
     throw error;
   }
 }

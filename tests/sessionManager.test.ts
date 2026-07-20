@@ -172,6 +172,57 @@ describe("SessionManager", () => {
     ]);
   });
 
+  it("forks the current conversation into one independent session timeline", async () => {
+    const root = await makeRoot();
+    const manager = new SessionManager(root, { model: "fork-model" });
+    const source = await manager.create();
+    const sourceStore = new SessionStore(source.sessionPath, source.id);
+    const sourceEvent = await sourceStore.append({
+      type: "user_message",
+      text: "keep this context",
+    });
+    await sourceStore.append({
+      type: "assistant_final",
+      text: "source answer",
+    });
+    await writeFile(
+      source.todoPath,
+      '[{"content":"continue","status":"pending"}]\n',
+      "utf8",
+    );
+    await writeFile(source.checkpointPath, '[{"sourceOnly":true}]\n', "utf8");
+
+    const child = await manager.fork(source);
+    const childEvents = await new SessionStore(
+      child.sessionPath,
+      child.id,
+    ).load();
+
+    await expect(child.readMetadata()).resolves.toMatchObject({
+      parentSessionId: source.id,
+      model: "fork-model",
+      status: "running",
+      lastSequence: 3,
+    });
+    expect(childEvents).toMatchObject([
+      { type: "user_message", text: "keep this context" },
+      { type: "assistant_final", text: "source answer" },
+      { type: "session_status_changed", status: "running" },
+    ]);
+    expect(childEvents.every((event) => event.sessionId === child.id)).toBe(true);
+    expect(childEvents[0]?.eventId).not.toBe(sourceEvent.eventId);
+    await expect(readFile(child.todoPath, "utf8")).resolves.toContain(
+      '"content":"continue"',
+    );
+    await expect(lstat(child.checkpointPath)).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await expect(readFile(path.join(root, ".montane", "sessions", "current"), "utf8"))
+      .resolves.toBe(`${child.id}\n`);
+    await child.release();
+    await source.release();
+  });
+
   it("inspects current metadata without acquiring the writer lease", async () => {
     const root = await makeRoot();
     const owner = await new SessionManager(root, {

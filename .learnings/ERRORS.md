@@ -553,3 +553,35 @@ Accept a managed session directory, enforce that it is exactly one child below t
 - **Notes**: Removed the test artifacts and constrained checkpoint storage to one managed per-session directory.
 
 ---
+
+## [ERR-20260720-005] discarded_envelope_fields_lint
+
+**Logged**: 2026-07-20T17:37:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The first fork event-envelope conversion used named throwaway destructuring fields rejected by the repository's unused-variable lint rule.
+
+### Error
+```
+@typescript-eslint/no-unused-vars for _eventId, _sequence, _sessionId, _timestamp, and _ts
+```
+
+### Context
+- Forking regenerates durable envelope fields while retaining the event payload.
+- TypeScript compilation and targeted fork behavior tests passed before lint.
+
+### Suggested Fix
+Clone the event payload and explicitly delete the known envelope keys.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/agent/sessionManager.ts
+
+### Resolution
+- **Resolved**: 2026-07-20T17:37:00+08:00
+- **Notes**: Replaced throwaway destructuring with explicit envelope-key removal and reran the full quality gate.
+
+---

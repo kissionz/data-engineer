@@ -135,6 +135,14 @@ async function handleCommand(
   if (command === "/new") {
     return replaceRuntime(runtime, createRuntime, await sessionManager.create(), "New");
   }
+  if (command === "/fork") {
+    return replaceRuntime(
+      runtime,
+      createRuntime,
+      await sessionManager.fork(runtime.session),
+      "Forked",
+    );
+  }
   if (command === "/session") {
     console.log(JSON.stringify(await runtime.session.readMetadata(), null, 2));
     return { handled: true, runtime };
@@ -259,7 +267,7 @@ function formatContext(events: SessionEvent[]): string {
 
 function printHelp(): void {
   console.log([
-    "Commands: /help, /new, /resume <id>, /rename <title>, /session, /sessions, /inspect [id]",
+    "Commands: /help, /new, /fork, /resume <id>, /rename <title>, /session, /sessions, /inspect [id]",
     "Runtime: /model, /permissions, /cost, /context, /compact, /memory <query>, /mcp",
     "Workspace: /diff, /undo, /exit",
     "During a run: /tools toggles tool details, /cancel stops.",

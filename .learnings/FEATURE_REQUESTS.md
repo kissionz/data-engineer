@@ -258,3 +258,32 @@ Keep the proven append-only JSONL event log, but replace the flat layout with on
 - **Notes**: Replaced flat persistence with cohesive session directories and a locked, resumable v2 migration. Session listing now reads summaries directly; the old todos, checkpoints, lock, and child-log paths are no longer used after migration.
 
 ---
+
+## [FEAT-20260720-005] sequential_session_fork
+
+**Logged**: 2026-07-20T17:35:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Requested Capability
+Build session forking on the cohesive session model without introducing parallel writers or copying unsafe file-undo history.
+
+### User Context
+A useful fork must create a genuinely independent conversation identity while keeping one active writer for a shared workspace.
+
+### Complexity Estimate
+medium
+
+### Suggested Implementation
+Copy the current projected event timeline and Todo into a new session, regenerate event envelopes, record the parent session, switch the interactive runtime to the child, and start the child with an empty checkpoint history.
+
+### Metadata
+- Frequency: first_time
+- Related Features: session storage, resume, checkpoints
+
+### Resolution
+- **Resolved**: 2026-07-20T17:35:00+08:00
+- **Notes**: Added one `/fork` path with independent session/event identities and sequential runtime switching. Parent checkpoints are intentionally excluded because both sessions refer to the same workspace files.
+
+---
