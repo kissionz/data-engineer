@@ -11,6 +11,7 @@ import { PermissionGate } from "../permissions/gate.js";
 import type { CommandExecutor } from "../runtime/commandExecutor.js";
 import type { RuntimeCapabilities } from "../runtime/capabilities.js";
 import type { Workspace } from "../runtime/workspace.js";
+import type { ToolOutcome } from "../protocol.js";
 import { SkillLoader } from "../skills/loader.js";
 import {
   parseEphemeralSubagentSpec,
@@ -29,7 +30,6 @@ import {
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
 import { GitDiffTool, GitStatusTool } from "./git.js";
 import { GlobTool } from "./glob.js";
@@ -86,7 +86,7 @@ export class TaskTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const configuredSpec =
       typeof args.subagent === "string"
         ? this.specs.get(args.subagent)
@@ -114,7 +114,7 @@ export class TaskTool implements Tool {
     value: unknown,
     task: string,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     if (context?.explicitSubagentRequest !== true) {
       return {
         ok: false,
@@ -155,7 +155,7 @@ export class TaskTool implements Tool {
     task: string,
     context: ToolExecutionContext | undefined,
     ephemeral: boolean,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
 
     const skills = new SkillLoader(this.workspace);
     const tools = createReviewerTools(
@@ -286,7 +286,7 @@ export class EphemeralTaskTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     if (typeof args.task !== "string" || !args.task.trim()) {
       return {
         ok: false,

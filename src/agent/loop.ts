@@ -10,7 +10,7 @@ import type { HookEventName, HookResult } from "../hooks/types.js";
 import type { ApprovalDecision, ApprovalFunction } from "../permissions/approval.js";
 import { askUserApproval } from "../permissions/approval.js";
 import type { PermissionGate } from "../permissions/gate.js";
-import type { ToolExecutionResult } from "../tools/base.js";
+import type { ToolOutcome } from "../protocol.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { ContextBuilder } from "./context.js";
 import type { SessionCompactor } from "./compaction.js";
@@ -19,7 +19,7 @@ import type { AgentReporter } from "./reporter.js";
 import { silentReporter } from "./reporter.js";
 import type { SessionStore } from "./session.js";
 import { appendGuidanceMessages, refreshContextAfterGuidance, type AgentGuidance } from "./guidance.js";
-import type { SessionStatus, ToolCall } from "./types.js";
+import type { SessionStatus, ToolCall } from "../protocol.js";
 import { CANCELLED_TEXT, isCancellationError, throwIfCancelled } from "./cancellation.js";
 import {
   buildToolCallIndex,
@@ -498,7 +498,7 @@ export class AgentLoop {
           const fingerprint = toolCallFingerprint(call);
           const validation = this.tools.validate(call.name, call.args);
           let hookBlock;
-          let result: ToolExecutionResult;
+          let result: ToolOutcome;
 
           if (!validation.ok) {
             this.reporter.onToolStatus(call, "failed");
@@ -707,9 +707,9 @@ export class AgentLoop {
   private async emitObservationalHook(
     eventName: Extract<HookEventName, "AfterToolUse" | "AfterEdit">,
     toolCall: { id: string; name: string; args: Record<string, unknown> },
-    result: ToolExecutionResult,
+    result: ToolOutcome,
     signal?: AbortSignal,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     try {
       await this.hooks?.emit(eventName, { toolCall, result }, signal);
       return result;
@@ -802,7 +802,7 @@ export class AgentLoop {
     taskRunId?: string,
     explicitSubagentRequest = false,
     approvedFolder?: string,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     try {
       return await this.tools.execute(name, args, {
         signal,
@@ -834,7 +834,7 @@ export class AgentLoop {
       folder: string;
       access: "read" | "read_write";
     },
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     if (approval === "reject") {
       return {
         ok: false,
@@ -898,7 +898,7 @@ export class AgentLoop {
     taskRunId?: string,
     explicitSubagentRequest = false,
     approvedFolder?: string,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     await this.session.append({
       type: "tool_execution_started",
       toolCall: call,
@@ -1074,7 +1074,7 @@ export class AgentLoop {
       await this.recordStatus("waiting_for_approval");
       const recoveredToolBudget = budget.beginToolCall();
       const validation = this.tools.validate(record.call.name, record.call.args);
-      let result: ToolExecutionResult;
+      let result: ToolOutcome;
 
       if (!recoveredToolBudget.ok) {
         result = {

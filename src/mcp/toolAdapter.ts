@@ -3,8 +3,8 @@ import { Ajv, type ValidateFunction } from "ajv";
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "../tools/base.js";
+import type { ToolOutcome } from "../protocol.js";
 
 const MAX_RAW_RESULT_BYTES = 256 * 1024;
 const MAX_MODEL_RESULT_CHARS = 64 * 1024;
@@ -64,7 +64,7 @@ export class McpToolAdapter implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const argumentBytes = Buffer.byteLength(safeJson(args), "utf8");
     if (argumentBytes > MAX_RAW_ARGUMENT_BYTES) {
       return {
@@ -196,7 +196,7 @@ function sanitizeSchemaValue(value: unknown, depth: number): unknown {
 function normalizeMcpResult(
   value: unknown,
   serverId: string,
-): ToolExecutionResult {
+): ToolOutcome {
   const raw = safeJson(value);
   const rawBytes = Buffer.byteLength(raw, "utf8");
   if (rawBytes > MAX_RAW_RESULT_BYTES) {

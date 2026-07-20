@@ -167,6 +167,8 @@ montane --task "Inspect README.md" --quiet
 导出 Agent loop、模型适配器、权限、会话、工具与机器输出类型，可作为 TypeScript SDK 使用。
 `json` 与 `stream-json` 的每个输出对象都带 `schemaVersion: 1`；SDK 导出的
 `MachineEvent` 是文本增量、文本结束、工具状态和最终结果的稳定判别联合类型。
+工具执行、模型工具消息和持久事件共享 SDK 导出的 `ToolOutcome`/`ToolResult`
+协议，不再维护各层独立的结果结构。
 
 ### 后台命令
 
@@ -785,7 +787,8 @@ lease.lock         # 仅在会话被进程占用时存在
 subagents/         # 该会话的只读子代理日志
 ```
 
-新事件包含 session ID、唯一 event ID、单调递增 sequence 和 timestamp；
+新事件包含 `schemaVersion: 1`、session ID、唯一 event ID、单调递增 sequence
+和 timestamp；旧日志缺少版本号时按版本 1 读取，未知版本会明确拒绝而不是静默误读。
 `summary.json` 记录可选会话名称、模型及 lifecycle state，`/sessions` 直接读取摘要，
 不再逐个扫描完整事件日志。旧版平铺在 `sessions/`、`todos/` 和 `checkpoints/`
 中的会话文件会在首次启动时通过带锁、可重入的布局迁移移入会话目录；迁移完成后

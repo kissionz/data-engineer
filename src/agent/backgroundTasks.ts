@@ -4,7 +4,7 @@ import {
 } from "../runtime/backgroundCommands.js";
 import type { ShellExecutor } from "../runtime/shellExecutor.js";
 import type { SessionStore } from "./session.js";
-import type { BackgroundTaskStatusEvent } from "./types.js";
+import type { BackgroundTaskStatusEvent } from "../protocol.js";
 
 export function createSessionBackgroundTasks(
   executor: ShellExecutor | undefined,

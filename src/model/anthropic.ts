@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentResponse, StopReason } from "../agent/types.js";
+import type { AgentMessage, AgentResponse, StopReason } from "../protocol.js";
 import {
   ModelRequestError,
   type ModelCapabilities,

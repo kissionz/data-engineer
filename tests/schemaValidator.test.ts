@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { Tool, ToolExecutionResult } from "../src/tools/base.js";
+import type { ToolOutcome } from "../src/protocol.js";
+import type { Tool } from "../src/tools/base.js";
 import { ToolRegistry } from "../src/tools/registry.js";
 import { validateSchema } from "../src/tools/schemaValidator.js";
 
@@ -176,7 +177,7 @@ class CountingTool implements Tool {
   };
   executions = 0;
 
-  async execute(): Promise<ToolExecutionResult> {
+  async execute(): Promise<ToolOutcome> {
     this.executions += 1;
     return { ok: true, content: "executed" };
   }
@@ -195,7 +196,7 @@ class SchemaOnlyTool implements Tool {
     additionalProperties: false,
   };
 
-  async execute(): Promise<ToolExecutionResult> {
+  async execute(): Promise<ToolOutcome> {
     return { ok: true, content: "unused" };
   }
 }

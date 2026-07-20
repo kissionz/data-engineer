@@ -6,7 +6,7 @@ import { ContextBuilder } from "../src/agent/context.js";
 import { MemoryService } from "../src/memory/service.js";
 import { FolderGrantManager } from "../src/permissions/folderGrants.js";
 import { SkillLoader } from "../src/skills/loader.js";
-import type { SessionEvent } from "../src/agent/types.js";
+import type { SessionEvent } from "../src/protocol.js";
 
 describe("ContextBuilder", () => {
   it("requires exact reuse of complete Glob paths", async () => {

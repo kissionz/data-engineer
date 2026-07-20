@@ -1,10 +1,5 @@
 import type { AgentBudgetTracker } from "../agent/budget.js";
-
-export interface ToolExecutionResult {
-  ok: boolean;
-  content: string;
-  data?: Record<string, unknown>;
-}
+import type { ToolOutcome } from "../protocol.js";
 
 export interface ToolExecutionContext {
   signal?: AbortSignal;
@@ -32,5 +27,5 @@ export interface Tool {
   execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult>;
+  ): Promise<ToolOutcome>;
 }

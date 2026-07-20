@@ -4,8 +4,8 @@ import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 
 export class BashTool implements Tool {
   name = "Bash";
@@ -33,7 +33,7 @@ export class BashTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     if (typeof args.command !== "string") {
       return { ok: false, content: "command must be a string." };
     }

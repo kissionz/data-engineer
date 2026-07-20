@@ -9,8 +9,8 @@ import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 import { fileOperationFailure } from "./fileErrors.js";
 
 export class EditTool implements Tool {
@@ -38,7 +38,7 @@ export class EditTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     throwIfCancelled(context?.signal);
     if (
       typeof args.file_path !== "string" ||

@@ -6,7 +6,7 @@ import { SessionCompactor } from "../src/agent/compaction.js";
 import { ContextBuilder } from "../src/agent/context.js";
 import { AgentLoop } from "../src/agent/loop.js";
 import { SessionStore } from "../src/agent/session.js";
-import type { AgentResponse } from "../src/agent/types.js";
+import type { AgentResponse } from "../src/protocol.js";
 import { HookManager } from "../src/hooks/manager.js";
 import type { ModelClient } from "../src/model/base.js";
 import { PermissionGate } from "../src/permissions/gate.js";

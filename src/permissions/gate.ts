@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { ToolCall } from "../agent/types.js";
+import type { ToolCall } from "../protocol.js";
 import { isPathWithin } from "../runtime/pathSafety.js";
 import {
   type FolderGrantManager,

@@ -8,8 +8,8 @@ import {
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 
 export interface MemoryWriteAuthorization {
   explicitUserRequest: boolean;
@@ -60,7 +60,7 @@ export class MemorySearchTool implements Tool {
 
   constructor(private readonly memory: MemoryService) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(args: Record<string, unknown>): Promise<ToolOutcome> {
     try {
       if (
         typeof args.query !== "string" ||
@@ -142,7 +142,7 @@ export class MemoryWriteTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     try {
       const authorization = await this.authorization(context);
       if (
@@ -208,7 +208,7 @@ export class MemoryDeleteTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     try {
       const authorization = await this.authorization(context);
       if (
@@ -235,7 +235,7 @@ export class MemoryDeleteTool implements Tool {
   }
 }
 
-function memoryError(error: unknown): ToolExecutionResult {
+function memoryError(error: unknown): ToolOutcome {
   if (
     error instanceof MemoryValidationError ||
     error instanceof MemoryConflictError ||

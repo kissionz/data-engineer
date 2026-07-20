@@ -5,14 +5,16 @@ export { ContextBuilder, DEFAULT_SYSTEM_PROMPT } from "./agent/context.js";
 export { SessionCompactor } from "./agent/compaction.js";
 export { SessionStore } from "./agent/session.js";
 export { SessionManager } from "./agent/sessionManager.js";
+export { SESSION_EVENT_SCHEMA_VERSION } from "./protocol.js";
 export type {
   AgentMessage,
   AgentResponse,
   ModelUsage,
   SessionEvent,
   ToolCall,
+  ToolOutcome,
   ToolResult,
-} from "./agent/types.js";
+} from "./protocol.js";
 export type { AgentReporter, ToolStatus } from "./agent/reporter.js";
 export type {
   ModelCapabilities,
@@ -27,7 +29,7 @@ export { PermissionGate } from "./permissions/gate.js";
 export { defaultPolicy } from "./permissions/policy.js";
 export type { PermissionPolicy } from "./permissions/policy.js";
 export { ToolRegistry } from "./tools/registry.js";
-export type { Tool, ToolExecutionResult } from "./tools/base.js";
+export type { Tool } from "./tools/base.js";
 export { Workspace } from "./runtime/workspace.js";
 export { CheckpointManager } from "./runtime/checkpoints.js";
 export type { RewindResult } from "./runtime/checkpoints.js";

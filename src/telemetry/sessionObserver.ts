@@ -1,4 +1,4 @@
-import type { SessionEvent } from "../agent/types.js";
+import type { SessionEvent } from "../protocol.js";
 import type {
   CancellationPhase,
   TelemetryOutcome,

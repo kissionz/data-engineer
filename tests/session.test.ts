@@ -27,6 +27,7 @@ describe("SessionStore", () => {
 
     await expect(new SessionStore(filePath).load()).resolves.toMatchObject([
       {
+        schemaVersion: 1,
         eventId: "legacy-session-1",
         sequence: 1,
         sessionId: "session",
@@ -107,6 +108,7 @@ describe("SessionStore", () => {
       expect.arrayContaining(
         appended.map((event) =>
           expect.objectContaining({
+            schemaVersion: 1,
             eventId: event.eventId,
             sequence: event.sequence,
             sessionId: "concurrent",
@@ -114,6 +116,20 @@ describe("SessionStore", () => {
           }),
         ),
       ),
+    );
+  });
+
+  it("rejects an unsupported durable event schema", async () => {
+    const root = await makeRoot();
+    const filePath = path.join(root, "unsupported.jsonl");
+    await writeFile(
+      filePath,
+      '{"schemaVersion":2,"type":"user_message","ts":"now","text":"future"}\n',
+      "utf8",
+    );
+
+    await expect(new SessionStore(filePath).load()).rejects.toThrow(
+      "Unsupported session event schema version: 2.",
     );
   });
 

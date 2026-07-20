@@ -5,8 +5,8 @@ import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 import { fileOperationFailure } from "./fileErrors.js";
 
 interface DirectoryEntryResult {
@@ -41,7 +41,7 @@ export class ListDirectoryTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const requestedPath =
       typeof args.path === "string" && args.path ? args.path : ".";
     const limit = normalizeLimit(args.limit, this.defaultLimit);

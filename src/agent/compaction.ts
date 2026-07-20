@@ -1,4 +1,4 @@
-import type { SessionEvent, ToolCall } from "./types.js";
+import type { SessionEvent, ToolCall } from "../protocol.js";
 import type { SessionStore } from "./session.js";
 
 export interface CompactionCheckOptions {

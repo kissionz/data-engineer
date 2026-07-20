@@ -2,7 +2,8 @@ import { lstat, mkdir, open, type FileHandle } from "node:fs/promises";
 import type { Stats } from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "../runtime/fileIdentity.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
+import type { Tool } from "./base.js";
 
 export type TodoStatus = "pending" | "in_progress" | "done";
 
@@ -52,7 +53,7 @@ export class TodoReadTool implements Tool {
 
   constructor(private readonly store: TodoStore) {}
 
-  async execute(): Promise<ToolExecutionResult> {
+  async execute(): Promise<ToolOutcome> {
     try {
       const todos = await this.store.read();
 
@@ -98,7 +99,7 @@ export class TodoWriteTool implements Tool {
 
   constructor(private readonly store: TodoStore) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(args: Record<string, unknown>): Promise<ToolOutcome> {
     try {
       const todos = validateTodos(args.todos);
       await this.store.write(todos);

@@ -1,6 +1,5 @@
 import type { AgentReporter, ToolStatus } from "../agent/reporter.js";
-import type { ToolCall } from "../agent/types.js";
-import type { ToolExecutionResult } from "../tools/base.js";
+import type { ToolCall, ToolOutcome } from "../protocol.js";
 import { summarizeToolCall } from "./toolPresentation.js";
 
 const STATUS_LABELS: Record<ToolStatus, string> = {
@@ -75,7 +74,7 @@ export class ConsoleReporter implements AgentReporter {
   onToolStatus(
     call: ToolCall,
     status: ToolStatus,
-    result?: ToolExecutionResult,
+    result?: ToolOutcome,
   ): void {
     this.onTextEnd();
     const line =
@@ -160,7 +159,7 @@ export class ConsoleReporter implements AgentReporter {
 function toolStatusLabel(
   call: ToolCall,
   status: ToolStatus,
-  result?: ToolExecutionResult,
+  result?: ToolOutcome,
 ): string {
   const base = STATUS_LABELS[status];
   const count = result?.data?.count;

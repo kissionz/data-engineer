@@ -11,7 +11,7 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import type { SessionEvent } from "../src/agent/types.js";
+import type { SessionEvent } from "../src/protocol.js";
 import {
   flushSessionTelemetryObservers,
   JsonlTelemetrySink,

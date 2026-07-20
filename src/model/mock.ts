@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentResponse } from "../agent/types.js";
+import type { AgentMessage, AgentResponse } from "../protocol.js";
 import type { ModelClient } from "./base.js";
 
 export class MockModel implements ModelClient {

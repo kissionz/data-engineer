@@ -3,7 +3,8 @@ import {
   SkillLoaderError,
 } from "../skills/loader.js";
 import type { Workspace } from "../runtime/workspace.js";
-import type { Tool, ToolExecutionResult } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
+import type { Tool } from "./base.js";
 
 type SkillSource = SkillLoader | Workspace | string;
 
@@ -22,7 +23,7 @@ export class SkillListTool implements Tool {
     this.loader = source instanceof SkillLoader ? source : new SkillLoader(source);
   }
 
-  async execute(_args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(_args: Record<string, unknown>): Promise<ToolOutcome> {
     try {
       const skills = await this.loader.list();
 
@@ -60,7 +61,7 @@ export class SkillLoadTool implements Tool {
     this.loader = source instanceof SkillLoader ? source : new SkillLoader(source);
   }
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(args: Record<string, unknown>): Promise<ToolOutcome> {
     if (typeof args.name !== "string") {
       return {
         ok: false,
@@ -90,7 +91,7 @@ export class SkillLoadTool implements Tool {
   }
 }
 
-function skillErrorResult(error: unknown): ToolExecutionResult {
+function skillErrorResult(error: unknown): ToolOutcome {
   const message = error instanceof Error ? error.message : "Unable to read skill.";
 
   return {

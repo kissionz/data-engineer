@@ -3,8 +3,8 @@ import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 
 abstract class GitReadTool implements Tool {
   abstract name: string;
@@ -20,7 +20,7 @@ abstract class GitReadTool implements Tool {
   protected async run(
     args: string[],
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const result = await this.executor.run({
       command: "git",
       args,
@@ -46,7 +46,7 @@ abstract class GitReadTool implements Tool {
   abstract execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult>;
+  ): Promise<ToolOutcome>;
 }
 
 export class GitStatusTool extends GitReadTool {
@@ -61,7 +61,7 @@ export class GitStatusTool extends GitReadTool {
   async execute(
     _args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     return this.run(["status", "--short"], context);
   }
 }
@@ -80,7 +80,7 @@ export class GitDiffTool extends GitReadTool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const diffArgs = args.staged === true ? ["diff", "--cached"] : ["diff"];
 
     return this.run(

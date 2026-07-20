@@ -3,7 +3,7 @@ import path from "node:path";
 import type { MemoryService } from "../memory/service.js";
 import type { FolderGrantManager } from "../permissions/folderGrants.js";
 import type { SkillLoader } from "../skills/loader.js";
-import type { AgentMessage, SessionEvent } from "./types.js";
+import type { AgentMessage, SessionEvent } from "../protocol.js";
 
 export const DEFAULT_SYSTEM_PROMPT = `
 You are a coding agent running inside a controlled Montane runtime.

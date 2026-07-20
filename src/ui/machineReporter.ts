@@ -1,6 +1,5 @@
 import type { ToolStatus, AgentReporter } from "../agent/reporter.js";
-import type { ToolCall } from "../agent/types.js";
-import type { ToolExecutionResult } from "../tools/base.js";
+import type { ToolCall, ToolOutcome } from "../protocol.js";
 import { summarizeToolCall } from "./toolPresentation.js";
 
 export type OutputFormat = "text" | "json" | "stream-json";
@@ -81,7 +80,7 @@ export class MachineReporter implements AgentReporter {
   onToolStatus(
     call: ToolCall,
     status: ToolStatus,
-    result?: ToolExecutionResult,
+    result?: ToolOutcome,
   ): void {
     const event: MachineToolEvent = {
       type: "tool",

@@ -10,7 +10,7 @@ import type {
   ManagedSession,
   SessionManager,
 } from "../agent/sessionManager.js";
-import type { SessionEvent } from "../agent/types.js";
+import type { SessionEvent } from "../protocol.js";
 import type { CheckpointManager } from "../runtime/checkpoints.js";
 import type { BackgroundCommandManager } from "../runtime/backgroundCommands.js";
 import type { ToolRegistry } from "../tools/registry.js";

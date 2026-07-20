@@ -1,8 +1,8 @@
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 import { validateSchema, type SchemaValidationResult } from "./schemaValidator.js";
 
 export type ToolValidationResult =
@@ -64,7 +64,7 @@ export class ToolRegistry {
     name: string,
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const validation = this.validate(name, args);
 
     if (!validation.ok) {
@@ -96,7 +96,7 @@ export class ToolRegistry {
     args: Record<string, unknown>,
     context: ToolExecutionContext | undefined,
     timeoutMs: number,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const controller = new AbortController();
     const parentSignal = context?.signal;
     const timedOut = Symbol("tool-timeout");

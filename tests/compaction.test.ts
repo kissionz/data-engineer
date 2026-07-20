@@ -8,7 +8,7 @@ import {
   SessionCompactor,
 } from "../src/agent/compaction.js";
 import { SessionStore } from "../src/agent/session.js";
-import type { SessionEvent } from "../src/agent/types.js";
+import type { SessionEvent } from "../src/protocol.js";
 
 describe("SessionCompactor", () => {
   it("appends a factual summary without deleting source events", async () => {

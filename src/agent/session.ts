@@ -9,7 +9,11 @@ import type { Stats } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { acquireFileLock } from "../runtime/fileLock.js";
 import { sameFileIdentity } from "../runtime/fileIdentity.js";
-import type { SessionEvent, SessionEventInput } from "./types.js";
+import {
+  SESSION_EVENT_SCHEMA_VERSION,
+  type SessionEvent,
+  type SessionEventInput,
+} from "../protocol.js";
 
 const appendQueues = new Map<string, Promise<unknown>>();
 const MAX_SESSION_RECORD_BYTES = 16 * 1024 * 1024;
@@ -89,12 +93,13 @@ export class SessionStore {
         const sequence = await readLastSequence(handle);
         const timestamp = new Date().toISOString();
         const fullEvent = {
+          ...event,
+          schemaVersion: SESSION_EVENT_SCHEMA_VERSION,
           eventId: randomUUID(),
           sequence: sequence + 1,
           sessionId: this.sessionId,
           timestamp,
           ts: timestamp,
-          ...event,
         } as SessionEvent;
         const serialized = `${prefix}${JSON.stringify(fullEvent)}\n`;
         const serializedBytes = Buffer.byteLength(serialized, "utf8");
@@ -297,6 +302,15 @@ function normalizeEvent(
   fallbackSequence: number,
   sessionId: string,
 ): SessionEvent {
+  const schemaVersion =
+    event.schemaVersion === undefined
+      ? SESSION_EVENT_SCHEMA_VERSION
+      : event.schemaVersion;
+  if (schemaVersion !== SESSION_EVENT_SCHEMA_VERSION) {
+    throw new Error(
+      `Unsupported session event schema version: ${String(schemaVersion)}.`,
+    );
+  }
   const sequence =
     typeof event.sequence === "number" &&
     Number.isSafeInteger(event.sequence) &&
@@ -312,6 +326,7 @@ function normalizeEvent(
 
   return {
     ...event,
+    schemaVersion,
     eventId:
       typeof event.eventId === "string"
         ? event.eventId

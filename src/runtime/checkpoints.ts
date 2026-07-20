@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { SessionStore } from "../agent/session.js";
-import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tools/base.js";
+import type { ToolOutcome } from "../protocol.js";
+import type { Tool, ToolExecutionContext } from "../tools/base.js";
 import type { Workspace } from "./workspace.js";
 import {
   atomicReplaceTextFile,
@@ -70,7 +71,7 @@ export class CheckpointManager {
     tool: Tool,
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const filePath = typeof args.file_path === "string" ? args.file_path : "";
     const access = {
       allowOutside: context?.userApproved === true,
@@ -287,7 +288,7 @@ class CheckpointingTool implements Tool {
   execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     return this.checkpoints.capture(this.inner, args, context);
   }
 }

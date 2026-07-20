@@ -1,5 +1,4 @@
-import type { ToolCall } from "./types.js";
-import type { ToolExecutionResult } from "../tools/base.js";
+import type { ToolCall, ToolOutcome } from "../protocol.js";
 
 export type ToolStatus =
   | "awaiting_approval"
@@ -15,7 +14,7 @@ export interface AgentReporter {
   onToolStatus(
     call: ToolCall,
     status: ToolStatus,
-    result?: ToolExecutionResult,
+    result?: ToolOutcome,
   ): void;
 }
 

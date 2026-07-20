@@ -6,8 +6,8 @@ import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 import { matchesGlob, walkSearchFiles } from "./fileSearch.js";
 
 export class GlobTool implements Tool {
@@ -35,7 +35,7 @@ export class GlobTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const pattern =
       typeof args.pattern === "string" && args.pattern ? args.pattern : "**/*";
     const searchPath = typeof args.path === "string" ? args.path : ".";
@@ -111,7 +111,7 @@ export class GlobTool implements Tool {
     pattern: string,
     limit: number,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     const files: string[] = [];
     let truncated = false;
 

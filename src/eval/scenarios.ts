@@ -7,7 +7,7 @@ import { SessionStore } from "../agent/session.js";
 import type {
   AgentMessage,
   AgentResponse,
-} from "../agent/types.js";
+} from "../protocol.js";
 import type { ModelClient } from "../model/base.js";
 import { PermissionGate } from "../permissions/gate.js";
 import { defaultPolicy } from "../permissions/policy.js";

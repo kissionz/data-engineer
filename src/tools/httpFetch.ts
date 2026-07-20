@@ -13,8 +13,8 @@ import {
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 
 export interface HttpFetchOptions {
   allowedHosts: string[];
@@ -124,7 +124,7 @@ export class HttpFetchTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     if (typeof args.url !== "string") {
       return { ok: false, content: "url must be a string." };
     }
@@ -318,7 +318,7 @@ export class HttpFetchTool implements Tool {
     return raw?.split(";", 1)[0]?.trim().toLowerCase() ?? "";
   }
 
-  private failure(error: unknown): ToolExecutionResult {
+  private failure(error: unknown): ToolOutcome {
     const message = error instanceof Error ? error.message : String(error);
     return {
       ok: false,

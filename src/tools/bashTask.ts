@@ -4,8 +4,8 @@ import type {
 } from "../runtime/backgroundCommands.js";
 import type {
   Tool,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 
 export class BashTaskTool implements Tool {
   name = "BashTask";
@@ -26,7 +26,7 @@ export class BashTaskTool implements Tool {
 
   constructor(private readonly tasks: BackgroundCommandManager) {}
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(args: Record<string, unknown>): Promise<ToolOutcome> {
     if (typeof args.task_id !== "string" || !args.task_id.trim()) {
       return { ok: false, content: "task_id must be a non-empty string." };
     }
@@ -61,7 +61,7 @@ export class BashTaskTool implements Tool {
 
 function snapshotResult(
   snapshot: BackgroundCommandSnapshot,
-): ToolExecutionResult {
+): ToolOutcome {
   const output = [
     `Task ${snapshot.taskId}: ${snapshot.status}`,
     snapshot.stdout ? `[stdout]\n${snapshot.stdout}` : "",

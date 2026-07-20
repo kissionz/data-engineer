@@ -10,8 +10,8 @@ import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 import { walkSearchFiles } from "./fileSearch.js";
 
 const MAX_NATIVE_SEARCH_FILES = 20_000;
@@ -42,7 +42,7 @@ export class GrepTool implements Tool {
   async execute(
     args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     if (typeof args.pattern !== "string" || !args.pattern) {
       return { ok: false, content: "pattern must be a non-empty string." };
     }
@@ -119,7 +119,7 @@ export class GrepTool implements Tool {
       outsideRoot?: string;
     },
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     let matcher: RegExp;
     try {
       matcher = new RegExp(pattern);

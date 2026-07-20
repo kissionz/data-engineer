@@ -1,4 +1,4 @@
-import type { AgentMessage, AgentResponse, StopReason, ToolCall } from "../agent/types.js";
+import type { AgentMessage, AgentResponse, StopReason, ToolCall } from "../protocol.js";
 import {
   ContextWindowExceededError,
   ModelRequestError,

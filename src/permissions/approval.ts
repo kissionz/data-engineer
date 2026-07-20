@@ -1,6 +1,6 @@
 import { select } from "@inquirer/prompts";
 import { AgentCancelledError } from "../agent/cancellation.js";
-import type { ToolCall } from "../agent/types.js";
+import type { ToolCall } from "../protocol.js";
 import type { FolderGrantRequest } from "./folderGrants.js";
 import {
   summarizeApproval,

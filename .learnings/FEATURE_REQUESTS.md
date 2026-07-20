@@ -316,3 +316,32 @@ Assign one turn ID per agent run, group all file checkpoints by that ID, preflig
 - **Notes**: Replaced `/undo` and `undoLatest()` with one `/rewind` path. Rewind is turn-scoped, conflict-checked as a unit, restores all files, and retains superseded events on disk behind an auditable projection marker.
 
 ---
+
+## [FEAT-20260720-007] canonical_tool_event_protocol
+
+**Logged**: 2026-07-20T17:48:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: architecture
+
+### Requested Capability
+Replace duplicated tool-result and event contracts with one versioned protocol instead of adding adapters around the existing types.
+
+### User Context
+Tool execution, model messages, and durable events described the same result independently, while persisted events had no explicit schema boundary.
+
+### Complexity Estimate
+medium
+
+### Suggested Implementation
+Promote Tool/Event contracts to one project-level protocol, use one `ToolOutcome` foundation throughout, version durable event envelopes, migrate every consumer, and delete the old Agent-private type source.
+
+### Metadata
+- Frequency: first_time
+- Related Features: tools, session events, SDK
+
+### Resolution
+- **Resolved**: 2026-07-20T17:48:00+08:00
+- **Notes**: Added the canonical `src/protocol.ts`, migrated execution/model/event consumers to `ToolOutcome`, added durable event schema version 1 with legacy normalization and future-version rejection, and removed `src/agent/types.ts` plus `ToolExecutionResult`.
+
+---

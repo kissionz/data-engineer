@@ -1,6 +1,6 @@
 import { setTimeout as delay } from "node:timers/promises";
 import { throwIfCancelled } from "../agent/cancellation.js";
-import type { AgentMessage, AgentResponse } from "../agent/types.js";
+import type { AgentMessage, AgentResponse } from "../protocol.js";
 import {
   isRetryableModelError,
   ModelRequestError,

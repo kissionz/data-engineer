@@ -24,8 +24,8 @@ import type {
   SessionEvent,
   SessionEventInput,
   SessionStatus,
-} from "./types.js";
-export type { SessionStatus } from "./types.js";
+} from "../protocol.js";
+export type { SessionStatus } from "../protocol.js";
 
 export interface SessionMetadata {
   id: string;

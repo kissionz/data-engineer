@@ -17,7 +17,8 @@ import type {
   AgentMessage,
   AgentResponse,
   ToolCall,
-} from "../src/agent/types.js";
+  ToolOutcome,
+} from "../src/protocol.js";
 import {
   ContextWindowExceededError,
   ModelRequestError,
@@ -32,7 +33,6 @@ import { Workspace } from "../src/runtime/workspace.js";
 import type {
   Tool,
   ToolExecutionContext,
-  ToolExecutionResult,
 } from "../src/tools/base.js";
 import { ReadTool } from "../src/tools/read.js";
 import { ToolRegistry } from "../src/tools/registry.js";
@@ -191,7 +191,7 @@ class FakeBashTool implements Tool {
   };
   executions = 0;
 
-  async execute(args: Record<string, unknown>): Promise<ToolExecutionResult> {
+  async execute(args: Record<string, unknown>): Promise<ToolOutcome> {
     this.executions += 1;
     return {
       ok: true,
@@ -289,7 +289,7 @@ class ContextRecordingTaskTool implements Tool {
   async execute(
     _args: Record<string, unknown>,
     context?: ToolExecutionContext,
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     this.explicitSubagentRequest = context?.explicitSubagentRequest;
     this.taskRunId = context?.taskRunId;
     return { ok: true, content: "temporary result" };
@@ -338,7 +338,7 @@ class CountingWriteTool implements Tool {
   inputSchema = { type: "object", properties: {} };
   executions = 0;
 
-  async execute(): Promise<ToolExecutionResult> {
+  async execute(): Promise<ToolOutcome> {
     this.executions += 1;
     return { ok: true, content: "wrote" };
   }
@@ -350,7 +350,7 @@ class CountingGitDiffTool implements Tool {
   inputSchema = { type: "object", properties: {} };
   executions = 0;
 
-  async execute(): Promise<ToolExecutionResult> {
+  async execute(): Promise<ToolOutcome> {
     this.executions += 1;
     return { ok: true, content: "diff --git a/file.txt b/file.txt" };
   }
@@ -466,7 +466,7 @@ class FakeHttpFetchTool implements Tool {
   };
   executions = 0;
 
-  async execute(): Promise<ToolExecutionResult> {
+  async execute(): Promise<ToolOutcome> {
     this.executions += 1;
     return { ok: true, content: "fetched" };
   }
@@ -655,7 +655,7 @@ class AbortableBashTool implements Tool {
   async execute(
     _args: Record<string, unknown>,
     context?: { signal?: AbortSignal },
-  ): Promise<ToolExecutionResult> {
+  ): Promise<ToolOutcome> {
     return new Promise((_resolve, reject) => {
       const abort = () =>
         reject(new DOMException("The operation was aborted.", "AbortError"));
@@ -692,7 +692,7 @@ class CancellingReadTool implements Tool {
 
   constructor(private readonly controller: AbortController) {}
 
-  async execute(): Promise<ToolExecutionResult> {
+  async execute(): Promise<ToolOutcome> {
     this.controller.abort();
     return { ok: true, content: "read completed" };
   }
@@ -704,7 +704,7 @@ class CountingGrepTool implements Tool {
   inputSchema = { type: "object", properties: {} };
   executions = 0;
 
-  async execute(): Promise<ToolExecutionResult> {
+  async execute(): Promise<ToolOutcome> {
     this.executions += 1;
     return { ok: true, content: "grep completed" };
   }

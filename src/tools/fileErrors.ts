@@ -2,11 +2,11 @@ import {
   FileOperationError,
   type FileOperationErrorCode,
 } from "../runtime/textFile.js";
-import type { ToolExecutionResult } from "./base.js";
+import type { ToolOutcome } from "../protocol.js";
 
 export function fileOperationFailure(
   error: unknown,
-): ToolExecutionResult | never {
+): ToolOutcome | never {
   if (!(error instanceof FileOperationError)) {
     throw error;
   }

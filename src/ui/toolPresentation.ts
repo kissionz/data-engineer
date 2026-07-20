@@ -1,4 +1,4 @@
-import type { ToolCall } from "../agent/types.js";
+import type { ToolCall } from "../protocol.js";
 
 export function summarizeToolCall(call: ToolCall): string {
   if (call.name === "Read" || call.name === "Write" || call.name === "Edit") {

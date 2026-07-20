@@ -585,3 +585,37 @@ Clone the event payload and explicitly delete the known envelope keys.
 - **Notes**: Replaced throwaway destructuring with explicit envelope-key removal and reran the full quality gate.
 
 ---
+
+## [ERR-20260720-006] stale_typescript_build_artifacts
+
+**Logged**: 2026-07-20T17:52:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: build
+
+### Summary
+Deleting the old protocol source did not remove its previously compiled declarations, so an npm package dry run still included the retired API.
+
+### Error
+```
+dist/agent/types.d.ts
+dist/agent/types.d.ts.map
+dist/agent/types.js
+```
+
+### Context
+- TypeScript overwrote current outputs but did not remove files whose source no longer existed.
+- Tests and compilation passed while the package would still have shipped stale compatibility artifacts.
+
+### Suggested Fix
+Make every build remove `dist` before invoking TypeScript, then inspect the generated package after replacement work.
+
+### Metadata
+- Reproducible: yes
+- Related Files: package.json, src/agent/types.ts, src/protocol.ts
+
+### Resolution
+- **Resolved**: 2026-07-20T17:52:00+08:00
+- **Notes**: Replaced incremental overwrite builds with one clean-build path and verified the retired declarations no longer appear in the npm package.
+
+---

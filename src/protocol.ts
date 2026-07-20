@@ -1,17 +1,22 @@
 export type Role = "system" | "user" | "assistant" | "tool";
 
+export const SESSION_EVENT_SCHEMA_VERSION = 1 as const;
+
 export interface ToolCall {
   id: string;
   name: string;
   args: Record<string, unknown>;
 }
 
-export interface ToolResult {
-  toolCallId: string;
-  name: string;
+export interface ToolOutcome {
   ok: boolean;
   content: string;
   data?: Record<string, unknown>;
+}
+
+export interface ToolResult extends ToolOutcome {
+  toolCallId: string;
+  name: string;
 }
 
 export interface AgentMessage {
@@ -44,6 +49,7 @@ export interface ModelUsage {
 }
 
 export interface SessionEventEnvelope {
+  schemaVersion: typeof SESSION_EVENT_SCHEMA_VERSION;
   eventId: string;
   sequence: number;
   sessionId: string;
@@ -69,8 +75,7 @@ export interface BackgroundTaskStatusEvent {
   cleanupFailed: boolean;
 }
 
-export type SessionEvent = SessionEventEnvelope &
-  (
+export type SessionEventPayload =
   | {
       type: "user_message";
       text: string;
@@ -80,113 +85,7 @@ export type SessionEvent = SessionEventEnvelope &
       type: "assistant_tool_calls";
       toolCalls: ToolCall[];
     }
-  | {
-      type: "tool_result";
-      toolCallId: string;
-      name: string;
-      ok: boolean;
-      content: string;
-      data?: Record<string, unknown>;
-    }
-  | {
-      type: "assistant_final";
-      text: string;
-    }
-  | {
-      type: "assistant_partial";
-      text: string;
-    }
-  | {
-      type: "model_request_started";
-    }
-  | {
-      type: "model_response_received";
-      hasFinalText: boolean;
-      toolCallCount: number;
-      stopReason?: StopReason;
-      usage?: ModelUsage;
-      requestId?: string;
-    }
-  | {
-      type: "approval_requested";
-      toolCallId: string;
-      fingerprint: string;
-      scope: string;
-      reason: string;
-      folderGrant?: {
-        folder: string;
-        access: "read" | "read_write";
-      };
-    }
-  | {
-      type: "approval_resolved";
-      toolCallId: string;
-      fingerprint: string;
-      scope: string;
-      decision:
-        | "reject"
-        | "allow_once"
-        | "allow_session"
-        | "allow_folder_session"
-        | "allow_folder_always";
-      folderGrant?: {
-        folder: string;
-        access: "read" | "read_write";
-      };
-    }
-  | {
-      type: "tool_execution_started";
-      toolCall: ToolCall;
-      fingerprint: string;
-      effect: "readonly" | "side_effect";
-    }
-  | {
-      type: "harness_message";
-      kind: "git_diff_review" | "stop_block" | "tool_replay" | "max_tokens_continuation";
-      text: string;
-    }
-  | {
-      type: "session_status_changed";
-      status: SessionStatus;
-    }
-  | {
-      type: "session_cancelled";
-      reason: string;
-    }
-  | {
-      type: "session_failed";
-      message: string;
-    }
-  | {
-      type: "session_rewind";
-      targetSequence: number;
-      turnId?: string;
-    }
-  | BackgroundTaskStatusEvent
-  | {
-      type: "summary";
-      text: string;
-    }
-  );
-
-export type SessionEventInput =
-  | {
-      type: "user_message";
-      text: string;
-      turnId?: string;
-    }
-  | {
-      type: "assistant_tool_calls";
-      toolCalls: ToolCall[];
-    }
-  | {
-      type: "tool_result";
-      toolCallId: string;
-      name: string;
-      ok: boolean;
-      content: string;
-      data?: Record<string, unknown>;
-    }
+  | ({ type: "tool_result" } & ToolResult)
   | {
       type: "assistant_final";
       text: string;
@@ -266,3 +165,7 @@ export type SessionEventInput =
       type: "summary";
       text: string;
     };
+
+export type SessionEvent = SessionEventEnvelope & SessionEventPayload;
+
+export type SessionEventInput = SessionEventPayload;

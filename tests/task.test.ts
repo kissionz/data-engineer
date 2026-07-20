@@ -12,7 +12,7 @@ import { AgentBudgetTracker } from "../src/agent/budget.js";
 import { ContextBuilder } from "../src/agent/context.js";
 import { AgentLoop } from "../src/agent/loop.js";
 import { SessionStore } from "../src/agent/session.js";
-import type { AgentMessage, AgentResponse } from "../src/agent/types.js";
+import type { AgentMessage, AgentResponse } from "../src/protocol.js";
 import type { ModelClient } from "../src/model/base.js";
 import { PermissionGate } from "../src/permissions/gate.js";
 import { defaultPolicy } from "../src/permissions/policy.js";

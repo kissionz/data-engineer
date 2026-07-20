@@ -4,7 +4,7 @@ import type {
   SessionEvent,
   ToolCall,
   ToolResult,
-} from "./types.js";
+} from "../protocol.js";
 
 export interface ToolCallRecord {
   call: ToolCall;

@@ -1,7 +1,7 @@
 import type { ContextBuilder } from "./context.js";
 import type { SessionStore } from "./session.js";
 import { estimateTokens } from "./loopState.js";
-import type { AgentMessage, SessionEvent } from "./types.js";
+import type { AgentMessage, SessionEvent } from "../protocol.js";
 
 export interface AgentGuidance {
   readonly signal: AbortSignal;
