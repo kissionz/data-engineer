@@ -45,3 +45,27 @@ Model VPC access as an explicit per-server network mode rather than a MaxCompute
 - Tags: mcp, maxcompute, vpc, ssrf
 
 ---
+
+## [LRN-20260720-001] best_practice
+
+**Logged**: 2026-07-20T00:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+Runtime iteration should preserve one primary path per capability and reject feature redundancy.
+
+### Details
+The user explicitly required that Grok-inspired improvements be evaluated for overlap before implementation. New behavior should extend existing execution, cancellation, permission, session, and sandbox primitives rather than introduce multiple interchangeable backends or speculative configuration choices.
+
+### Suggested Action
+For each iteration, document the missing user outcome, reuse the narrowest existing abstraction, and defer adjacent features that do not directly serve that outcome.
+
+### Metadata
+- Source: user_feedback
+- Related Files: src/runtime/commandExecutor.ts, src/runtime/shellExecutor.ts, src/tools/bash.ts
+- Tags: simplicity, architecture, runtime, non-redundancy
+- Pattern-Key: simplify.single_primary_path
+
+---

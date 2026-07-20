@@ -9,6 +9,12 @@ export interface CommandResult {
   outputTruncated?: boolean;
 }
 
+export interface CommandProgress {
+  stdout: string;
+  stderr: string;
+  outputTruncated: boolean;
+}
+
 export interface CommandOptions {
   command: string;
   args: string[];
@@ -16,6 +22,7 @@ export interface CommandOptions {
   timeoutMs: number;
   maxOutputChars?: number;
   signal?: AbortSignal;
+  onProgress?: (progress: CommandProgress) => void;
 }
 
 export interface CommandExecutor {

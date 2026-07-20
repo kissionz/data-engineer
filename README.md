@@ -162,6 +162,22 @@ montane --task "Inspect README.md" --quiet
 `--permission-mode` 支持 `default`、`plan`、`accept-edits` 和 `deny`。npm 包根入口
 导出 Agent loop、模型适配器、权限、会话、工具与机器输出类型，可作为 TypeScript SDK 使用。
 
+### 后台命令
+
+对测试、构建或开发服务等不应阻塞 Agent loop 的命令，模型可以让 `Bash`
+使用 `background: true`。该调用仍经过原有的 shell 批准、sandbox、工作目录和
+敏感路径检查，成功后返回 session 内唯一的 task ID。
+
+后台命令统一由 `BashTask` 查询或停止；查询时可选择最多等待 30 秒，也可以立即
+读取当前的有界 stdout/stderr。任务状态会追加到 session event log。切换 session
+或退出运行时会终止该 session 尚未完成的后台命令，不会留下脱离审计的进程。
+
+可以直接要求 Agent：
+
+```text
+在后台运行测试，继续检查失败相关代码，然后等待测试结果。
+```
+
 每次启动默认创建独立会话。也可以在启动时恢复会话：
 
 ```bash
@@ -907,7 +923,7 @@ schema。可用 `--max-bytes` 调低限制；上限为 1 GiB。该命令只读�
 - 基于 stdio 或 Streamable HTTP 的 MCP Tools，以及只读 Resources/Prompts
 - workspace path boundary checks
 - 带 SHA-256 冲突检测的 atomic UTF-8 file writes
-- Read、Grep、Glob、Write、Edit、Bash、Git status/diff 和 Todo tools
+- Read、Grep、Glob、Write、Edit、Bash、后台 BashTask、Git status/diff 和 Todo tools
 - 只读 Project Skill discovery 与显式加载
 - allow / ask / deny permission gate
 - 默认使用真实 OpenAI Responses API，并支持流式输出

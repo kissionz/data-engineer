@@ -25,6 +25,7 @@ export function defaultPolicy(): PermissionPolicy {
       "MemorySearch",
       "Task",
       "EphemeralTask",
+      "BashTask",
     ]),
     deniedTools: new Set(),
     allowReadonly: true,

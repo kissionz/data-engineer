@@ -3,6 +3,7 @@
 import { homedir } from "node:os";
 import path from "node:path";
 import { AgentLoop } from "./agent/loop.js";
+import { createSessionBackgroundTasks } from "./agent/backgroundTasks.js";
 import type { AgentBudget } from "./agent/budget.js";
 import { CANCELLED_TEXT } from "./agent/cancellation.js";
 import { ContextBuilder } from "./agent/context.js";
@@ -66,8 +67,9 @@ import { Workspace } from "./runtime/workspace.js";
 import { WorktreeManager, type WorktreeInfo } from "./runtime/worktree.js";
 import { userStateRoot } from "./runtime/productPaths.js";
 import { CheckpointManager } from "./runtime/checkpoints.js";
+import { BackgroundCommandManager } from "./runtime/backgroundCommands.js";
 import { SkillLoader } from "./skills/loader.js";
-import { BashTool } from "./tools/bash.js";
+import { registerBashRuntime } from "./tools/bashRuntime.js";
 import { EditTool } from "./tools/edit.js";
 import { GitDiffTool, GitStatusTool } from "./tools/git.js";
 import { GlobTool } from "./tools/glob.js";
@@ -92,6 +94,7 @@ import {
 } from "./ui/machineReporter.js";
 import { InteractivePrompt } from "./cli/interactivePrompt.js";
 import {
+  disposeInteractiveRuntime,
   runInteractiveSession,
   type InteractiveRuntime,
 } from "./cli/interactiveSession.js";
@@ -457,11 +460,7 @@ async function main(): Promise<void> {
       }
       throw error;
     } finally {
-      try {
-        await runtime.telemetry.dispose();
-      } finally {
-        await runtime.session.release();
-      }
+      await disposeInteractiveRuntime(runtime);
     }
     printWorktreeReminder(worktree, outputFormat, opts.quiet);
     return;
@@ -571,6 +570,7 @@ function createAgent(
   sessionStore: SessionStore;
   compactor: SessionCompactor;
   checkpoints: CheckpointManager;
+  backgroundTasks: BackgroundCommandManager;
   tools: ToolRegistry;
   modelName: string;
   permissionMode: string;
@@ -596,6 +596,10 @@ function createAgent(
       void telemetry.observe(event);
       await options.session.updateLastSequence(event.sequence);
     },
+  );
+  const backgroundTasks = createSessionBackgroundTasks(
+    options.shellExecutor,
+    sessionStore,
   );
   const hooks = new HookManager();
   const skillLoader = new SkillLoader(options.workspace);
@@ -638,9 +642,9 @@ function createAgent(
   );
   tools.register(checkpoints.wrap(new WriteTool(options.workspace)));
   tools.register(checkpoints.wrap(new EditTool(options.workspace)));
-  if (options.shellExecutor) {
-    tools.register(new BashTool(options.workspace, options.shellExecutor));
-  }
+  registerBashRuntime(
+    tools, options.workspace, options.shellExecutor, backgroundTasks,
+  );
   if (
     options.runtimeCapabilities.git &&
     options.runtimeCapabilities.gitRepository
@@ -765,6 +769,7 @@ function createAgent(
     sessionStore,
     compactor,
     checkpoints,
+    backgroundTasks,
     tools,
     modelName: options.modelName,
     permissionMode: options.permissionMode,

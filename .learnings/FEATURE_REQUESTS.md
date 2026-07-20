@@ -142,3 +142,32 @@ Add a `maxcompute-local` CLI preset that launches the official source checkout w
 - **Notes**: Added the `maxcompute-local` guided preset with source-directory validation, optional external server config, explicit environment allowlisting, Windows instructions for the Shanghai VPC endpoint, and full automated coverage.
 
 ---
+
+## [FEAT-20260720-001] background_command_lifecycle
+
+**Logged**: 2026-07-20T00:00:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Requested Capability
+Iteratively adopt the highest-value Grok Build runtime ideas, starting with observable and cancellable background commands.
+
+### User Context
+Long-running builds, tests, and development processes should not block the agent loop, but the product should remain focused and avoid parallel implementations or overlapping control paths.
+
+### Complexity Estimate
+medium
+
+### Suggested Implementation
+Extend the existing Bash and ShellExecutor path with one session-scoped background command manager and one control tool. Reuse the current sandbox, permission, cancellation, output bounding, and session logging mechanisms; do not add a second command executor, scheduler, or monitor subsystem.
+
+### Metadata
+- Frequency: first_time
+- Related Features: Bash, cancellation, session events, sandbox
+
+### Resolution
+- **Resolved**: 2026-07-20T16:29:30+08:00
+- **Notes**: Extended the existing Bash/ShellExecutor path with session-scoped background tasks, one BashTask control tool, bounded live output, durable lifecycle events, and session-exit cleanup. Build, lint, full tests, and coverage passed.
+
+---

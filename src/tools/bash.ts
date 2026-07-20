@@ -1,4 +1,5 @@
 import type { ShellExecutor } from "../runtime/shellExecutor.js";
+import type { BackgroundCommandManager } from "../runtime/backgroundCommands.js";
 import type { Workspace } from "../runtime/workspace.js";
 import type {
   Tool,
@@ -16,6 +17,7 @@ export class BashTool implements Tool {
       command: { type: "string" },
       cwd: { type: "string" },
       timeout_seconds: { type: "number" },
+      background: { type: "boolean" },
     },
     required: ["command"],
     additionalProperties: false,
@@ -24,6 +26,7 @@ export class BashTool implements Tool {
   constructor(
     private readonly workspace: Workspace,
     private readonly executor: ShellExecutor,
+    private readonly backgroundTasks?: BackgroundCommandManager,
     private readonly maxOutputChars = 12_000,
   ) {}
 
@@ -44,6 +47,34 @@ export class BashTool implements Tool {
         ? args.timeout_seconds
         : 30;
     const timeoutMs = Math.min(Math.max(timeoutSeconds, 1), 120) * 1000;
+
+    if (args.background === true) {
+      if (!this.backgroundTasks) {
+        return {
+          ok: false,
+          content: "Background command execution is unavailable in this runtime.",
+        };
+      }
+      const task = await this.backgroundTasks.start({
+        script: args.command,
+        cwd,
+        timeoutMs,
+        maxOutputChars: this.maxOutputChars,
+        signal: context?.signal,
+      });
+      return {
+        ok: true,
+        content:
+          `Background command started. Task ID: ${task.taskId}. ` +
+          "Use BashTask to inspect or stop it.",
+        data: {
+          background: true,
+          taskId: task.taskId,
+          status: task.status,
+          startedAt: task.startedAt,
+        },
+      };
+    }
 
     const result = await this.executor.runScript({
       script: args.command,

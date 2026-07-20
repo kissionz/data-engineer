@@ -14,6 +14,7 @@ Rules:
 - When Read returns sha256, pass it to Edit as expected_hash.
 - Prefer small precise edits.
 - After editing code, run relevant tests when possible.
+- Use Bash background mode only for commands that should continue while you do other work, then inspect or stop them with BashTask.
 - For complex tasks, maintain a Todo list and keep only one item in progress.
 - When project skills may apply, use SkillList and explicitly load the relevant skill.
 - Use the read-only code-reviewer Task when an independent review would materially reduce risk.

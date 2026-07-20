@@ -59,6 +59,18 @@ export class LocalCommandExecutor implements CommandExecutor {
       let forceKillSent = false;
       let forceKillTimer: NodeJS.Timeout | undefined;
 
+      const emitProgress = () => {
+        try {
+          options.onProgress?.({
+            stdout: stdout.value(),
+            stderr: stderr.value(),
+            outputTruncated: stdout.truncated || stderr.truncated,
+          });
+        } catch {
+          // Progress observers must not alter command execution.
+        }
+      };
+
       const requestTermination = (cause: "timeout" | "cancelled") => {
         if (settled || terminationCause) {
           return;
@@ -100,6 +112,7 @@ export class LocalCommandExecutor implements CommandExecutor {
         if (spawnError) {
           stderr.append(spawnError.message);
         }
+        emitProgress();
 
         resolve({
           ok: !terminationCause && !spawnError && exitCode === 0,
@@ -112,8 +125,14 @@ export class LocalCommandExecutor implements CommandExecutor {
         });
       };
 
-      child.stdout?.on("data", (chunk: Buffer) => stdout.appendBuffer(chunk));
-      child.stderr?.on("data", (chunk: Buffer) => stderr.appendBuffer(chunk));
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout.appendBuffer(chunk);
+        emitProgress();
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        stderr.appendBuffer(chunk);
+        emitProgress();
+      });
       child.on("error", (error) => {
         spawnError = error;
       });

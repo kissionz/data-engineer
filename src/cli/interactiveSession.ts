@@ -12,6 +12,7 @@ import type {
 } from "../agent/sessionManager.js";
 import type { SessionEvent } from "../agent/types.js";
 import type { CheckpointManager } from "../runtime/checkpoints.js";
+import type { BackgroundCommandManager } from "../runtime/backgroundCommands.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { SessionTelemetryObserver } from "../telemetry/index.js";
 import type { InteractivePrompt } from "./interactivePrompt.js";
@@ -28,6 +29,7 @@ export interface InteractiveRuntime {
   sessionStore: SessionStore;
   compactor: SessionCompactor;
   checkpoints: CheckpointManager;
+  backgroundTasks: BackgroundCommandManager;
   tools: ToolRegistry;
   modelName: string;
   permissionMode: string;
@@ -98,14 +100,24 @@ export async function runInteractiveSession(
     }
   } finally {
     try {
-      runtime.reporter.dispose();
+      await disposeInteractiveRuntime(runtime);
+    } finally {
+      prompt.close();
+    }
+  }
+}
+
+export async function disposeInteractiveRuntime(
+  runtime: InteractiveRuntime,
+): Promise<void> {
+  runtime.reporter.dispose();
+  try {
+    await runtime.backgroundTasks.dispose();
+  } finally {
+    try {
       await runtime.telemetry.dispose();
     } finally {
-      try {
-        await runtime.session.release();
-      } finally {
-        prompt.close();
-      }
+      await runtime.session.release();
     }
   }
 }
@@ -211,9 +223,7 @@ async function replaceRuntime(
   verb: string,
 ): Promise<{ handled: true; runtime: InteractiveRuntime }> {
   const next = createRuntime(session);
-  current.reporter.dispose();
-  await current.telemetry.dispose();
-  await current.session.release();
+  await disposeInteractiveRuntime(current);
   console.log(`${verb} session: ${next.session.id}`);
   return { handled: true, runtime: next };
 }

@@ -55,6 +55,25 @@ describe("LocalCommandExecutor", () => {
     expect(result.stderr).toContain("ERRTAIL");
   });
 
+  it("reports bounded progress without changing the final result", async () => {
+    const cwd = await makeRoot();
+    const progress: string[] = [];
+    const result = await new LocalCommandExecutor().run({
+      command: process.execPath,
+      args: [
+        "-e",
+        'process.stdout.write("first"); setTimeout(() => process.stdout.write("-last"), 10)',
+      ],
+      cwd,
+      timeoutMs: 2_000,
+      onProgress: (snapshot) => progress.push(snapshot.stdout),
+    });
+
+    expect(result).toMatchObject({ ok: true, stdout: "first-last" });
+    expect(progress).toContain("first");
+    expect(progress.at(-1)).toBe("first-last");
+  });
+
   it("terminates timed-out processes before resolving", async () => {
     const cwd = await makeRoot();
     const startedAt = Date.now();

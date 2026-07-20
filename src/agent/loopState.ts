@@ -121,6 +121,7 @@ export function toolEffect(name: string): "readonly" | "side_effect" {
     "SkillList",
     "MemorySearch",
     "HttpFetch",
+    "BashTask",
   ].includes(name)
     ? "readonly"
     : "side_effect";

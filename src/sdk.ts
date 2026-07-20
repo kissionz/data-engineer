@@ -31,6 +31,11 @@ export type { Tool, ToolExecutionResult } from "./tools/base.js";
 export { Workspace } from "./runtime/workspace.js";
 export { CheckpointManager } from "./runtime/checkpoints.js";
 export type { UndoResult } from "./runtime/checkpoints.js";
+export { BackgroundCommandManager } from "./runtime/backgroundCommands.js";
+export type {
+  BackgroundCommandSnapshot,
+  BackgroundCommandStatus,
+} from "./runtime/backgroundCommands.js";
 export {
   PRODUCT_NAME,
   PRODUCT_VERSION,

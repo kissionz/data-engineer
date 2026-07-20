@@ -50,6 +50,7 @@ export class DockerShellExecutor implements ShellExecutor {
         timeoutMs: options.timeoutMs,
         maxOutputChars: options.maxOutputChars,
         signal: options.signal,
+        onProgress: options.onProgress,
       });
 
       if (result.timedOut || result.cancelled) {

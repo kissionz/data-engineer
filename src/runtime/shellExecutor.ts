@@ -1,4 +1,7 @@
-import type { CommandResult } from "./commandExecutor.js";
+import type {
+  CommandProgress,
+  CommandResult,
+} from "./commandExecutor.js";
 
 export interface ShellOptions {
   script: string;
@@ -6,6 +9,7 @@ export interface ShellOptions {
   timeoutMs: number;
   maxOutputChars?: number;
   signal?: AbortSignal;
+  onProgress?: (progress: CommandProgress) => void;
 }
 
 export interface ShellExecutor {

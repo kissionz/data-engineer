@@ -65,7 +65,13 @@ export function summarizeToolCall(call: ToolCall): string {
   }
 
   if (call.name === "Bash") {
-    return `Bash ${compact(String(call.args.command ?? "command"), 100)}`;
+    const mode = call.args.background === true ? "background " : "";
+    return `Bash ${mode}${compact(String(call.args.command ?? "command"), 100)}`;
+  }
+
+  if (call.name === "BashTask") {
+    const action = call.args.stop === true ? "stop" : "inspect";
+    return `Bash task ${action} ${compact(String(call.args.task_id ?? "task"), 50)}`;
   }
 
   if (call.name === "HttpFetch") {

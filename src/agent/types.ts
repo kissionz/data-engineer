@@ -58,6 +58,17 @@ export type SessionStatus =
   | "cancelled"
   | "failed";
 
+export interface BackgroundTaskStatusEvent {
+  type: "background_task_status";
+  taskId: string;
+  status: "running" | "completed" | "failed" | "cancelled" | "timed_out";
+  startedAt: string;
+  completedAt?: string;
+  exitCode: number | null;
+  truncated: boolean;
+  cleanupFailed: boolean;
+}
+
 export type SessionEvent = SessionEventEnvelope &
   (
   | {
@@ -145,6 +156,7 @@ export type SessionEvent = SessionEventEnvelope &
       type: "session_failed";
       message: string;
     }
+  | BackgroundTaskStatusEvent
   | {
       type: "summary";
       text: string;
@@ -237,6 +249,7 @@ export type SessionEventInput =
       type: "session_failed";
       message: string;
     }
+  | BackgroundTaskStatusEvent
   | {
       type: "summary";
       text: string;

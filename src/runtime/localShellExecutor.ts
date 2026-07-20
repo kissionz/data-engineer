@@ -35,6 +35,7 @@ export class LocalShellExecutor implements ShellExecutor {
       timeoutMs: options.timeoutMs,
       maxOutputChars: options.maxOutputChars,
       signal: options.signal,
+      onProgress: options.onProgress,
     });
   }
 
@@ -75,6 +76,7 @@ export class LocalShellExecutor implements ShellExecutor {
       timeoutMs: options.timeoutMs,
       maxOutputChars: options.maxOutputChars,
       signal: options.signal,
+      onProgress: options.onProgress,
     });
   }
 
@@ -87,6 +89,7 @@ export class LocalShellExecutor implements ShellExecutor {
       timeoutMs: options.timeoutMs,
       maxOutputChars: options.maxOutputChars,
       signal: options.signal,
+      onProgress: options.onProgress,
     });
   }
 }

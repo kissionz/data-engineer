@@ -259,6 +259,41 @@ Run loopback integration tests with narrowly scoped elevated test permissions in
 
 ---
 
+## [ERR-20260720-001] architecture_line_limit
+
+**Logged**: 2026-07-20T16:24:45+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: backend
+
+### Summary
+The first background-command integration pushed the composition root beyond its enforced 1,000-line boundary.
+
+### Error
+```
+AssertionError: src/index.ts has grown beyond 1000 lines
+expected 1031 to be less than or equal to 1000
+```
+
+### Context
+- Added session-scoped background command setup, Bash/BashTask registration, and runtime disposal.
+- The feature tests passed, but the full architecture suite rejected the additional wiring in `src/index.ts`.
+
+### Suggested Fix
+Keep the architecture threshold unchanged. Extract Bash tool registration and consolidate runtime disposal into shared helpers so the composition root only composes those capabilities.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/index.ts, src/cli/interactiveSession.ts, tests/architecture.test.ts
+- Recurrence-Count: 2
+- Last-Seen: 2026-07-20
+
+### Resolution
+- **Resolved**: 2026-07-20T16:29:30+08:00
+- **Notes**: Extracted session background-task adaptation, Bash tool registration, and shared runtime disposal. `src/index.ts` returned to 999 lines and the architecture suite passed without changing its threshold.
+
+---
+
 ## [ERR-20260701-003] oauth_test_await_thenable
 
 **Logged**: 2026-07-01T10:20:30Z
