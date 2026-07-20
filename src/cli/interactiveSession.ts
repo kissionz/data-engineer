@@ -139,11 +139,27 @@ async function handleCommand(
     console.log(JSON.stringify(await runtime.session.readMetadata(), null, 2));
     return { handled: true, runtime };
   }
+  if (command === "/rename") {
+    console.log("Usage: /rename <session-title>");
+    return { handled: true, runtime };
+  }
+  if (command.startsWith("/rename ")) {
+    const metadata = await runtime.session.updateTitle(
+      command.slice("/rename".length).trim(),
+    );
+    console.log(`Renamed session: ${metadata.title}`);
+    return { handled: true, runtime };
+  }
   if (command === "/sessions") {
     const sessions = await sessionManager.list();
     const rows = await Promise.all(sessions.map(async (id) => {
       const metadata = await sessionManager.inspect(id);
-      return `${id}\t${metadata.status}\t${metadata.model}`;
+      return [
+        id,
+        metadata.status,
+        metadata.model,
+        ...(metadata.title ? [metadata.title] : []),
+      ].join("\t");
     }));
     console.log(rows.length > 0 ? rows.join("\n") : "[No sessions]");
     return { handled: true, runtime };
@@ -244,7 +260,7 @@ function formatContext(events: SessionEvent[]): string {
 
 function printHelp(): void {
   console.log([
-    "Commands: /help, /new, /resume <id>, /session, /sessions, /inspect [id]",
+    "Commands: /help, /new, /resume <id>, /rename <title>, /session, /sessions, /inspect [id]",
     "Runtime: /model, /permissions, /cost, /context, /compact, /memory <query>, /mcp",
     "Workspace: /diff, /undo, /exit",
     "During a run: /tools toggles tool details, /cancel stops.",

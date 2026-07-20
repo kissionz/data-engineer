@@ -125,6 +125,7 @@ npm start
 ```text
 /new
 /resume <session-id|latest>
+/rename <session-title>
 /session
 /sessions
 /inspect [session-id|latest]
@@ -142,8 +143,9 @@ npm start
 
 - `/new`：创建并切换到新会话。
 - `/resume <session-id|latest>`：恢复指定会话或最近选择的会话。
+- `/rename <session-title>`：为当前会话设置便于识别的名称。
 - `/session`：显示当前会话 ID、状态和模型。
-- `/sessions`：列出已有会话。
+- `/sessions`：列出已有会话及已设置的名称。
 - `/inspect [session-id|latest]`：查看会话元数据；省略参数时查看当前会话。
 - `/compact`：立即生成结构化会话摘要，保留目标、约束、Todo、验证证据与未完成调用。
 - `/undo`：安全撤销 Montane 最近一次文件 Write/Edit；文件已被外部修改时拒绝覆盖。
@@ -768,7 +770,7 @@ npm start -- --sandbox-network bridge
 
 ## 会话、日志与上下文压缩
 
-会话日志、元数据和任务 Todo 分别持久化在 `.montane/sessions/` 和 `.montane/todos/`。新事件包含 session ID、唯一 event ID、单调递增 sequence 和 timestamp；元数据记录模型及 lifecycle state。
+会话日志、元数据和任务 Todo 分别持久化在 `.montane/sessions/` 和 `.montane/todos/`。新事件包含 session ID、唯一 event ID、单调递增 sequence 和 timestamp；元数据记录可选会话名称、模型及 lifecycle state。
 
 已完成的 `toolCallId` 可从日志恢复。已经开始但被中断的执行会标记为 `unknown_outcome`，不会自动再次运行。该状态用于任务恢复，不等同于长期 Memory。
 

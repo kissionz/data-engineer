@@ -74,6 +74,41 @@ describe("SessionManager", () => {
     await session.release();
   });
 
+  it("assigns one normalized display title through existing metadata", async () => {
+    const root = await makeRoot();
+    const manager = new SessionManager(root);
+    const session = await manager.create();
+
+    const renamed = await session.updateTitle("  数据平台　发布检查  ");
+
+    expect(renamed.title).toBe("数据平台 发布检查");
+    await expect(manager.inspect(session.id)).resolves.toMatchObject({
+      title: "数据平台 发布检查",
+    });
+    await expect(
+      readFile(session.metadataPath, "utf8").then(JSON.parse),
+    ).resolves.toMatchObject({
+      title: "数据平台 发布检查",
+    });
+    await session.release();
+  });
+
+  it("rejects empty, oversized, and control-character session titles", async () => {
+    const session = await new SessionManager(await makeRoot()).create();
+
+    await expect(session.updateTitle(" \n\t ")).rejects.toThrow(
+      "Session title cannot be empty",
+    );
+    await expect(session.updateTitle("x".repeat(81))).rejects.toThrow(
+      "cannot exceed 80 characters",
+    );
+    await expect(session.updateTitle("unsafe\u0000title")).rejects.toThrow(
+      "control characters",
+    );
+    await expect(session.readMetadata()).resolves.not.toHaveProperty("title");
+    await session.release();
+  });
+
   it("adds metadata when resuming an old flat-layout session", async () => {
     const root = await makeRoot();
     const sessionsDir = path.join(root, ".montane", "sessions");

@@ -456,3 +456,35 @@ Preserve the bounded error cause chain at the MCP request boundary and add targe
 - **Notes**: MCP HTTP requests now preserve a bounded cause chain and add targeted DNS, VPC route, TCP 443, and TLS trust guidance. Full validation passed.
 
 ---
+
+## [ERR-20260720-002] control_character_regex_lint
+
+**Logged**: 2026-07-20T17:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The first session-title control-character check used a regular expression rejected by the repository's `no-control-regex` lint rule.
+
+### Error
+```
+src/agent/sessionManager.ts: Unexpected control character(s) in regular expression
+```
+
+### Context
+- Added validation for one optional session display title.
+- The targeted tests and TypeScript build passed before the full lint step exposed the style constraint.
+
+### Suggested Fix
+Check Unicode code points directly when validating control characters.
+
+### Metadata
+- Reproducible: yes
+- Related Files: src/agent/sessionManager.ts
+
+### Resolution
+- **Resolved**: 2026-07-20T17:05:00+08:00
+- **Notes**: Replaced the regular expression with an explicit code-point predicate and reran the complete quality gate.
+
+---

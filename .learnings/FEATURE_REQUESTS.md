@@ -171,3 +171,32 @@ Extend the existing Bash and ShellExecutor path with one session-scoped backgrou
 - **Notes**: Extended the existing Bash/ShellExecutor path with session-scoped background tasks, one BashTask control tool, bounded live output, durable lifecycle events, and session-exit cleanup. Build, lint, full tests, and coverage passed.
 
 ---
+
+## [FEAT-20260720-002] session_display_title
+
+**Logged**: 2026-07-20T17:00:00+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: sessions
+
+### Requested Capability
+Improve session identification while keeping the session model focused and avoiding overlapping indexing or naming mechanisms.
+
+### User Context
+Opaque session IDs make lists and later recovery harder to navigate, but automatic naming, search indexing, and multiple aliases would add redundant behavior.
+
+### Complexity Estimate
+small
+
+### Suggested Implementation
+Store one optional, explicitly assigned title in existing session metadata, expose one `/rename <title>` command, and display that title in the existing session list.
+
+### Metadata
+- Frequency: first_time
+- Related Features: session metadata, resume, inspect
+
+### Resolution
+- **Resolved**: 2026-07-20T17:00:00+08:00
+- **Notes**: Added one normalized metadata title and one interactive rename command; no automatic naming, alias layer, or search index was introduced.
+
+---

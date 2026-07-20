@@ -23,6 +23,7 @@ export type { SessionStatus } from "./types.js";
 
 export interface SessionMetadata {
   id: string;
+  title?: string;
   workspaceRoot: string;
   model: string;
   createdAt: string;
@@ -43,6 +44,7 @@ export interface ManagedSession {
   todoPath: string;
   metadataPath: string;
   readMetadata(): Promise<SessionMetadata>;
+  updateTitle(title: string): Promise<SessionMetadata>;
   updateStatus(status: SessionStatus): Promise<SessionMetadata>;
   updateLastSequence(sequence: number): Promise<SessionMetadata>;
   release(): Promise<void>;
@@ -525,6 +527,14 @@ export class SessionManager {
         readMetadata: () => metadataQueue.catch(() =>
           readMetadata(session.metadataPath, session.id),
         ),
+        updateTitle: async (title) => {
+          const normalized = normalizeSessionTitle(title);
+          return updateMetadata((current) => ({
+            ...current,
+            title: normalized,
+            updatedAt: new Date().toISOString(),
+          }));
+        },
         updateStatus: (status) =>
           updateMetadata((current) => ({
             ...current,
@@ -662,6 +672,8 @@ function isSessionMetadata(value: unknown): value is SessionMetadata {
   const metadata = value as Partial<SessionMetadata>;
   return (
     typeof metadata.id === "string" &&
+    (metadata.title === undefined ||
+      isNormalizedSessionTitle(metadata.title)) &&
     typeof metadata.workspaceRoot === "string" &&
     typeof metadata.model === "string" &&
     typeof metadata.createdAt === "string" &&
@@ -673,6 +685,44 @@ function isSessionMetadata(value: unknown): value is SessionMetadata {
     (metadata.parentSessionId === undefined ||
       typeof metadata.parentSessionId === "string")
   );
+}
+
+function isNormalizedSessionTitle(value: unknown): value is string {
+  if (typeof value !== "string") {
+    return false;
+  }
+  try {
+    return value === normalizeSessionTitle(value);
+  } catch {
+    return false;
+  }
+}
+
+function normalizeSessionTitle(value: string): string {
+  if (typeof value !== "string") {
+    throw new Error("Session title must be a string.");
+  }
+  if ([...value].some((character) => {
+    const codePoint = character.codePointAt(0) ?? 0;
+    return (
+      (codePoint < 32 &&
+        codePoint !== 9 &&
+        codePoint !== 10 &&
+        codePoint !== 13) ||
+      codePoint === 127
+    );
+  })) {
+    throw new Error("Session title cannot contain control characters.");
+  }
+
+  const normalized = value.normalize("NFKC").replace(/\s+/gu, " ").trim();
+  if (!normalized) {
+    throw new Error("Session title cannot be empty.");
+  }
+  if ([...normalized].length > 80) {
+    throw new Error("Session title cannot exceed 80 characters.");
+  }
+  return normalized;
 }
 
 function isSessionStatus(value: unknown): value is SessionStatus {
