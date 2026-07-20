@@ -230,6 +230,45 @@ describe("SessionStore", () => {
     expect(observed).toEqual([1]);
   });
 
+  it("projects rewind markers while retaining superseded events on disk", async () => {
+    const root = await makeRoot();
+    const filePath = path.join(root, "rewind.jsonl");
+    const store = new SessionStore(filePath, "rewind");
+    await store.append({
+      type: "user_message",
+      text: "first",
+      turnId: "turn-1",
+    });
+    await store.append({ type: "assistant_final", text: "first answer" });
+    await store.append({
+      type: "user_message",
+      text: "second",
+      turnId: "turn-2",
+    });
+    await store.append({ type: "assistant_final", text: "second answer" });
+    await expect(store.load()).resolves.toHaveLength(4);
+
+    await store.append({
+      type: "session_rewind",
+      targetSequence: 2,
+      turnId: "turn-2",
+    });
+    await store.append({
+      type: "session_status_changed",
+      status: "running",
+    });
+
+    await expect(store.load()).resolves.toMatchObject([
+      { sequence: 1, text: "first" },
+      { sequence: 2, text: "first answer" },
+      { sequence: 5, type: "session_rewind", targetSequence: 2 },
+      { sequence: 6, type: "session_status_changed", status: "running" },
+    ]);
+    const durableText = await readFile(filePath, "utf8");
+    expect(durableText).toContain('"text":"second"');
+    expect(durableText).toContain('"text":"second answer"');
+  });
+
   it.each([
     [
       "internal",

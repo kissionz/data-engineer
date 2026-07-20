@@ -287,3 +287,32 @@ Copy the current projected event timeline and Todo into a new session, regenerat
 - **Notes**: Added one `/fork` path with independent session/event identities and sequential runtime switching. Parent checkpoints are intentionally excluded because both sessions refer to the same workspace files.
 
 ---
+
+## [FEAT-20260720-006] turn_level_session_rewind
+
+**Logged**: 2026-07-20T17:45:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Requested Capability
+Replace single-file undo with one coherent rewind operation covering conversation and every file change in a user turn.
+
+### User Context
+Undoing only the last Write/Edit leaves multi-file tasks and conversation state inconsistent. Adding another rewind command beside it would preserve two competing semantics.
+
+### Complexity Estimate
+medium
+
+### Suggested Implementation
+Assign one turn ID per agent run, group all file checkpoints by that ID, preflight every affected file, restore the whole set only when conflict-free, and append a durable rewind marker that projects the superseded conversation out of active history.
+
+### Metadata
+- Frequency: first_time
+- Related Features: checkpoints, session events, context replay
+
+### Resolution
+- **Resolved**: 2026-07-20T17:45:00+08:00
+- **Notes**: Replaced `/undo` and `undoLatest()` with one `/rewind` path. Rewind is turn-scoped, conflict-checked as a unit, restores all files, and retains superseded events on disk behind an auditable projection marker.
+
+---

@@ -138,7 +138,7 @@ npm start
 /memory <query>
 /mcp
 /diff
-/undo
+/rewind
 /exit
 ```
 
@@ -150,7 +150,7 @@ npm start
 - `/sessions`：列出已有会话及已设置的名称。
 - `/inspect [session-id|latest]`：查看会话元数据；省略参数时查看当前会话。
 - `/compact`：立即生成结构化会话摘要，保留目标、约束、Todo、验证证据与未完成调用。
-- `/undo`：安全撤销 Montane 最近一次文件 Write/Edit；文件已被外部修改时拒绝覆盖。
+- `/rewind`：回退最近一轮对话及该轮全部 Write/Edit；任一文件已被外部修改时整轮拒绝覆盖。
 - `/exit`：退出交互模式；`/quit` 也可用。
 
 ### 自动化与 SDK
@@ -794,6 +794,11 @@ subagents/         # 该会话的只读子代理日志
 `/fork` 会为复制的事件生成新的 session/event ID，保留父会话引用并复制 Todo。
 分叉后交互运行时切换到子会话，不会让两个会话并行写同一工作区。旧 checkpoint
 不会复制到子会话，避免子会话撤销父会话留下的文件历史。
+
+`/rewind` 以用户消息为轮次边界。每轮所有 Write/Edit 共用一个 turn ID；回退前
+会先验证该轮涉及的全部文件仍与 Agent 最后写入的内容一致，任一文件冲突则不修改
+任何文件或对话。验证通过后，文件恢复到该轮开始前的状态，并追加
+`session_rewind` 事件隐藏被回退的对话；原始事件仍保留在 `events.jsonl` 中供审计。
 
 已完成的 `toolCallId` 可从日志恢复。已经开始但被中断的执行会标记为 `unknown_outcome`，不会自动再次运行。该状态用于任务恢复，不等同于长期 Memory。
 

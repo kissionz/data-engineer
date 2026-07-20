@@ -112,7 +112,11 @@ export class AgentLoop {
         this.sessionStartEmitted = true;
       }
       await this.recoverInterruptedToolCalls();
-      await this.session.append({ type: "user_message", text: userTask });
+      await this.session.append({
+        type: "user_message",
+        text: userTask,
+        turnId: accountingNamespace,
+      });
 
       for (let turn = 0; ; turn += 1) {
         throwIfCancelled(signal);

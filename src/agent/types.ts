@@ -74,6 +74,7 @@ export type SessionEvent = SessionEventEnvelope &
   | {
       type: "user_message";
       text: string;
+      turnId?: string;
     }
   | {
       type: "assistant_tool_calls";
@@ -155,6 +156,11 @@ export type SessionEvent = SessionEventEnvelope &
   | {
       type: "session_failed";
       message: string;
+    }
+  | {
+      type: "session_rewind";
+      targetSequence: number;
+      turnId?: string;
     }
   | BackgroundTaskStatusEvent
   | {
@@ -167,6 +173,7 @@ export type SessionEventInput =
   | {
       type: "user_message";
       text: string;
+      turnId?: string;
     }
   | {
       type: "assistant_tool_calls";
@@ -248,6 +255,11 @@ export type SessionEventInput =
   | {
       type: "session_failed";
       message: string;
+    }
+  | {
+      type: "session_rewind";
+      targetSequence: number;
+      turnId?: string;
     }
   | BackgroundTaskStatusEvent
   | {

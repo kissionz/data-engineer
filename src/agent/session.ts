@@ -109,7 +109,10 @@ export class SessionStore {
         await handle.sync();
         const finalInfo = await handle.stat();
         if (cacheCurrent && this.cachedEvents) {
-          this.cachedEvents.push(fullEvent);
+          this.cachedEvents = projectSessionEvents([
+            ...this.cachedEvents,
+            fullEvent,
+          ]);
           this.cachedIdentity = identityOf(finalInfo);
         } else if (sequence === 0) {
           this.cachedEvents = [fullEvent];
@@ -165,9 +168,9 @@ export class SessionStore {
         }
       }
 
-      this.cachedEvents = events;
+      this.cachedEvents = projectSessionEvents(events);
       this.cachedIdentity = identity;
-      return [...events];
+      return [...this.cachedEvents];
     } catch (error: unknown) {
       if (
         error instanceof Error &&
@@ -190,6 +193,19 @@ export class SessionStore {
       this.cachedIdentity.ctimeMs === info.ctimeMs
     );
   }
+}
+
+function projectSessionEvents(events: SessionEvent[]): SessionEvent[] {
+  let projected: SessionEvent[] = [];
+  for (const event of events) {
+    if (event.type === "session_rewind") {
+      projected = projected.filter(
+        (candidate) => candidate.sequence <= event.targetSequence,
+      );
+    }
+    projected.push(event);
+  }
+  return projected;
 }
 
 async function openReadWriteFile(filePath: string): Promise<FileHandle> {

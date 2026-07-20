@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
+import type { SessionStore } from "../agent/session.js";
 import type { Tool, ToolExecutionContext, ToolExecutionResult } from "../tools/base.js";
 import type { Workspace } from "./workspace.js";
 import {
@@ -13,6 +14,7 @@ import { workspaceStateRoot } from "./productPaths.js";
 interface CheckpointRecord {
   id: string;
   createdAt: string;
+  turnId: string;
   toolCallId: string;
   operation: "create" | "edit";
   path: string;
@@ -24,9 +26,10 @@ interface CheckpointRecord {
   restoredAt?: string;
 }
 
-export interface UndoResult {
-  restored: boolean;
+export interface RewindResult {
+  rewound: boolean;
   message: string;
+  revertedPaths: string[];
 }
 
 export class CheckpointManager {
@@ -100,6 +103,7 @@ export class CheckpointManager {
     records.push({
       id: randomUUID(),
       createdAt: new Date().toISOString(),
+      turnId: context?.taskRunId ?? context?.toolCallId ?? "unknown",
       toolCallId: context?.toolCallId ?? "unknown",
       operation: before ? "edit" : "create",
       path: filePath,
@@ -112,36 +116,98 @@ export class CheckpointManager {
     return result;
   }
 
-  async undoLatest(): Promise<UndoResult> {
-    const records = await this.load();
-    const record = [...records].reverse().find((item) => !item.restoredAt);
-    if (!record) {
-      return { restored: false, message: "No Montane edit checkpoint is available." };
-    }
-
-    const current = await readTextFileSnapshot(this.workspace, record.path, {
-      forEdit: true,
-    });
-    if (current.hash !== record.afterSha256) {
+  async rewindLatestTurn(session: SessionStore): Promise<RewindResult> {
+    const events = await session.load();
+    const turn = [...events].reverse().find(
+      (event) => event.type === "user_message",
+    );
+    if (!turn || turn.type !== "user_message") {
       return {
-        restored: false,
-        message: `Refusing to undo ${record.path}: the file changed after the checkpoint.`,
+        rewound: false,
+        message: "No Montane conversation turn is available to rewind.",
+        revertedPaths: [],
       };
     }
 
-    if (record.operation === "create") {
-      const info = await lstat(current.absolutePath);
-      if (!info.isFile() || info.isSymbolicLink()) {
-        return { restored: false, message: "Refusing to remove an unsafe file path." };
+    const records = await this.load();
+    const turnRecords = turn.turnId
+      ? records.filter(
+          (record) => !record.restoredAt && record.turnId === turn.turnId,
+        )
+      : [];
+    const changes = collapseTurnChanges(turnRecords);
+
+    const currentFiles = new Map<string, TextFileSnapshot>();
+    for (const change of changes) {
+      let current: TextFileSnapshot;
+      try {
+        current = await readTextFileSnapshot(this.workspace, change.path, {
+          forEdit: true,
+        });
+      } catch {
+        return {
+          rewound: false,
+          message: `Refusing to rewind: ${change.path} changed after the turn.`,
+          revertedPaths: [],
+        };
       }
-      await unlink(current.absolutePath);
-    } else if (record.before) {
-      await atomicReplaceTextFile(current, record.before.text);
+      if (current.hash !== change.afterSha256) {
+        return {
+          rewound: false,
+          message: `Refusing to rewind: ${change.path} changed after the turn.`,
+          revertedPaths: [],
+        };
+      }
+      currentFiles.set(change.path, current);
     }
 
-    record.restoredAt = new Date().toISOString();
-    await this.save(records);
-    return { restored: true, message: `Restored ${record.path} from checkpoint.` };
+    for (const change of changes) {
+      const current = currentFiles.get(change.path);
+      if (!current) {
+        throw new Error(`Missing validated rewind snapshot: ${change.path}`);
+      }
+      if (change.operation === "create") {
+        const info = await lstat(current.absolutePath);
+        if (!info.isFile() || info.isSymbolicLink()) {
+          return {
+            rewound: false,
+            message: "Refusing to remove an unsafe file path.",
+            revertedPaths: [],
+          };
+        }
+        await unlink(current.absolutePath);
+      } else if (change.before) {
+        await atomicReplaceTextFile(current, change.before.text);
+      } else {
+        throw new Error(`Checkpoint for ${change.path} has no prior contents.`);
+      }
+    }
+
+    if (turnRecords.length > 0) {
+      const restoredAt = new Date().toISOString();
+      for (const record of turnRecords) {
+        record.restoredAt = restoredAt;
+      }
+      await this.save(records);
+    }
+    await session.append({
+      type: "session_rewind",
+      targetSequence: Math.max(0, turn.sequence - 1),
+      turnId: turn.turnId,
+    });
+    await session.append({
+      type: "session_status_changed",
+      status: "running",
+    });
+    const revertedPaths = changes.map((change) => change.path);
+    return {
+      rewound: true,
+      message:
+        revertedPaths.length > 0
+          ? `Rewound the latest turn and restored ${revertedPaths.length} file(s).`
+          : "Rewound the latest conversation turn.",
+      revertedPaths,
+    };
   }
 
   private async load(): Promise<CheckpointRecord[]> {
@@ -171,6 +237,31 @@ export class CheckpointManager {
     });
     await rename(temporary, this.filePath);
   }
+}
+
+interface TurnChange {
+  path: string;
+  operation: CheckpointRecord["operation"];
+  afterSha256: string;
+  before?: CheckpointRecord["before"];
+}
+
+function collapseTurnChanges(records: CheckpointRecord[]): TurnChange[] {
+  const changes = new Map<string, TurnChange>();
+  for (const record of records) {
+    const existing = changes.get(record.path);
+    if (existing) {
+      existing.afterSha256 = record.afterSha256;
+    } else {
+      changes.set(record.path, {
+        path: record.path,
+        operation: record.operation,
+        afterSha256: record.afterSha256,
+        before: record.before,
+      });
+    }
+  }
+  return [...changes.values()];
 }
 
 class CheckpointingTool implements Tool {

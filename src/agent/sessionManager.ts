@@ -226,6 +226,9 @@ export class SessionManager {
       const childStore = new SessionStore(child.sessionPath, child.id);
       let lastSequence = 0;
       for (const event of events) {
+        if (event.type === "session_rewind") {
+          continue;
+        }
         lastSequence = (
           await childStore.append(withoutSessionEnvelope(event))
         ).sequence;

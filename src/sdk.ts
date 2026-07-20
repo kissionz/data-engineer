@@ -30,7 +30,7 @@ export { ToolRegistry } from "./tools/registry.js";
 export type { Tool, ToolExecutionResult } from "./tools/base.js";
 export { Workspace } from "./runtime/workspace.js";
 export { CheckpointManager } from "./runtime/checkpoints.js";
-export type { UndoResult } from "./runtime/checkpoints.js";
+export type { RewindResult } from "./runtime/checkpoints.js";
 export { BackgroundCommandManager } from "./runtime/backgroundCommands.js";
 export type {
   BackgroundCommandSnapshot,

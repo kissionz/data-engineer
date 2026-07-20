@@ -214,8 +214,10 @@ async function handleCommand(
     console.log(compacted ? "Session context compacted." : "Nothing to compact.");
     return { handled: true, runtime };
   }
-  if (command === "/undo") {
-    console.log((await runtime.checkpoints.undoLatest()).message);
+  if (command === "/rewind") {
+    console.log(
+      (await runtime.checkpoints.rewindLatestTurn(runtime.sessionStore)).message,
+    );
     return { handled: true, runtime };
   }
   if (command === "/diff") {
@@ -269,7 +271,7 @@ function printHelp(): void {
   console.log([
     "Commands: /help, /new, /fork, /resume <id>, /rename <title>, /session, /sessions, /inspect [id]",
     "Runtime: /model, /permissions, /cost, /context, /compact, /memory <query>, /mcp",
-    "Workspace: /diff, /undo, /exit",
+    "Workspace: /diff, /rewind, /exit",
     "During a run: /tools toggles tool details, /cancel stops.",
   ].join("\n"));
 }
