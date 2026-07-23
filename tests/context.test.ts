@@ -165,6 +165,40 @@ describe("ContextBuilder", () => {
     ).toBe(false);
   });
 
+  it("re-injects the last compacted user request as a verbatim anchor", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
+    const events: SessionEvent[] = [
+      {
+        type: "user_message",
+        ts: "1",
+        text: "Replace the weaker design; do not add another mode.",
+      },
+      {
+        type: "summary",
+        ts: "2",
+        text: "The user requested a focused redesign.",
+      },
+      {
+        type: "user_message",
+        ts: "3",
+        text: "Continue with the implementation.",
+      },
+    ];
+
+    const messages = await new ContextBuilder(root).build(events);
+    const anchor = messages.find((message) =>
+      message.content.startsWith("Last compacted user request"),
+    );
+
+    expect(anchor?.content).toContain(
+      "<user_query>\nReplace the weaker design; do not add another mode.\n</user_query>",
+    );
+    expect(messages).toContainEqual({
+      role: "user",
+      content: "Continue with the implementation.",
+    });
+  });
+
   it("can retain all events when the recent-event limit is disabled", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-context-"));
     const events = Array.from(

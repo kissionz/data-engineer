@@ -31,6 +31,41 @@ Locate the exact neighboring test before constructing an insertion patch.
 
 ---
 
+## [ERR-20260723-001] vitest_tty_property_mock
+
+**Logged**: 2026-07-23T18:18:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+The first collapsed-terminal reporter test tried to spy on an `isTTY` property
+that is absent from Vitest's stdout object.
+
+### Error
+```
+Error: The property "isTTY" is not defined on the object.
+```
+
+### Context
+- The production branch intentionally checks `process.stdout.isTTY`.
+- Vitest's captured stdout is not a real TTY and does not define that property.
+
+### Suggested Fix
+Install a temporary configurable data property for the test and restore the
+original descriptor afterward.
+
+### Metadata
+- Reproducible: yes
+- Related Files: tests/consoleReporter.test.ts
+
+### Resolution
+- **Resolved**: 2026-07-23T18:20:00+08:00
+- **Notes**: Replaced the invalid spy with a scoped property descriptor and
+  cleanup in `finally`.
+
+---
+
 ## [ERR-20260701-001] git_switch_sandbox
 
 **Logged**: 2026-07-01T09:18:20Z

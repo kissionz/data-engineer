@@ -2,12 +2,13 @@ import { AgentGuidanceController } from "../agent/guidance.js";
 import type { AgentLoop } from "../agent/loop.js";
 import { CANCELLED_TEXT } from "../agent/cancellation.js";
 import {
-  estimateSessionEventTokens,
+  getCompactionStats,
   type SessionCompactor,
 } from "../agent/compaction.js";
 import type { SessionStore } from "../agent/session.js";
 import type {
   ManagedSession,
+  SessionMetadata,
   SessionManager,
 } from "../agent/sessionManager.js";
 import type { SessionEvent } from "../protocol.js";
@@ -42,8 +43,7 @@ export async function runInteractiveSession(
   createRuntime: (session: ManagedSession) => InteractiveRuntime,
 ): Promise<void> {
   let runtime = initialRuntime;
-  console.log(`Montane Code session started. Session: ${runtime.session.id}`);
-  printHelp();
+  console.log(formatWelcome(await runtime.session.readMetadata(), runtime.permissionMode));
 
   try {
     while (true) {
@@ -129,7 +129,7 @@ async function handleCommand(
   createRuntime: (session: ManagedSession) => InteractiveRuntime,
 ): Promise<{ handled: boolean; runtime: InteractiveRuntime }> {
   if (command === "/help") {
-    printHelp();
+    console.log(formatHelp());
     return { handled: true, runtime };
   }
   if (command === "/new") {
@@ -144,7 +144,7 @@ async function handleCommand(
     );
   }
   if (command === "/session") {
-    console.log(JSON.stringify(await runtime.session.readMetadata(), null, 2));
+    console.log(formatSessionMetadata(await runtime.session.readMetadata()));
     return { handled: true, runtime };
   }
   if (command === "/rename") {
@@ -160,25 +160,15 @@ async function handleCommand(
   }
   if (command === "/sessions") {
     const sessions = await sessionManager.list();
-    const rows = sessions.map((metadata) => {
-      return [
-        metadata.id,
-        metadata.status,
-        metadata.model,
-        ...(metadata.title ? [metadata.title] : []),
-      ].join("\t");
-    });
-    console.log(rows.length > 0 ? rows.join("\n") : "[No sessions]");
+    console.log(formatSessionList(sessions, runtime.session.id));
     return { handled: true, runtime };
   }
   if (command === "/inspect" || command.startsWith("/inspect ")) {
     const id = command.slice("/inspect".length).trim();
-    console.log(JSON.stringify(
+    console.log(formatSessionMetadata(
       !id || id === runtime.session.id
         ? await runtime.session.readMetadata()
         : await sessionManager.inspect(id),
-      null,
-      2,
     ));
     return { handled: true, runtime };
   }
@@ -206,12 +196,21 @@ async function handleCommand(
   }
   if (command === "/cost" || command === "/context") {
     const events = await runtime.sessionStore.load();
-    console.log(command === "/cost" ? formatCost(events) : formatContext(events));
+    console.log(
+      command === "/cost"
+        ? formatCost(events)
+        : formatContext(events),
+    );
     return { handled: true, runtime };
   }
   if (command === "/compact") {
+    const before = getCompactionStats(await runtime.sessionStore.load());
     const compacted = await runtime.compactor.compactIfNeeded({ force: true });
-    console.log(compacted ? "Session context compacted." : "Nothing to compact.");
+    console.log(
+      compacted
+        ? `Context compacted · ${before.uncompactedEvents} active events summarized.`
+        : "Context is already compact.",
+    );
     return { handled: true, runtime };
   }
   if (command === "/rewind") {
@@ -227,7 +226,7 @@ async function handleCommand(
   }
   if (command === "/mcp") {
     const names = runtime.tools.list().filter((tool) => tool.source?.type === "mcp").map((tool) => tool.name);
-    console.log(names.length > 0 ? names.join("\n") : "[No MCP tools]");
+    console.log(names.length > 0 ? names.join("\n") : "No MCP tools connected.");
     return { handled: true, runtime };
   }
   if (command === "/memory" || command.startsWith("/memory ")) {
@@ -249,7 +248,13 @@ async function replaceRuntime(
 ): Promise<{ handled: true; runtime: InteractiveRuntime }> {
   const next = createRuntime(session);
   await disposeInteractiveRuntime(current);
-  console.log(`${verb} session: ${next.session.id}`);
+  console.log([
+    `${verb} session`,
+    formatWelcome(
+      await next.session.readMetadata(),
+      next.permissionMode,
+    ).trim(),
+  ].join("\n"));
   return { handled: true, runtime: next };
 }
 
@@ -260,20 +265,109 @@ function formatCost(events: SessionEvent[]): string {
   const input = usage.reduce((sum, item) => sum + (item?.inputTokens ?? 0), 0);
   const output = usage.reduce((sum, item) => sum + (item?.outputTokens ?? 0), 0);
   const cost = usage.reduce((sum, item) => sum + (item?.estimatedCostUsd ?? 0), 0);
-  return `Input tokens: ${input}\nOutput tokens: ${output}\nEstimated cost: $${cost.toFixed(6)}`;
+  return [
+    "Usage",
+    `  Input      ${formatCount(input)} tokens`,
+    `  Output     ${formatCount(output)} tokens`,
+    `  Estimated  $${cost.toFixed(6)}`,
+  ].join("\n");
 }
 
-function formatContext(events: SessionEvent[]): string {
-  return `Events: ${events.length}\nEstimated stored context: ${estimateSessionEventTokens(events)} tokens`;
+export function formatContext(events: SessionEvent[]): string {
+  const stats = getCompactionStats(events);
+  return [
+    "Context",
+    `  Active     ${stats.activeEvents} events · ~${formatCount(stats.estimatedActiveTokens)} tokens`,
+    `  Stored     ${stats.storedEvents} events`,
+    `  Compacted  ${stats.lastCompactedAt ? formatTimestamp(stats.lastCompactedAt) : "not yet"}`,
+  ].join("\n");
 }
 
-function printHelp(): void {
-  console.log([
-    "Commands: /help, /new, /fork, /resume <id>, /rename <title>, /session, /sessions, /inspect [id]",
-    "Runtime: /model, /permissions, /cost, /context, /compact, /memory <query>, /mcp",
-    "Workspace: /diff, /rewind, /exit",
-    "During a run: /tools toggles tool details, /cancel stops.",
-  ].join("\n"));
+export function formatWelcome(
+  metadata: SessionMetadata,
+  permissionMode: string,
+): string {
+  const label = metadata.title?.trim() || shortSessionId(metadata.id);
+  return [
+    "",
+    `Montane Code · ${metadata.model}`,
+    `${label} · ${humanizeStatus(metadata.status)} · ${permissionMode} permissions`,
+    "Type a task, or /help for commands. Ctrl+O toggles tool details.",
+    "",
+  ].join("\n");
+}
+
+export function formatHelp(): string {
+  return [
+    "Commands",
+    "  Sessions   /new  /fork  /resume <id>  /rename <title>  /sessions",
+    "  Details    /session  /inspect [id]  /model  /permissions",
+    "  Context    /context  /compact  /cost  /memory <query>",
+    "  Workspace  /diff  /rewind  /mcp",
+    "  Exit       /exit",
+    "",
+    "While Montane is working",
+    "  Type a message to guide the current task.",
+    "  /tools or Ctrl+O toggles tool details. /cancel stops the task.",
+  ].join("\n");
+}
+
+export function formatSessionMetadata(metadata: SessionMetadata): string {
+  return [
+    metadata.title?.trim() || "Untitled session",
+    `  ID         ${metadata.id}`,
+    `  Status     ${humanizeStatus(metadata.status)}`,
+    `  Model      ${metadata.model}`,
+    `  Workspace  ${metadata.workspaceRoot}`,
+    `  Updated    ${formatTimestamp(metadata.updatedAt)}`,
+    ...(metadata.parentSessionId
+      ? [`  Forked from ${metadata.parentSessionId}`]
+      : []),
+  ].join("\n");
+}
+
+export function formatSessionList(
+  sessions: SessionMetadata[],
+  currentSessionId: string,
+): string {
+  if (sessions.length === 0) return "No saved sessions.";
+
+  return [
+    "Sessions",
+    ...sessions.map((metadata) => {
+      const marker = metadata.id === currentSessionId ? "●" : " ";
+      const label = metadata.title?.trim() || shortSessionId(metadata.id);
+      return `${marker} ${label} · ${humanizeStatus(metadata.status)} · ${metadata.model} · ${formatTimestamp(metadata.updatedAt)}`;
+    }),
+  ].join("\n");
+}
+
+function formatCount(value: number): string {
+  if (value < 1_000) return String(value);
+  if (value < 1_000_000) {
+    return `${(value / 1_000).toFixed(value < 10_000 ? 1 : 0)}k`;
+  }
+  return `${(value / 1_000_000).toFixed(value < 10_000_000 ? 1 : 0)}m`;
+}
+
+function shortSessionId(id: string): string {
+  const suffix = id.split("-").at(-1);
+  if (suffix && suffix.length >= 4) return suffix;
+  return id.length <= 12 ? id : id.slice(-8);
+}
+
+function formatTimestamp(value: string): string {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      });
+}
+
+function humanizeStatus(status: SessionMetadata["status"]): string {
+  return status.replaceAll("_", " ");
 }
 
 function errorMessage(error: unknown): string {

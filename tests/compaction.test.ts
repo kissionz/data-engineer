@@ -5,12 +5,17 @@ import { describe, expect, it } from "vitest";
 import {
   buildSessionSummary,
   estimateSessionEventTokens,
+  getCompactionStats,
   SessionCompactor,
 } from "../src/agent/compaction.js";
 import { SessionStore } from "../src/agent/session.js";
 import type { SessionEvent } from "../src/protocol.js";
 
 describe("SessionCompactor", () => {
+  it("reports an empty context as zero tokens", () => {
+    expect(estimateSessionEventTokens([])).toBe(0);
+  });
+
   it("appends a factual summary without deleting source events", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "harness-compact-"));
     const filePath = path.join(root, "session.jsonl");
@@ -84,6 +89,42 @@ describe("SessionCompactor", () => {
     expect(summary).toContain("README.md");
     expect(summary).toContain("npm test");
     expect(summary).toContain("Bash: test failed");
+    expect(summary).toContain("## Current User Request");
+    expect(summary).not.toContain("## Active Constraints and Decisions");
+  });
+
+  it("keeps the current request distinct from deduplicated earlier requests", () => {
+    const events: SessionEvent[] = [
+      { type: "user_message", ts: "1", text: "Keep the interface simple" },
+      { type: "user_message", ts: "2", text: "Keep the interface simple" },
+      { type: "user_message", ts: "3", text: "Fix context compaction" },
+    ];
+
+    const summary = buildSessionSummary(events);
+    const earlier = summary
+      .split("## Earlier User Requests")[1]
+      ?.split("## Todo State")[0];
+
+    expect(summary).toContain("## Current User Request\nFix context compaction");
+    expect(earlier).toContain("- Keep the interface simple");
+    expect(earlier?.match(/Keep the interface simple/g)).toHaveLength(1);
+    expect(earlier).not.toContain("Fix context compaction");
+  });
+
+  it("reports active context separately from durable stored events", () => {
+    const events: SessionEvent[] = [
+      { type: "user_message", ts: "1", text: "old" },
+      { type: "summary", ts: "2", text: "summary" },
+      { type: "user_message", ts: "3", text: "current" },
+    ];
+
+    expect(getCompactionStats(events)).toMatchObject({
+      storedEvents: 3,
+      activeEvents: 2,
+      uncompactedEvents: 1,
+      lastCompactedAt: "2",
+    });
+    expect(getCompactionStats(events).estimatedActiveTokens).toBeGreaterThan(0);
   });
 
   it("compacts when estimated context tokens cross the threshold", async () => {

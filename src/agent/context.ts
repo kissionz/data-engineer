@@ -130,6 +130,23 @@ export class ContextBuilder {
           ].join("\n"),
         });
       }
+
+      const lastCompactedUserRequest = findLastUserMessage(
+        events.slice(0, latestSummaryIndex),
+      );
+      if (lastCompactedUserRequest) {
+        messages.push({
+          role: "user",
+          content: [
+            "Last compacted user request (verbatim anchor):",
+            "Treat newer user messages as higher priority.",
+            "",
+            "<user_query>",
+            lastCompactedUserRequest,
+            "</user_query>",
+          ].join("\n"),
+        });
+      }
     }
 
     const eventsAfterSummary = events.slice(latestSummaryIndex + 1);
@@ -358,4 +375,15 @@ function findLatestSummaryIndex(events: SessionEvent[]): number {
   }
 
   return -1;
+}
+
+function findLastUserMessage(events: SessionEvent[]): string | undefined {
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === "user_message") {
+      return event.text;
+    }
+  }
+
+  return undefined;
 }

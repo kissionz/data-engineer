@@ -8,6 +8,14 @@ export interface CompactionCheckOptions {
   beforeCompact?: (events: SessionEvent[]) => Promise<boolean> | boolean;
 }
 
+export interface CompactionStats {
+  storedEvents: number;
+  activeEvents: number;
+  uncompactedEvents: number;
+  estimatedActiveTokens: number;
+  lastCompactedAt?: string;
+}
+
 export class SessionCompactor {
   constructor(
     private readonly session: SessionStore,
@@ -53,13 +61,43 @@ export class SessionCompactor {
 }
 
 export function estimateSessionEventTokens(events: SessionEvent[]): number {
+  if (events.length === 0) return 0;
   return Math.ceil(JSON.stringify(events).length / 4);
+}
+
+export function getCompactionStats(events: SessionEvent[]): CompactionStats {
+  const latestSummaryIndex = findLatestSummaryIndex(events);
+  const uncompacted = events
+    .slice(latestSummaryIndex + 1)
+    .filter((event) => event.type !== "summary");
+  const summary = latestSummaryIndex >= 0
+    ? events[latestSummaryIndex]
+    : undefined;
+  const active = summary?.type === "summary"
+    ? [summary, ...uncompacted]
+    : uncompacted;
+
+  return {
+    storedEvents: events.length,
+    activeEvents: active.length,
+    uncompactedEvents: uncompacted.length,
+    estimatedActiveTokens: estimateSessionEventTokens(active),
+    ...(summary?.type === "summary"
+      ? { lastCompactedAt: summary.timestamp ?? summary.ts }
+      : {}),
+  };
 }
 
 export function buildSessionSummary(events: SessionEvent[]): string {
   const userMessages = events
     .filter((event) => event.type === "user_message")
     .map((event) => event.text);
+  const currentUserRequest =
+    userMessages.at(-1) ?? "[No user request recorded]";
+  const earlierUserRequests = uniqueRecent(
+    userMessages.slice(0, -1),
+    4,
+  );
   const toolCalls = events
     .filter((event) => event.type === "assistant_tool_calls")
     .flatMap((event) => event.toolCalls);
@@ -126,14 +164,11 @@ export function buildSessionSummary(events: SessionEvent[]): string {
   return [
     "# Session Summary",
     "",
-    "## User Goal",
-    compact(userMessages.at(-1) ?? "[No user goal recorded]", 1_000),
+    "## Current User Request",
+    compact(currentUserRequest, 1_000),
     "",
-    "## Recent User Requests",
-    formatList(userMessages.slice(-5).map((message) => compact(message, 500))),
-    "",
-    "## Active Constraints and Decisions",
-    formatList(userMessages.slice(-5).map((message) => compact(message, 500))),
+    "## Earlier User Requests",
+    formatList(earlierUserRequests.map((message) => compact(message, 500))),
     "",
     "## Todo State",
     formatList(todos),
@@ -165,6 +200,21 @@ export function buildSessionSummary(events: SessionEvent[]): string {
     "## Next Action",
     nextAction,
   ].join("\n");
+}
+
+function uniqueRecent(items: string[], limit: number): string[] {
+  const seen = new Set<string>();
+  const selected: string[] = [];
+
+  for (let index = items.length - 1; index >= 0; index -= 1) {
+    const value = items[index]?.trim();
+    if (!value || seen.has(value)) continue;
+    seen.add(value);
+    selected.push(value);
+    if (selected.length >= limit) break;
+  }
+
+  return selected.reverse();
 }
 
 function formatTodos(value: unknown): string[] {
