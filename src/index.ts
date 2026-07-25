@@ -21,14 +21,15 @@ import type {
   ModelPricing,
 } from "./model/base.js";
 import { SessionStore } from "./agent/session.js";
-import { MockModel } from "./model/mock.js";
-import { AnthropicModel } from "./model/anthropic.js";
-import { GeminiModel } from "./model/gemini.js";
 import {
-  OpenAIModel,
   parseApiStyle,
   type ApiStyle,
 } from "./model/openai.js";
+import {
+  assertModelConfiguration,
+  createModelClient,
+  defaultModelName,
+} from "./model/configured.js";
 import { memoryPathsForWorkspace } from "./memory/paths.js";
 import { MemoryService } from "./memory/service.js";
 import { McpManager } from "./mcp/manager.js";
@@ -901,73 +902,14 @@ function createModel(
   capabilities?: Partial<ModelCapabilities>,
 ): ModelClient {
   assertModelConfiguration(provider);
-
-  if (provider === "mock") {
-    return new MockModel();
-  }
-
-  if (provider === "anthropic") {
-    return new AnthropicModel({
-      apiKey: process.env.ANTHROPIC_API_KEY as string,
-      model,
-      baseUrl,
-      pricing,
-      capabilities,
-    });
-  }
-
-  if (provider === "gemini") {
-    return new GeminiModel({
-      apiKey: process.env.GEMINI_API_KEY as string,
-      model,
-      baseUrl,
-      pricing,
-      capabilities,
-    });
-  }
-
-  return new OpenAIModel({
-    apiKey: process.env.OPENAI_API_KEY as string,
+  return createModelClient(
+    provider,
     model,
     baseUrl,
     apiStyle,
     pricing,
     capabilities,
-  });
-}
-
-function assertModelConfiguration(provider: string): void {
-  if (!["openai", "anthropic", "gemini", "mock"].includes(provider)) {
-    throw new Error(`Unknown provider: ${provider}`);
-  }
-
-  if (provider === "openai" && !process.env.OPENAI_API_KEY) {
-    throw new Error(
-      [
-        "OPENAI_API_KEY is required for real model use.",
-        "",
-        "Set up your local environment:",
-        "  1. Set OPENAI_API_KEY in the shell, or add it to a trusted env file.",
-        "  2. Select that file with --env-file or user config envFile.",
-        "  3. Otherwise, Montane Code loads .env from the workspace root.",
-        "",
-        "For loop-only development without an API call, run:",
-        "  npm start -- --provider mock --task \"Inspect README.md\"",
-      ].join("\n"),
-    );
-  }
-  if (provider === "anthropic" && !process.env.ANTHROPIC_API_KEY) {
-    throw new Error("ANTHROPIC_API_KEY is required for Anthropic models.");
-  }
-  if (provider === "gemini" && !process.env.GEMINI_API_KEY) {
-    throw new Error("GEMINI_API_KEY is required for Gemini models.");
-  }
-}
-
-function defaultModelName(provider: string): string {
-  if (provider === "anthropic") return "claude-sonnet-4-6";
-  if (provider === "gemini") return "gemini-2.5-pro";
-  return "gpt-4.1";
+  );
 }
 
 function resolveProviderBaseUrl(

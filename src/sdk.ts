@@ -25,6 +25,15 @@ export { OpenAIModel } from "./model/openai.js";
 export { AnthropicModel } from "./model/anthropic.js";
 export { GeminiModel } from "./model/gemini.js";
 export { MockModel } from "./model/mock.js";
+export {
+  createModelClient,
+  resolveConfiguredModel,
+} from "./model/configured.js";
+export type {
+  ConfiguredModelOptions,
+  ConfiguredModelRuntime,
+  ModelProvider,
+} from "./model/configured.js";
 export { PermissionGate } from "./permissions/gate.js";
 export { defaultPolicy } from "./permissions/policy.js";
 export type { PermissionPolicy } from "./permissions/policy.js";
