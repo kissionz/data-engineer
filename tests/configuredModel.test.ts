@@ -1,4 +1,4 @@
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,11 @@ const touchedKeys = [
   "MONTANE_MODEL",
   "OPENAI_PROVIDER",
   "OPENAI_MODEL",
+  "OPENAI_API_KEY",
+  "ANTHROPIC_API_KEY",
+  "GEMINI_API_KEY",
+  "MONTANE_CODE_PATH",
+  "MONTANE_ENV_FILE",
 ];
 
 afterEach(() => {
@@ -42,5 +47,28 @@ describe("resolveConfiguredModel", () => {
     expect(runtime.model).toBe("env-selected-model");
     expect(runtime.client).toBeInstanceOf(MockModel);
     expect(runtime.envFilePath).toBe(envPath);
+  });
+
+  it("reuses the environment of an installed or npm-linked Montane CLI", async () => {
+    const root = await mkdtemp(path.join(os.tmpdir(), "montane-model-"));
+    const installedRoot = path.join(root, "installed-montane");
+    await mkdir(installedRoot);
+    const envPath = path.join(installedRoot, ".env");
+    await writeFile(
+      envPath,
+      "MONTANE_PROVIDER=mock\nMONTANE_MODEL=linked-cli-model\n",
+      "utf8",
+    );
+    process.env.MONTANE_CODE_PATH = installedRoot;
+
+    const runtime = await resolveConfiguredModel({
+      workspaceRoot: path.join(root, "consumer-workspace"),
+      configPath: path.join(root, "missing-config.json"),
+    });
+
+    expect(runtime.provider).toBe("mock");
+    expect(runtime.model).toBe("linked-cli-model");
+    expect(runtime.client).toBeInstanceOf(MockModel);
+    expect(runtime.envFilePath).toBe(await realpath(envPath));
   });
 });

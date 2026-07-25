@@ -1,9 +1,13 @@
+import { execFile } from "node:child_process";
+import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import {
   defaultUserConfigPath,
   loadUserConfig,
 } from "../config/userConfig.js";
 import {
+  loadEnvFile,
   loadStartupEnv,
   selectEnvFile,
 } from "../runtime/env.js";
@@ -41,6 +45,8 @@ export interface ConfiguredModelRuntime {
   envFilePath: string;
 }
 
+const execFileAsync = promisify(execFile);
+
 export async function resolveConfiguredModel(
   options: ConfiguredModelOptions,
 ): Promise<ConfiguredModelRuntime> {
@@ -62,6 +68,10 @@ export async function resolveConfiguredModel(
     envSelection,
     new URL("../index.js", import.meta.url).href,
   );
+  const installedCliEnvFile =
+    envSelection.source === "workspace"
+      ? await loadInstalledCliEnvironment(initialProvider(options, userConfig))
+      : undefined;
 
   const provider = normalizeProvider(
     options.provider ??
@@ -95,7 +105,7 @@ export async function resolveConfiguredModel(
     provider,
     model,
     configPath,
-    envFilePath: envSelection.filePath,
+    envFilePath: installedCliEnvFile ?? envSelection.filePath,
   };
 }
 
@@ -170,12 +180,103 @@ export function defaultModelName(provider: ModelProvider): string {
 }
 
 function normalizeProvider(value: string): ModelProvider {
-  assertModelConfiguration(value);
-  return value;
+  if (
+    value === "openai" ||
+    value === "anthropic" ||
+    value === "gemini" ||
+    value === "mock"
+  ) {
+    return value;
+  }
+  throw new Error(`Unknown provider: ${value}`);
 }
 
 function providerBaseUrlEnvironment(provider: ModelProvider): string {
   if (provider === "anthropic") return "ANTHROPIC_BASE_URL";
   if (provider === "gemini") return "GEMINI_BASE_URL";
   return "OPENAI_BASE_URL";
+}
+
+function initialProvider(
+  options: ConfiguredModelOptions,
+  userConfig: Awaited<ReturnType<typeof loadUserConfig>>,
+): string {
+  return (
+    options.provider ??
+    process.env.MONTANE_PROVIDER ??
+    process.env.OPENAI_PROVIDER ??
+    userConfig.model?.provider ??
+    "openai"
+  );
+}
+
+async function loadInstalledCliEnvironment(
+  provider: string,
+): Promise<string | undefined> {
+  if (provider === "mock" || hasProviderCredential(provider)) return undefined;
+
+  for (const candidate of await installedCliEnvCandidates()) {
+    const envFile = resolveExistingFile(candidate);
+    if (!envFile) continue;
+    await loadEnvFile(envFile, { allowMissing: false });
+    const configuredProvider =
+      process.env.MONTANE_PROVIDER ??
+      process.env.OPENAI_PROVIDER ??
+      provider;
+    if (
+      configuredProvider === "mock" ||
+      hasProviderCredential(configuredProvider)
+    ) {
+      return envFile;
+    }
+  }
+  return undefined;
+}
+
+async function installedCliEnvCandidates(): Promise<string[]> {
+  const candidates = [
+    process.env.MONTANE_ENV_FILE,
+    process.env.MONTANE_CODE_PATH
+      ? path.join(process.env.MONTANE_CODE_PATH, ".env")
+      : undefined,
+  ].filter((value): value is string => Boolean(value));
+
+  try {
+    const npmExecutable = process.env.npm_execpath;
+    const executable = npmExecutable
+      ? process.execPath
+      : process.platform === "win32"
+        ? "npm.cmd"
+        : "npm";
+    const args = npmExecutable
+      ? [npmExecutable, "root", "-g"]
+      : ["root", "-g"];
+    const { stdout } = await execFileAsync(executable, args, {
+      encoding: "utf8",
+      timeout: 5_000,
+      windowsHide: true,
+    });
+    if (stdout.trim()) {
+      candidates.push(path.join(stdout.trim(), "montane-code", ".env"));
+    }
+  } catch {
+    // A missing global npm installation does not prevent normal SDK config use.
+  }
+
+  return candidates;
+}
+
+function resolveExistingFile(candidate: string): string | undefined {
+  try {
+    const realPath = fs.realpathSync(path.resolve(candidate));
+    return fs.statSync(realPath).isFile() ? realPath : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hasProviderCredential(provider: string): boolean {
+  if (provider === "anthropic") return Boolean(process.env.ANTHROPIC_API_KEY);
+  if (provider === "gemini") return Boolean(process.env.GEMINI_API_KEY);
+  return provider === "openai" && Boolean(process.env.OPENAI_API_KEY);
 }
