@@ -48,6 +48,7 @@ describe("user config", () => {
             contextWindow: 100_000_000,
             maxOutputTokens: 8192,
             supportsStreaming: false,
+            supportsStrictToolSchema: true,
           },
         },
         budget: {

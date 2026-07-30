@@ -124,7 +124,11 @@ export class OpenAIModel implements ModelClient {
 
     this.capabilities = {
       ...(isOfficialOpenAIBaseUrl(this.baseUrl)
-        ? { contextWindow: 200_000, maxOutputTokens: 16_384 }
+        ? {
+            contextWindow: 200_000,
+            maxOutputTokens: 16_384,
+            supportsStrictToolSchema: true,
+          }
         : {}),
       supportsStreaming: true,
       supportsToolUse: true,
@@ -167,7 +171,12 @@ export class OpenAIModel implements ModelClient {
         body: JSON.stringify({
           model: this.options.model,
           input: toOpenAIInput(options.messages),
-          tools: options.tools.map(toOpenAITool),
+          tools: options.tools.map((tool) =>
+            toOpenAITool(
+              tool,
+              this.capabilities.supportsStrictToolSchema === true,
+            ),
+          ),
           ...(options.maxOutputTokens !== undefined
             ? { max_output_tokens: options.maxOutputTokens }
             : {}),
@@ -225,7 +234,12 @@ export class OpenAIModel implements ModelClient {
     signal?: AbortSignal;
   }): Promise<AgentResponse> {
     const chatMessages = toChatCompletionsMessages(options.messages);
-    const chatTools = options.tools.map(toChatCompletionsTool);
+    const chatTools = options.tools.map((tool) =>
+      toChatCompletionsTool(
+        tool,
+        this.capabilities.supportsStrictToolSchema === true,
+      ),
+    );
     // Cap max_tokens for third-party APIs; most support at most 4096-32768 per request.
     // Don't send max_tokens if it exceeds a safe threshold — let the API use its own default.
     const safeMaxTokens =
@@ -667,12 +681,18 @@ function toOpenAIInput(messages: AgentMessage[]): OpenAIInputItem[] {
   return input;
 }
 
-function toOpenAITool(tool: Record<string, unknown>): Record<string, unknown> {
+function toOpenAITool(
+  tool: Record<string, unknown>,
+  supportsStrictToolSchema: boolean,
+): Record<string, unknown> {
   return {
     type: "function",
     name: tool.name,
     description: tool.description,
     parameters: tool.input_schema,
+    ...(supportsStrictToolSchema && tool.strict === true
+      ? { strict: true }
+      : {}),
   };
 }
 
@@ -723,13 +743,33 @@ function parseArguments(value: unknown): Record<string, unknown> {
     return {};
   }
 
-  const parsed = JSON.parse(value) as unknown;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value) as unknown;
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new ModelRequestError(
+        `Model returned malformed function-call JSON (${describeJsonParsePosition(error.message)}, ${value.length} characters).`,
+        true,
+      );
+    }
+    throw error;
+  }
 
   if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
     return parsed as Record<string, unknown>;
   }
 
   throw new Error("OpenAI function call arguments must decode to an object.");
+}
+
+function describeJsonParsePosition(message: string): string {
+  const position = message.match(/position\s+(\d+)/i)?.[1];
+  const line = message.match(/line\s+(\d+)/i)?.[1];
+  const column = message.match(/column\s+(\d+)/i)?.[1];
+  if (line && column) return `line ${line}, column ${column}`;
+  if (position) return `position ${position}`;
+  return "unknown position";
 }
 
 function normalizeBaseUrl(value: string): string {
@@ -942,6 +982,7 @@ function toChatCompletionsMessages(
 
 function toChatCompletionsTool(
   tool: Record<string, unknown>,
+  supportsStrictToolSchema: boolean,
 ): Record<string, unknown> {
   return {
     type: "function",
@@ -949,6 +990,9 @@ function toChatCompletionsTool(
       name: tool.name,
       description: tool.description,
       parameters: tool.input_schema,
+      ...(supportsStrictToolSchema && tool.strict === true
+        ? { strict: true }
+        : {}),
     },
   };
 }

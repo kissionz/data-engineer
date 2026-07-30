@@ -209,6 +209,7 @@ export const userConfigSchema = z
             supportsStreaming: z.boolean().optional(),
             supportsToolUse: z.boolean().optional(),
             supportsImages: z.boolean().optional(),
+            supportsStrictToolSchema: z.boolean().optional(),
           })
           .strict()
           .optional(),

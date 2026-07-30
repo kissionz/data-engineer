@@ -101,6 +101,103 @@ describe("OpenAIModel", () => {
     });
   });
 
+  it("enables strict function decoding only for capable endpoints", async () => {
+    const requestBodies: Array<Record<string, unknown>> = [];
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      requestBodies.push(
+        JSON.parse(String(init?.body)) as Record<string, unknown>,
+      );
+      return new Response(JSON.stringify({ output_text: "done" }), {
+        status: 200,
+      });
+    };
+    const strictTool = {
+      name: "Plan",
+      description: "Submit a plan",
+      input_schema: {
+        type: "object",
+        additionalProperties: false,
+        properties: { measure_refs: { type: "array", items: { type: "string" } } },
+        required: ["measure_refs"],
+      },
+      strict: true,
+    };
+
+    await new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl,
+    }).complete({
+      messages: [{ role: "user", content: "plan" }],
+      tools: [strictTool],
+    });
+    await new OpenAIModel({
+      apiKey: "test-key",
+      model: "compatible-model",
+      baseUrl: "https://compatible.example/v1",
+      capabilities: { supportsStrictToolSchema: false },
+      fetchImpl: async (_input, init) => {
+        requestBodies.push(
+          JSON.parse(String(init?.body)) as Record<string, unknown>,
+        );
+        return new Response(
+          JSON.stringify({
+            choices: [{
+              message: { role: "assistant", content: "done" },
+              finish_reason: "stop",
+            }],
+          }),
+          { status: 200 },
+        );
+      },
+    }).complete({
+      messages: [{ role: "user", content: "plan" }],
+      tools: [strictTool],
+    });
+
+    expect(requestBodies[0]).toMatchObject({
+      tools: [{ name: "Plan", strict: true }],
+    });
+    expect(requestBodies[1]).toMatchObject({
+      tools: [{ function: { name: "Plan" } }],
+    });
+    expect(
+      (
+        (requestBodies[1]!.tools as Array<Record<string, unknown>>)[0]!
+          .function as Record<string, unknown>
+      ).strict,
+    ).toBeUndefined();
+  });
+
+  it("classifies malformed function arguments as a retryable model error", async () => {
+    const model = new OpenAIModel({
+      apiKey: "test-key",
+      model: "test-model",
+      fetchImpl: async () =>
+        new Response(
+          JSON.stringify({
+            output: [{
+              type: "function_call",
+              call_id: "call_bad",
+              name: "Plan",
+              arguments: '{"measure_refs":["M1"] "dimension_refs":[]}',
+            }],
+          }),
+          { status: 200 },
+        ),
+    });
+
+    const failure = await model.complete({
+      messages: [{ role: "user", content: "plan" }],
+      tools: [],
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ModelRequestError);
+    expect(failure).toMatchObject({ retryable: true });
+    expect(String(failure)).toContain("malformed function-call JSON");
+    expect(String(failure)).not.toContain("measure_refs");
+  });
+
   it("sends prior tool results back as function_call_output items", async () => {
     let requestBody: { input?: unknown[] } | undefined;
     const fetchImpl: typeof fetch = async (_input, init) => {
@@ -356,6 +453,7 @@ describe("OpenAIModel", () => {
     expect(model.capabilities.contextWindow).toBeUndefined();
     expect(model.capabilities.maxOutputTokens).toBeUndefined();
     expect(model.capabilities.supportsStreaming).toBe(true);
+    expect(model.capabilities.supportsStrictToolSchema).toBeUndefined();
   });
 
   it("honors configured non-streaming compatible capabilities", async () => {

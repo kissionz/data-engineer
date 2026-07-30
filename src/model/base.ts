@@ -21,6 +21,8 @@ export interface ModelCapabilities {
   supportsToolUse: boolean;
   /** Whether the model supports image inputs. */
   supportsImages: boolean;
+  /** Whether the provider honors strict JSON Schema for function tools. */
+  supportsStrictToolSchema: boolean;
 }
 
 /**

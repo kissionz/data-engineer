@@ -43,6 +43,7 @@ export class ToolRegistry {
       name: tool.name,
       description: tool.description,
       input_schema: tool.inputSchema,
+      ...(tool.strict === true ? { strict: true } : {}),
     }));
   }
 
